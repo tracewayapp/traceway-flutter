@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -37,6 +38,9 @@ class ScreenRecorder with WidgetsBindingObserver {
   bool _isCapturing = false;
   bool _isPaused = false;
 
+  // Touch tracking (logical coordinates)
+  Offset? _touchPosition;
+
   ScreenRecorder({
     required this.repaintBoundaryKey,
     required int maxFrames,
@@ -44,6 +48,14 @@ class ScreenRecorder with WidgetsBindingObserver {
     this.captureIntervalMs = 67,
     this.debug = false,
   }) : _buffer = CircularBuffer<CapturedFrame>(maxFrames);
+
+  void setTouchPosition(Offset position) {
+    _touchPosition = position;
+  }
+
+  void clearTouchPosition() {
+    _touchPosition = null;
+  }
 
   void start() {
     WidgetsBinding.instance.addObserver(this);
@@ -85,8 +97,16 @@ class ScreenRecorder with WidgetsBindingObserver {
       image.dispose();
 
       if (byteData != null) {
+        final pixels = Uint8List.fromList(byteData.buffer.asUint8List());
+
+        // Draw touch indicator directly onto the RGBA pixels
+        final touch = _touchPosition;
+        if (touch != null) {
+          _drawTouchCircle(pixels, width, height, touch);
+        }
+
         _buffer.push(CapturedFrame(
-          rgbaBytes: byteData.buffer.asUint8List(),
+          rgbaBytes: pixels,
           width: width,
           height: height,
           timestamp: DateTime.now(),
@@ -98,6 +118,52 @@ class ScreenRecorder with WidgetsBindingObserver {
       }
     } finally {
       _isCapturing = false;
+    }
+  }
+
+  /// Draws a blue (#4ba3f7) circle onto raw RGBA pixel data at the touch position.
+  void _drawTouchCircle(Uint8List pixels, int width, int height, Offset logicalPos) {
+    // Convert logical coordinates to physical pixel coordinates
+    final cx = (logicalPos.dx * pixelRatio).round();
+    final cy = (logicalPos.dy * pixelRatio).round();
+
+    const radius = 18;
+    const borderWidth = 3;
+    const innerRadius = radius - borderWidth;
+
+    // #4ba3f7 = R:75, G:163, B:247
+    const int circleR = 75;
+    const int circleG = 163;
+    const int circleB = 247;
+
+    final minX = max(0, cx - radius);
+    final maxX = min(width - 1, cx + radius);
+    final minY = max(0, cy - radius);
+    final maxY = min(height - 1, cy + radius);
+
+    for (var y = minY; y <= maxY; y++) {
+      for (var x = minX; x <= maxX; x++) {
+        final dx = x - cx;
+        final dy = y - cy;
+        final distSq = dx * dx + dy * dy;
+
+        if (distSq > radius * radius) continue;
+
+        final offset = (y * width + x) * 4;
+
+        int alpha;
+        if (distSq > innerRadius * innerRadius) {
+          alpha = 200;
+        } else {
+          alpha = 80;
+        }
+
+        final a = alpha / 255.0;
+        final invA = 1.0 - a;
+        pixels[offset + 0] = (circleR * a + pixels[offset + 0] * invA).round(); // R
+        pixels[offset + 1] = (circleG * a + pixels[offset + 1] * invA).round(); // G
+        pixels[offset + 2] = (circleB * a + pixels[offset + 2] * invA).round(); // B
+      }
     }
   }
 
@@ -125,7 +191,7 @@ class ScreenRecorder with WidgetsBindingObserver {
         width: width,
         height: height,
         fps: fps,
-        videoBitrate: 1000000,
+        videoBitrate: 2000000,
         profileLevel: ProfileLevel.baselineAutoLevel,
         audioChannels: 0,
         audioBitrate: 0,

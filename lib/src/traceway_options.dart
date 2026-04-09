@@ -16,7 +16,7 @@ class TracewayOptions {
     this.version = '',
     this.debounceMs = 1500,
     this.retryDelayMs = 10000,
-    this.capturePixelRatio = 0.5,
+    this.capturePixelRatio = 0.75,
     this.maxBufferFrames = 150,
     this.captureIntervalMs = 67,
   });

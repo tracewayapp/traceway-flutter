@@ -67,13 +67,30 @@ class _TracewayState extends State<Traceway> {
     super.dispose();
   }
 
+  void _onPointerDown(PointerDownEvent event) {
+    _screenRecorder?.setTouchPosition(event.localPosition);
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    _screenRecorder?.setTouchPosition(event.localPosition);
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    _screenRecorder?.clearTouchPosition();
+  }
+
   @override
   Widget build(BuildContext context) {
     final client = TracewayClient.instance;
     if (client != null && client.options.screenCapture) {
       return RepaintBoundary(
         key: _repaintBoundaryKey,
-        child: widget.child,
+        child: Listener(
+          onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
+          onPointerUp: _onPointerUp,
+          child: widget.child,
+        ),
       );
     }
     return widget.child;
