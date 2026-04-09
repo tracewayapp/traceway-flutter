@@ -105,13 +105,34 @@ Touch and click positions are drawn directly onto the recorded frames (invisible
 | macOS | Yes | Yes |
 | Web | No | No |
 
-Flutter web apps should use the [Traceway JS SDK](https://github.com/tracewayapp/js-client) instead.
+For Flutter web, use the JS SDK instead — see [Flutter Web](#flutter-web) below.
 
 ## What Gets Captured Automatically
 
 - **Flutter framework errors** — rendering, layout, gestures via `FlutterError.onError`
 - **Platform errors** — native plugin crashes via `PlatformDispatcher.onError`
 - **Uncaught async errors** — unhandled futures via `runZonedGuarded`
+
+## Flutter Web
+
+This SDK does not support Flutter web. For web apps, use the [`@tracewayapp/frontend`](https://docs.tracewayapp.com/client/js-sdk?sdk=js-generic) JS SDK which provides rrweb session replay and automatic fetch instrumentation.
+
+**1. Install the JS SDK:**
+
+```bash
+npm install @tracewayapp/frontend
+```
+
+**2. Add a script to `web/index.html`:**
+
+```html
+<script type="module">
+  import { init } from './node_modules/@tracewayapp/frontend/dist/index.js';
+  init('your-token@https://your-traceway-instance.com/api/report');
+</script>
+```
+
+Or load it from your bundled JS. See the full [JS SDK documentation](https://docs.tracewayapp.com/client/js-sdk?sdk=js-generic) for all options.
 
 ## Links
 
