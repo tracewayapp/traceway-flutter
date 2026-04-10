@@ -176,8 +176,6 @@ class TracewayClient {
     _retryTimer?.cancel();
     _retryTimer = null;
 
-    screenRecorder?.stop();
-
     final syncFuture = _doSync();
 
     if (timeoutMs != null) {

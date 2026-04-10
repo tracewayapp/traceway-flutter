@@ -17,15 +17,15 @@ class Traceway extends StatefulWidget {
     required Widget child,
     TracewayOptions options = const TracewayOptions(),
   }) {
-    WidgetsFlutterBinding.ensureInitialized();
-
-    TracewayClient.initialize(connectionString, options);
-
     final errorHandler = ErrorHandler();
-    errorHandler.install();
 
     runZonedGuarded(
-      () => runApp(Traceway(child: child)),
+      () {
+        WidgetsFlutterBinding.ensureInitialized();
+        TracewayClient.initialize(connectionString, options);
+        errorHandler.install();
+        runApp(Traceway(child: child));
+      },
       errorHandler.handleZoneError,
     );
   }
