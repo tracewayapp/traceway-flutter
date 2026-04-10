@@ -14,16 +14,18 @@ import 'circular_buffer.dart';
 import 'models/session_recording_payload.dart';
 
 class CapturedFrame {
-  final Uint8List rgbaBytes;
+  final Uint8List pngBytes;
   final int width;
   final int height;
   final DateTime timestamp;
+  final Offset? touchPosition;
 
   const CapturedFrame({
-    required this.rgbaBytes,
+    required this.pngBytes,
     required this.width,
     required this.height,
     required this.timestamp,
+    this.touchPosition,
   });
 }
 
@@ -91,25 +93,18 @@ class ScreenRecorder with WidgetsBindingObserver {
     _isCapturing = true;
     try {
       final image = await boundary.toImage(pixelRatio: pixelRatio);
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       final width = image.width;
       final height = image.height;
       image.dispose();
 
       if (byteData != null) {
-        final pixels = Uint8List.fromList(byteData.buffer.asUint8List());
-
-        // Draw touch indicator directly onto the RGBA pixels
-        final touch = _touchPosition;
-        if (touch != null) {
-          _drawTouchCircle(pixels, width, height, touch);
-        }
-
         _buffer.push(CapturedFrame(
-          rgbaBytes: pixels,
+          pngBytes: byteData.buffer.asUint8List(),
           width: width,
           height: height,
           timestamp: DateTime.now(),
+          touchPosition: _touchPosition,
         ));
       }
     } catch (e) {
@@ -121,9 +116,19 @@ class ScreenRecorder with WidgetsBindingObserver {
     }
   }
 
+  /// Decodes a PNG frame to raw RGBA pixels.
+  Future<Uint8List> _decodePngToRgba(Uint8List pngBytes, int width, int height) async {
+    final codec = await ui.instantiateImageCodec(pngBytes);
+    final frameInfo = await codec.getNextFrame();
+    final image = frameInfo.image;
+    final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    image.dispose();
+    codec.dispose();
+    return byteData!.buffer.asUint8List();
+  }
+
   /// Draws a blue (#4ba3f7) circle onto raw RGBA pixel data at the touch position.
   void _drawTouchCircle(Uint8List pixels, int width, int height, Offset logicalPos) {
-    // Convert logical coordinates to physical pixel coordinates
     final cx = (logicalPos.dx * pixelRatio).round();
     final cy = (logicalPos.dy * pixelRatio).round();
 
@@ -160,9 +165,9 @@ class ScreenRecorder with WidgetsBindingObserver {
 
         final a = alpha / 255.0;
         final invA = 1.0 - a;
-        pixels[offset + 0] = (circleR * a + pixels[offset + 0] * invA).round(); // R
-        pixels[offset + 1] = (circleG * a + pixels[offset + 1] * invA).round(); // G
-        pixels[offset + 2] = (circleB * a + pixels[offset + 2] * invA).round(); // B
+        pixels[offset + 0] = (circleR * a + pixels[offset + 0] * invA).round();
+        pixels[offset + 1] = (circleG * a + pixels[offset + 1] * invA).round();
+        pixels[offset + 2] = (circleB * a + pixels[offset + 2] * invA).round();
       }
     }
   }
@@ -199,8 +204,15 @@ class ScreenRecorder with WidgetsBindingObserver {
         filepath: outputPath,
       );
 
+      // Decode each PNG → RGBA, draw touch circle if needed, feed to encoder
       for (final frame in frames) {
-        await FlutterQuickVideoEncoder.appendVideoFrame(frame.rgbaBytes);
+        final rgba = await _decodePngToRgba(frame.pngBytes, frame.width, frame.height);
+
+        if (frame.touchPosition != null) {
+          _drawTouchCircle(rgba, frame.width, frame.height, frame.touchPosition!);
+        }
+
+        await FlutterQuickVideoEncoder.appendVideoFrame(rgba);
       }
 
       await FlutterQuickVideoEncoder.finish();
@@ -212,7 +224,8 @@ class ScreenRecorder with WidgetsBindingObserver {
       await videoFile.delete();
 
       if (debug) {
-        print('Traceway: encoded ${frames.length} frames to ${videoBytes.length ~/ 1024}KB MP4 (${durationSeconds.toStringAsFixed(1)}s)');
+        final bufferKB = frames.fold<int>(0, (sum, f) => sum + f.pngBytes.length) ~/ 1024;
+        print('Traceway: encoded ${frames.length} frames (buffer: ${bufferKB}KB) to ${videoBytes.length ~/ 1024}KB MP4 (${durationSeconds.toStringAsFixed(1)}s)');
       }
 
       return SessionRecordingPayload(
