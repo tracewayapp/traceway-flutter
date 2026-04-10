@@ -85,6 +85,40 @@ await TracewayClient.instance?.flush();
 | `maxBufferFrames` | `150` | Max frames in recording buffer (~10s at 15fps) |
 | `captureIntervalMs` | `67` | Frame capture interval (~15fps) |
 
+## Platform Setup
+
+Traceway needs network access to send error reports. Depending on the platform, you may need to add permissions manually.
+
+### Android
+
+Add the `INTERNET` permission to `android/app/src/main/AndroidManifest.xml`:
+
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <application
+      ...
+```
+
+### macOS
+
+macOS apps are sandboxed by default and cannot make network requests without the `com.apple.security.network.client` entitlement.
+
+Add it to both `macos/Runner/DebugProfile.entitlements` and `macos/Runner/Release.entitlements`:
+
+```xml
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+```
+
+### iOS
+
+No additional configuration is required. iOS apps can make HTTPS requests by default.
+
 ## Screen Recording
 
 When `screenCapture: true`, the SDK:
