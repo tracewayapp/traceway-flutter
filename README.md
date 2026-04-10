@@ -117,28 +117,35 @@ For Flutter web, use the JS SDK instead — see [Flutter Web](#flutter-web) belo
 
 This SDK does not support Flutter web. For web apps, use the [`@tracewayapp/frontend`](https://docs.tracewayapp.com/client/js-sdk?sdk=js-generic) JS SDK which provides rrweb session replay and automatic fetch instrumentation.
 
-**1. Install the JS SDK:**
+**Add the CDN script to `web/index.html`:**
+
+```html
+<script src="https://cdn.jsdelivr.net/npm/@tracewayapp/frontend@1/dist/traceway.iife.global.js"></script>
+<script>
+  Traceway.init("your-token@https://traceway.example.com/api/report");
+</script>
+```
+
+Alternatively, if you use npm in your Flutter web project:
 
 ```bash
 npm install @tracewayapp/frontend
 ```
 
-**2. Add a script to `web/index.html`:**
-
 ```html
 <script type="module">
-  import { init } from './node_modules/@tracewayapp/frontend/dist/index.js';
-  init('your-token@https://your-traceway-instance.com/api/report');
+  import { init } from '@tracewayapp/frontend';
+  init('your-token@https://traceway.example.com/api/report');
 </script>
 ```
 
-Or load it from your bundled JS. See the full [JS SDK documentation](https://docs.tracewayapp.com/client/js-sdk?sdk=js-generic) for all options.
+See the full [JS SDK documentation](https://docs.tracewayapp.com/client/js-sdk?sdk=js-generic) for all options.
 
 ## Links
 
 - [Traceway Website](https://tracewayapp.com)
 - [Traceway GitHub](https://github.com/tracewayapp/traceway)
-- [Documentation](https://docs.tracewayapp.com/client/flutter)
+- [Documentation](https://docs.tracewayapp.com/client/flutter?sdk=flutter)
 - [Flutter SDK Source](https://github.com/tracewayapp/traceway-flutter)
 
 ## License
