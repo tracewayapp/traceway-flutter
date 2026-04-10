@@ -1,3 +1,7 @@
+## 0.1.3 — 2026-04-10
+
+- Updated readme with new docs link
+
 ## 0.1.2 — 2026-04-10
 
 - redeploying to test ci/cd flow
