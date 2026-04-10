@@ -62,6 +62,8 @@ class TracewayClient {
       return;
     }
 
+    _pendingExceptions.add(exception);
+
     if (screenRecorder != null) {
       final exceptionId = _uuid.v4();
       exception.sessionRecordingId = exceptionId;
@@ -69,11 +71,11 @@ class TracewayClient {
         if (recording != null) {
           _pendingRecordings.add(recording);
         }
+        _scheduleSync();
       });
+    } else {
+      _scheduleSync();
     }
-
-    _pendingExceptions.add(exception);
-    _scheduleSync();
   }
 
   void captureException(Object error, [StackTrace? stackTrace]) {
