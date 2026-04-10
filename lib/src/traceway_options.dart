@@ -8,6 +8,7 @@ class TracewayOptions {
   final double capturePixelRatio;
   final int maxBufferFrames;
   final int captureIntervalMs;
+  final int maxPendingExceptions;
 
   const TracewayOptions({
     this.sampleRate = 1.0,
@@ -19,5 +20,6 @@ class TracewayOptions {
     this.capturePixelRatio = 0.75,
     this.maxBufferFrames = 150,
     this.captureIntervalMs = 67,
+    this.maxPendingExceptions = 5,
   });
 }

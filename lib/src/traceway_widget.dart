@@ -22,7 +22,9 @@ class Traceway extends StatefulWidget {
     runZonedGuarded(
       () {
         WidgetsFlutterBinding.ensureInitialized();
-        TracewayClient.initialize(connectionString, options);
+        final client = TracewayClient.initialize(connectionString, options);
+        client.collectSyncDeviceInfo();
+        client.collectDeviceInfo();
         errorHandler.install();
         runApp(Traceway(child: child));
       },

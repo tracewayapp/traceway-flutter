@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 
 import 'connection_string.dart';
+import 'device_info_collector.dart';
 import 'models/collection_frame.dart';
 import 'models/exception_stack_trace.dart';
 import 'models/report_request.dart';
@@ -15,6 +17,9 @@ import 'traceway_options.dart';
 import 'transport.dart';
 
 const _uuid = Uuid();
+
+typedef ReportSender = Future<bool> Function(
+    String apiUrl, String token, String body);
 
 class TracewayClient {
   static TracewayClient? _instance;
@@ -31,9 +36,14 @@ class TracewayClient {
   Timer? _debounceTimer;
   Timer? _retryTimer;
 
+  Map<String, String> _deviceAttributes = {};
+  ReportSender _reportSender;
+
   ScreenRecorder? screenRecorder;
 
-  TracewayClient._(this._apiUrl, this._token, this._options);
+  TracewayClient._(this._apiUrl, this._token, this._options,
+      [ReportSender? reportSender])
+      : _reportSender = reportSender ?? sendReport;
 
   static TracewayClient initialize(
     String connectionString,
@@ -45,8 +55,51 @@ class TracewayClient {
     return client;
   }
 
+  @visibleForTesting
+  static TracewayClient initializeForTest(
+    String connectionString,
+    TracewayOptions options, {
+    ReportSender? reportSender,
+  }) {
+    final parsed = parseConnectionString(connectionString);
+    final client =
+        TracewayClient._(parsed.apiUrl, parsed.token, options, reportSender);
+    _instance = client;
+    return client;
+  }
+
   bool get debug => _options.debug;
   TracewayOptions get options => _options;
+
+  @visibleForTesting
+  int get pendingExceptionCount => _pendingExceptions.length;
+
+  @visibleForTesting
+  int get pendingRecordingCount => _pendingRecordings.length;
+
+  @visibleForTesting
+  List<ExceptionStackTrace> get pendingExceptions =>
+      List.unmodifiable(_pendingExceptions);
+
+  void collectSyncDeviceInfo() {
+    _deviceAttributes = DeviceInfoCollector.collectSync();
+    if (_options.debug) {
+      print('Traceway: collected sync device info: $_deviceAttributes');
+    }
+  }
+
+  Future<void> collectDeviceInfo() async {
+    final asyncInfo = await DeviceInfoCollector.collectAsync();
+    _deviceAttributes = {..._deviceAttributes, ...asyncInfo};
+    if (_options.debug) {
+      print('Traceway: collected async device info: $_deviceAttributes');
+    }
+  }
+
+  @visibleForTesting
+  void setDeviceAttributes(Map<String, String> attributes) {
+    _deviceAttributes = Map.from(attributes);
+  }
 
   bool _shouldSample() {
     if (_options.sampleRate >= 1.0) return true;
@@ -62,14 +115,26 @@ class TracewayClient {
       return;
     }
 
+    if (_deviceAttributes.isNotEmpty) {
+      exception.attributes = {
+        ..._deviceAttributes,
+        ...?exception.attributes,
+      };
+    }
+
     _pendingExceptions.add(exception);
+    _trimPending();
 
     if (screenRecorder != null) {
       final exceptionId = _uuid.v4();
       exception.sessionRecordingId = exceptionId;
       screenRecorder!.captureRecording(exceptionId).then((recording) {
         if (recording != null) {
-          _pendingRecordings.add(recording);
+          final stillPending = _pendingExceptions
+              .any((e) => e.sessionRecordingId == exceptionId);
+          if (stillPending) {
+            _pendingRecordings.add(recording);
+          }
         }
         _scheduleSync();
       });
@@ -93,6 +158,19 @@ class TracewayClient {
       recordedAt: DateTime.now(),
       isMessage: true,
     ));
+  }
+
+  void _trimPending() {
+    while (_pendingExceptions.length > _options.maxPendingExceptions) {
+      final dropped = _pendingExceptions.removeAt(0);
+      if (dropped.sessionRecordingId != null) {
+        _pendingRecordings
+            .removeWhere((r) => r.exceptionId == dropped.sessionRecordingId);
+      }
+      if (_options.debug) {
+        print('Traceway: dropped oldest exception (buffer full)');
+      }
+    }
   }
 
   void _scheduleSync() {
@@ -129,7 +207,7 @@ class TracewayClient {
 
     bool failed = false;
     try {
-      final success = await sendReport(
+      final success = await _reportSender(
         _apiUrl,
         _token,
         jsonEncode(payload.toJson()),
@@ -138,6 +216,7 @@ class TracewayClient {
         failed = true;
         _pendingExceptions.insertAll(0, batch);
         _pendingRecordings.insertAll(0, recordings);
+        _trimPending();
         if (_options.debug) {
           print('Traceway: sync failed, re-queued exceptions');
         }
@@ -146,6 +225,7 @@ class TracewayClient {
       failed = true;
       _pendingExceptions.insertAll(0, batch);
       _pendingRecordings.insertAll(0, recordings);
+      _trimPending();
       if (_options.debug) {
         print('Traceway: sync error: $e');
       }
