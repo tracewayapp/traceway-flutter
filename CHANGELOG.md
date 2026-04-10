@@ -1,3 +1,7 @@
+## 0.1.4 — 2026-04-10
+
+- Fix for the first issue sync addressed
+
 ## 0.1.3 — 2026-04-10
 
 - Updated readme with new docs link
