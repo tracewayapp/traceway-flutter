@@ -3,13 +3,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:traceway/traceway.dart';
 
-// Android emulator can't reach host's localhost — it needs 10.0.2.2
-String get _host => Platform.isAndroid ? '10.0.2.2' : 'localhost';
+// Pass via: flutter run --dart-define=TRACEWAY_DSN=token@https://...
+// Falls back to local dev server if not set.
+const _dsn = String.fromEnvironment('TRACEWAY_DSN');
+String get _fallbackDsn =>
+    'frontend-dev-token@http://${Platform.isAndroid ? '10.0.2.2' : 'localhost'}:8082/api/report';
 
 void main() {
   Traceway.run(
-    connectionString:
-        'frontend-dev-token@http://$_host:8082/api/report',
+    connectionString: _dsn.isNotEmpty ? _dsn : _fallbackDsn,
     options: const TracewayOptions(
       screenCapture: true,
       debug: true,
