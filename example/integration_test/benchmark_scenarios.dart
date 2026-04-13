@@ -13,14 +13,23 @@ import 'benchmark_harness.dart';
 // Shared helpers
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// No-op sender that includes gzip cost (mirrors real hot path) but discards
-/// the result and never hits the network.
-Future<bool> _benchmarkSender(String url, String token, String body) async {
+/// When TRACEWAY_DSN is set, use the real backend. Otherwise no-op.
+const _dsn = String.fromEnvironment('TRACEWAY_DSN');
+final bool _useRealBackend = _dsn.isNotEmpty;
+
+/// Connection string: real DSN if provided, otherwise a dummy one.
+final String _connectionString =
+    _useRealBackend ? _dsn : 'benchmark-token@http://localhost:9999/noop';
+
+/// When no real DSN, use a no-op sender that includes gzip cost but discards.
+/// When a real DSN is set, pass null to use the SDK's default sendReport.
+ReportSender? get _reportSender =>
+    _useRealBackend ? null : _noOpSender;
+
+Future<bool> _noOpSender(String url, String token, String body) async {
   gzip.encode(utf8.encode(body));
   return true;
 }
-
-const _connectionString = 'benchmark-token@http://localhost:9999/noop';
 
 /// Pumps frames for [duration], driving the engine at ~60 fps.
 Future<void> _pumpFor(WidgetTester tester, Duration duration) async {
@@ -363,7 +372,7 @@ Future<List<BenchmarkMetric>> runSdkIdleNoCapture(
   TracewayClient.initializeForTest(
     _connectionString,
     const TracewayOptions(screenCapture: false, debug: false),
-    reportSender: _benchmarkSender,
+    reportSender: _reportSender,
   );
   _showSnackbar('SDK initialized (capture OFF)', color: Colors.blue);
 
@@ -414,7 +423,7 @@ Future<List<BenchmarkMetric>> runSdkBurstNoCapture(
       debug: false,
       maxPendingExceptions: 25,
     ),
-    reportSender: _benchmarkSender,
+    reportSender: _reportSender,
   );
   _showSnackbar('SDK initialized (burst test)', color: Colors.blue);
 
@@ -484,7 +493,7 @@ Future<List<BenchmarkMetric>> runSdkIdleWithCapture(
       maxBufferFrames: 150,
       capturePixelRatio: 0.75,
     ),
-    reportSender: _benchmarkSender,
+    reportSender: _reportSender,
   );
   _showSnackbar('SDK initialized (capture ON)', color: Colors.orange);
 
@@ -538,7 +547,7 @@ Future<List<BenchmarkMetric>> runSdkBurstWithCapture(
       capturePixelRatio: 0.75,
       maxPendingExceptions: 10,
     ),
-    reportSender: _benchmarkSender,
+    reportSender: _reportSender,
   );
   _showSnackbar('SDK initialized (capture + burst)', color: Colors.orange);
 
@@ -561,7 +570,10 @@ Future<List<BenchmarkMetric>> runSdkBurstWithCapture(
   _showStatus('Screen capture running — filling frame buffer...');
   await _pumpFor(tester, const Duration(seconds: 8));
 
-  // Fire 5 exceptions — each triggers MP4 video encoding.
+  // Fire 5 exceptions — each triggers MP4 video encoding from the frame
+  // buffer. The SDK's debounce timer handles sync AFTER each recording
+  // completes, so we just need to keep pumping long enough for all
+  // encodings to finish and the SDK to sync on its own.
   _showStatus('Firing 5 exceptions (triggers MP4 encoding)...');
   await tester.pump();
   final captureTimes = <int>[];
@@ -571,14 +583,14 @@ Future<List<BenchmarkMetric>> runSdkBurstWithCapture(
     } catch (e, st) {
       captureTimes.add(_fireException('#${i + 1}/5 (MP4 encode)', e, st));
     }
-    await _pumpFor(tester, const Duration(seconds: 1));
+    await _pumpFor(tester, const Duration(seconds: 3));
   }
 
-  _showStatus('Waiting for video encoding + sync...');
-  await _pumpFor(tester, const Duration(seconds: 3));
-  await TracewayClient.instance!.flush(5000);
+  // Keep pumping so the SDK can encode recordings and sync naturally.
+  _showStatus('Waiting for MP4 encoding + auto-sync...');
+  await _pumpFor(tester, const Duration(seconds: 20));
 
-  _showSnackbar('Flush complete', color: Colors.green);
+  _showSnackbar('Done', color: Colors.green);
   _showStatus('Collecting metrics...');
   await tester.pump();
 
@@ -611,7 +623,7 @@ Future<List<BenchmarkMetric>> runVideoBurstWithCapture(
       capturePixelRatio: 0.75,
       maxPendingExceptions: 10,
     ),
-    reportSender: _benchmarkSender,
+    reportSender: _reportSender,
   );
 
   _showStatus('Loading video...');
@@ -644,6 +656,8 @@ Future<List<BenchmarkMetric>> runVideoBurstWithCapture(
   await _pumpFor(tester, const Duration(seconds: 10));
 
   // Fire 5 consecutive exceptions while video is still playing.
+  // Each triggers MP4 encoding from the screen recording buffer.
+  // Let the SDK sync naturally after each recording completes.
   _showStatus('Firing 5 exceptions during video playback...');
   await tester.pump();
   final captureTimes = <int>[];
@@ -654,14 +668,14 @@ Future<List<BenchmarkMetric>> runVideoBurstWithCapture(
       captureTimes.add(
           _fireException('#${i + 1}/5 (video + MP4 encode)', e, st));
     }
-    await _pumpFor(tester, const Duration(seconds: 1));
+    await _pumpFor(tester, const Duration(seconds: 3));
   }
 
-  _showStatus('Waiting for encoding + sync...');
-  await _pumpFor(tester, const Duration(seconds: 3));
-  await TracewayClient.instance!.flush(5000);
+  // Keep pumping so the SDK can encode recordings and sync naturally.
+  _showStatus('Waiting for MP4 encoding + auto-sync...');
+  await _pumpFor(tester, const Duration(seconds: 20));
 
-  _showSnackbar('Flush complete', color: Colors.green);
+  _showSnackbar('Done', color: Colors.green);
   _showStatus('Collecting metrics...');
   await tester.pump();
 
