@@ -68,6 +68,19 @@ class TracewayClient {
     return client;
   }
 
+  @visibleForTesting
+  static Future<void> resetForTest() async {
+    final client = _instance;
+    if (client != null) {
+      await client.flush(1000);
+      client._debounceTimer?.cancel();
+      client._retryTimer?.cancel();
+      client.screenRecorder?.stop();
+      client.screenRecorder = null;
+    }
+    _instance = null;
+  }
+
   bool get debug => _options.debug;
   TracewayOptions get options => _options;
 

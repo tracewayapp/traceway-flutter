@@ -1,0 +1,413 @@
+name: Performance Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to benchmark'
+        required: false
+        default: 'main'
+        type: string
+      device_tier:
+        description: 'Device tier to test on'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - fast
+          - mid
+          - slow
+      platform:
+        description: 'Platform to test on'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - android
+          - ios
+
+# ──────────────────────────────────────────────────────────────────────────
+# Build jobs — produce test artifacts for each platform
+# ──────────────────────────────────────────────────────────────────────────
+
+jobs:
+  build-android:
+    if: >-
+      github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'android'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        working-directory: example
+        run: flutter pub get
+
+      - name: Build app APK
+        working-directory: example
+        run: |
+          flutter build apk --debug \
+            --dart-define=TRACEWAY_DSN=${{ secrets.TRACEWAY_DSN }} \
+            --dart-define=BENCH_BRANCH=${{ github.event.inputs.branch || github.ref_name }} \
+            --dart-define=BENCH_COMMIT=${{ github.sha }} \
+            --dart-define=BENCH_RUN_ID=${{ github.run_id }}
+
+      - name: Build instrumentation test APK
+        working-directory: example/android
+        run: ./gradlew app:assembleAndroidTest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apks
+          path: |
+            example/build/app/outputs/flutter-apk/app-debug.apk
+            example/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+
+  build-ios:
+    if: >-
+      github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'ios'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        working-directory: example
+        run: flutter pub get
+
+      - name: Install CocoaPods
+        working-directory: example/ios
+        run: pod install
+
+      - name: Install Apple certificate and provisioning profile
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          # Decode secrets
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          PP_PATH=$RUNNER_TEMP/profile.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          echo -n "$APPLE_CERTIFICATE_P12" | base64 --decode -o $CERT_PATH
+          echo -n "$APPLE_PROVISIONING_PROFILE" | base64 --decode -o $PP_PATH
+
+          # Create and configure keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          # Import certificate
+          security import $CERT_PATH -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          # Install provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Pre-build Flutter iOS with dart-defines
+        working-directory: example
+        run: |
+          flutter build ios --debug --no-codesign \
+            --dart-define=TRACEWAY_DSN=${{ secrets.TRACEWAY_DSN }} \
+            --dart-define=BENCH_BRANCH=${{ github.event.inputs.branch || github.ref_name }} \
+            --dart-define=BENCH_COMMIT=${{ github.sha }} \
+            --dart-define=BENCH_RUN_ID=${{ github.run_id }}
+
+      - name: Build iOS test bundle
+        working-directory: example/ios
+        run: |
+          xcodebuild build-for-testing \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -derivedDataPath ../build/ios_integ \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS'
+
+      - name: Zip test bundle for Firebase Test Lab
+        working-directory: example/build/ios_integ/Build/Products
+        run: zip -r ${{ github.workspace }}/ios_tests.zip Release-iphoneos *.xctestrun
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-test-bundle
+          path: ios_tests.zip
+
+      - name: Clean up keychain
+        if: always()
+        run: security delete-keychain $RUNNER_TEMP/app-signing.keychain-db
+
+# ──────────────────────────────────────────────────────────────────────────
+# Firebase Test Lab — run on real devices
+# ──────────────────────────────────────────────────────────────────────────
+
+  firebase-android:
+    if: >-
+      github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'android'
+    needs: build-android
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: redfin
+            api: "30"
+            tier: slow
+            label: "Pixel 5 (API 30)"
+          - device: oriole
+            api: "33"
+            tier: mid
+            label: "Pixel 6 (API 33)"
+          - device: shiba
+            api: "34"
+            tier: fast
+            label: "Pixel 8 (API 34)"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apks
+          path: ./apks
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run on Firebase Test Lab
+        if: >-
+          github.event.inputs.device_tier == 'all' ||
+          github.event.inputs.device_tier == matrix.tier
+        run: |
+          gcloud firebase test android run \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --type instrumentation \
+            --app apks/example/build/app/outputs/flutter-apk/app-debug.apk \
+            --test apks/example/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --device model=${{ matrix.device }},version=${{ matrix.api }},locale=en,orientation=portrait \
+            --timeout 10m \
+            --results-dir=benchmark-${{ github.run_id }}-android-${{ matrix.device }} \
+            --results-bucket=${{ secrets.GCS_BUCKET }} \
+            --no-record-video \
+            --no-performance-metrics \
+            2>&1 | tee ftl_output.txt
+        continue-on-error: true
+
+      - name: Download test logs from GCS
+        if: >-
+          github.event.inputs.device_tier == 'all' ||
+          github.event.inputs.device_tier == matrix.tier
+        run: |
+          gsutil -m cp -r \
+            "gs://${{ secrets.GCS_BUCKET }}/benchmark-${{ github.run_id }}-android-${{ matrix.device }}/**" \
+            ./results/ 2>/dev/null || true
+
+      - name: Extract benchmark results from logcat
+        if: >-
+          github.event.inputs.device_tier == 'all' ||
+          github.event.inputs.device_tier == matrix.tier
+        run: |
+          # Search for BENCHMARK_RESULT: in all log files
+          find ./results -name "logcat" -o -name "*.log" 2>/dev/null | \
+            xargs grep "BENCHMARK_RESULT:" 2>/dev/null | \
+            sed 's/.*BENCHMARK_RESULT://' \
+            > benchmark_results_android_${{ matrix.device }}.jsonl || true
+
+          # Inject device metadata into each result line
+          if [ -s benchmark_results_android_${{ matrix.device }}.jsonl ]; then
+            tmpfile=$(mktemp)
+            while IFS= read -r line; do
+              echo "$line" | python3 -c "
+          import sys, json
+          obj = json.loads(sys.stdin.read())
+          obj['device'] = '${{ matrix.device }}'
+          obj['api_level'] = '${{ matrix.api }}'
+          obj['platform'] = 'android'
+          obj['device_label'] = '${{ matrix.label }}'
+          print(json.dumps(obj))
+          " >> "$tmpfile"
+            done < benchmark_results_android_${{ matrix.device }}.jsonl
+            mv "$tmpfile" benchmark_results_android_${{ matrix.device }}.jsonl
+          fi
+
+          echo "--- Results for ${{ matrix.label }} ---"
+          cat benchmark_results_android_${{ matrix.device }}.jsonl || echo "(no results)"
+
+      - uses: actions/upload-artifact@v4
+        if: >-
+          github.event.inputs.device_tier == 'all' ||
+          github.event.inputs.device_tier == matrix.tier
+        with:
+          name: benchmark-results-android-${{ matrix.device }}
+          path: benchmark_results_android_${{ matrix.device }}.jsonl
+          if-no-files-found: ignore
+
+  firebase-ios:
+    if: >-
+      github.event.inputs.platform == 'all' ||
+      github.event.inputs.platform == 'ios'
+    needs: build-ios
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: iphone8
+            version: "16.6"
+            tier: slow
+            label: "iPhone 8 (iOS 16.6)"
+          - device: iphone13pro
+            version: "17.5"
+            tier: mid
+            label: "iPhone 13 Pro (iOS 17.5)"
+          - device: iphone15pro
+            version: "18.0"
+            tier: fast
+            label: "iPhone 15 Pro (iOS 18.0)"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: ios-test-bundle
+          path: ./ios
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run on Firebase Test Lab
+        if: >-
+          github.event.inputs.device_tier == 'all' ||
+          github.event.inputs.device_tier == matrix.tier
+        run: |
+          gcloud firebase test ios run \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --test ios/ios_tests.zip \
+            --device model=${{ matrix.device }},version=${{ matrix.version }},locale=en,orientation=portrait \
+            --timeout 10m \
+            --results-dir=benchmark-${{ github.run_id }}-ios-${{ matrix.device }} \
+            --results-bucket=${{ secrets.GCS_BUCKET }} \
+            --no-record-video \
+            2>&1 | tee ftl_output.txt
+        continue-on-error: true
+
+      - name: Download test logs from GCS
+        if: >-
+          github.event.inputs.device_tier == 'all' ||
+          github.event.inputs.device_tier == matrix.tier
+        run: |
+          gsutil -m cp -r \
+            "gs://${{ secrets.GCS_BUCKET }}/benchmark-${{ github.run_id }}-ios-${{ matrix.device }}/**" \
+            ./results/ 2>/dev/null || true
+
+      - name: Extract benchmark results
+        if: >-
+          github.event.inputs.device_tier == 'all' ||
+          github.event.inputs.device_tier == matrix.tier
+        run: |
+          # Search for BENCHMARK_RESULT: in all log/output files
+          find ./results -type f 2>/dev/null | \
+            xargs grep "BENCHMARK_RESULT:" 2>/dev/null | \
+            sed 's/.*BENCHMARK_RESULT://' \
+            > benchmark_results_ios_${{ matrix.device }}.jsonl || true
+
+          # Inject device metadata
+          if [ -s benchmark_results_ios_${{ matrix.device }}.jsonl ]; then
+            tmpfile=$(mktemp)
+            while IFS= read -r line; do
+              echo "$line" | python3 -c "
+          import sys, json
+          obj = json.loads(sys.stdin.read())
+          obj['device'] = '${{ matrix.device }}'
+          obj['api_level'] = '${{ matrix.version }}'
+          obj['platform'] = 'ios'
+          obj['device_label'] = '${{ matrix.label }}'
+          print(json.dumps(obj))
+          " >> "$tmpfile"
+            done < benchmark_results_ios_${{ matrix.device }}.jsonl
+            mv "$tmpfile" benchmark_results_ios_${{ matrix.device }}.jsonl
+          fi
+
+          echo "--- Results for ${{ matrix.label }} ---"
+          cat benchmark_results_ios_${{ matrix.device }}.jsonl || echo "(no results)"
+
+      - uses: actions/upload-artifact@v4
+        if: >-
+          github.event.inputs.device_tier == 'all' ||
+          github.event.inputs.device_tier == matrix.tier
+        with:
+          name: benchmark-results-ios-${{ matrix.device }}
+          path: benchmark_results_ios_${{ matrix.device }}.jsonl
+          if-no-files-found: ignore
+
+# ──────────────────────────────────────────────────────────────────────────
+# Report — aggregate results into a markdown summary
+# ──────────────────────────────────────────────────────────────────────────
+
+  report:
+    if: always()
+    needs: [firebase-android, firebase-ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: benchmark-results-*
+          merge-multiple: true
+          path: ./results
+
+      - name: List collected results
+        run: ls -la ./results/ 2>/dev/null || echo "No results collected"
+
+      - name: Generate summary report
+        run: |
+          dart run .github/scripts/parse_benchmark_results.dart ./results \
+            "${{ github.event.inputs.branch || github.ref_name }}" \
+            "${{ github.sha }}" \
+            "${{ github.run_id }}"
+
+      - name: Post summary to GitHub Actions
+        run: |
+          if [ -f benchmark_summary.md ]; then
+            cat benchmark_summary.md >> $GITHUB_STEP_SUMMARY
+            echo "Summary posted to GitHub Actions"
+          else
+            echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+            echo "No benchmark results were collected. Check individual job logs for errors." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: |
+            benchmark_summary.md
+            results/
+          if-no-files-found: ignore
