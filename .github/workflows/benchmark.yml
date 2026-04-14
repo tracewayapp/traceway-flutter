@@ -55,10 +55,11 @@ jobs:
         working-directory: example
         run: flutter pub get
 
-      - name: Build app APK
+      - name: Build app APK with integration test entry point
         working-directory: example
         run: |
           flutter build apk --debug \
+            --target=integration_test/benchmark_test.dart \
             --dart-define=TRACEWAY_DSN=${{ secrets.TRACEWAY_DSN }} \
             --dart-define=BENCH_BRANCH=${{ github.event.inputs.branch || github.ref_name }} \
             --dart-define=BENCH_COMMIT=${{ github.sha }} \
