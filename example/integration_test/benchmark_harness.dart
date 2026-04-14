@@ -194,10 +194,20 @@ class BenchmarkCollector {
 
   // ── Output ──────────────────────────────────────────────────────────
 
-  static void emitResults(List<BenchmarkMetric> metrics) {
+  /// File path on device where results are written as a backup to logcat.
+  /// Firebase Test Lab pulls this via --directories-to-pull=/sdcard/Download.
+  static const _resultsFilePath = '/sdcard/Download/benchmark_results.jsonl';
+
+  static Future<void> emitResults(List<BenchmarkMetric> metrics) async {
+    final file = File(_resultsFilePath);
+    final sink = file.openWrite(mode: FileMode.append);
     for (final m in metrics) {
-      // The BENCHMARK_RESULT: prefix is used to extract results from logcat.
-      print('BENCHMARK_RESULT:${jsonEncode(m.toJson())}');
+      final line = 'BENCHMARK_RESULT:${jsonEncode(m.toJson())}';
+      sink.writeln(line);
+      // Keep print() for local development visibility and logcat fallback.
+      print(line);
     }
+    await sink.flush();
+    await sink.close();
   }
 }

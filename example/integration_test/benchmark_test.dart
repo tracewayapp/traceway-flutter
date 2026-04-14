@@ -9,31 +9,31 @@ void main() {
 
   testWidgets('Benchmark: baseline', (tester) async {
     final metrics = await runBaseline(tester);
-    BenchmarkCollector.emitResults(metrics);
+    await BenchmarkCollector.emitResults(metrics);
   });
 
   testWidgets('Benchmark: sdk_idle_no_capture', (tester) async {
     final metrics = await runSdkIdleNoCapture(tester);
-    BenchmarkCollector.emitResults(metrics);
+    await BenchmarkCollector.emitResults(metrics);
   });
 
   testWidgets('Benchmark: sdk_burst_no_capture', (tester) async {
     final metrics = await runSdkBurstNoCapture(tester);
-    BenchmarkCollector.emitResults(metrics);
+    await BenchmarkCollector.emitResults(metrics);
   });
 
   testWidgets('Benchmark: sdk_idle_with_capture', (tester) async {
     final metrics = await runSdkIdleWithCapture(tester);
-    BenchmarkCollector.emitResults(metrics);
+    await BenchmarkCollector.emitResults(metrics);
   });
 
   testWidgets('Benchmark: sdk_burst_with_capture', (tester) async {
     final metrics = await runSdkBurstWithCapture(tester);
-    BenchmarkCollector.emitResults(metrics);
+    await BenchmarkCollector.emitResults(metrics);
   });
 
   testWidgets('Benchmark: video_burst_with_capture', (tester) async {
     final metrics = await runVideoBurstWithCapture(tester);
-    BenchmarkCollector.emitResults(metrics);
+    await BenchmarkCollector.emitResults(metrics);
   });
 }

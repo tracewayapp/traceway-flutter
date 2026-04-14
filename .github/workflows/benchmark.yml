@@ -216,35 +216,50 @@ jobs:
             --timeout 20m \
             --results-dir=benchmark-${{ github.run_id }}-android-${{ matrix.device }} \
             --results-bucket=${{ secrets.GCS_BUCKET }} \
+            --directories-to-pull=/sdcard/Download \
             --record-video \
             --no-performance-metrics \
             2>&1 | tee ftl_output.txt
         continue-on-error: true
 
-      - name: Download test logs from GCS
+      - name: Download test results from GCS
         if: >-
           github.event.inputs.device_tier == 'all' ||
           github.event.inputs.device_tier == matrix.tier
         run: |
-          gsutil -m cp -r \
-            "gs://${{ secrets.GCS_BUCKET }}/benchmark-${{ github.run_id }}-android-${{ matrix.device }}/**" \
-            ./results/ 2>/dev/null || true
+          GCS_PATH="gs://${{ secrets.GCS_BUCKET }}/benchmark-${{ github.run_id }}-android-${{ matrix.device }}"
+          echo "=== Listing GCS contents at: $GCS_PATH ==="
+          gsutil ls -r "$GCS_PATH/" 2>&1 | head -30 || echo "WARNING: failed to list GCS path"
 
-      - name: Extract benchmark results from logcat
+          echo "=== Downloading results ==="
+          mkdir -p ./results
+          gsutil -m cp -r "$GCS_PATH/" ./results/ 2>&1 || echo "WARNING: gsutil download failed"
+
+          echo "=== Downloaded files ==="
+          FILE_COUNT=$(find ./results -type f 2>/dev/null | wc -l)
+          echo "Total files downloaded: $FILE_COUNT"
+          find ./results -type f 2>/dev/null | head -50
+
+      - name: Extract benchmark results
         if: >-
           github.event.inputs.device_tier == 'all' ||
           github.event.inputs.device_tier == matrix.tier
         run: |
-          echo "=== Files downloaded from GCS ==="
-          find ./results -type f 2>/dev/null | head -50 || echo "(no files)"
+          # Primary: look for the file written by the harness via --directories-to-pull
+          PULLED_FILE=$(find ./results -path "*/sdcard/Download/benchmark_results.jsonl" -type f 2>/dev/null | head -1)
+          if [ -n "$PULLED_FILE" ] && [ -s "$PULLED_FILE" ]; then
+            echo "=== Found pulled results file: $PULLED_FILE ==="
+            grep -h "BENCHMARK_RESULT:" "$PULLED_FILE" | sed 's/.*BENCHMARK_RESULT://' \
+              > benchmark_results_android_${{ matrix.device }}.jsonl
+          else
+            echo "=== No pulled file found, falling back to logcat grep ==="
+            echo "Searching all downloaded files for BENCHMARK_RESULT..."
+            grep -r "BENCHMARK_RESULT:" ./results/ 2>/dev/null | head -5 || echo "(no matches in any file)"
 
-          echo "=== Searching all files for BENCHMARK_RESULT ==="
-          grep -r "BENCHMARK_RESULT:" ./results/ 2>/dev/null | head -5 || echo "(no matches in any file)"
-
-          # Extract results from all files
-          grep -rh "BENCHMARK_RESULT:" ./results/ 2>/dev/null | \
-            sed 's/.*BENCHMARK_RESULT://' \
-            > benchmark_results_android_${{ matrix.device }}.jsonl || true
+            grep -rh "BENCHMARK_RESULT:" ./results/ 2>/dev/null | \
+              sed 's/.*BENCHMARK_RESULT://' \
+              > benchmark_results_android_${{ matrix.device }}.jsonl || true
+          fi
 
           # Inject device metadata into each result line
           if [ -s benchmark_results_android_${{ matrix.device }}.jsonl ]; then
@@ -329,27 +344,32 @@ jobs:
             2>&1 | tee ftl_output.txt
         continue-on-error: true
 
-      - name: Download test logs from GCS
+      - name: Download test results from GCS
         if: >-
           github.event.inputs.device_tier == 'all' ||
           github.event.inputs.device_tier == matrix.tier
         run: |
-          gsutil -m cp -r \
-            "gs://${{ secrets.GCS_BUCKET }}/benchmark-${{ github.run_id }}-ios-${{ matrix.device }}/**" \
-            ./results/ 2>/dev/null || true
+          GCS_PATH="gs://${{ secrets.GCS_BUCKET }}/benchmark-${{ github.run_id }}-ios-${{ matrix.device }}"
+          echo "=== Listing GCS contents at: $GCS_PATH ==="
+          gsutil ls -r "$GCS_PATH/" 2>&1 | head -30 || echo "WARNING: failed to list GCS path"
+
+          echo "=== Downloading results ==="
+          mkdir -p ./results
+          gsutil -m cp -r "$GCS_PATH/" ./results/ 2>&1 || echo "WARNING: gsutil download failed"
+
+          echo "=== Downloaded files ==="
+          FILE_COUNT=$(find ./results -type f 2>/dev/null | wc -l)
+          echo "Total files downloaded: $FILE_COUNT"
+          find ./results -type f 2>/dev/null | head -50
 
       - name: Extract benchmark results
         if: >-
           github.event.inputs.device_tier == 'all' ||
           github.event.inputs.device_tier == matrix.tier
         run: |
-          echo "=== Files downloaded from GCS ==="
-          find ./results -type f 2>/dev/null | head -50 || echo "(no files)"
-
           echo "=== Searching all files for BENCHMARK_RESULT ==="
           grep -r "BENCHMARK_RESULT:" ./results/ 2>/dev/null | head -5 || echo "(no matches in any file)"
 
-          # Extract results from all files
           grep -rh "BENCHMARK_RESULT:" ./results/ 2>/dev/null | \
             sed 's/.*BENCHMARK_RESULT://' \
             > benchmark_results_ios_${{ matrix.device }}.jsonl || true
