@@ -1,14 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
-import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_quick_video_encoder/flutter_quick_video_encoder.dart';
-import 'package:path_provider/path_provider.dart';
 
 import 'circular_buffer.dart';
 import 'models/session_recording_payload.dart';
@@ -116,62 +113,6 @@ class ScreenRecorder with WidgetsBindingObserver {
     }
   }
 
-  /// Decodes a PNG frame to raw RGBA pixels.
-  Future<Uint8List> _decodePngToRgba(Uint8List pngBytes, int width, int height) async {
-    final codec = await ui.instantiateImageCodec(pngBytes);
-    final frameInfo = await codec.getNextFrame();
-    final image = frameInfo.image;
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-    image.dispose();
-    codec.dispose();
-    return byteData!.buffer.asUint8List();
-  }
-
-  /// Draws a blue (#4ba3f7) circle onto raw RGBA pixel data at the touch position.
-  void _drawTouchCircle(Uint8List pixels, int width, int height, Offset logicalPos) {
-    final cx = (logicalPos.dx * pixelRatio).round();
-    final cy = (logicalPos.dy * pixelRatio).round();
-
-    const radius = 18;
-    const borderWidth = 3;
-    const innerRadius = radius - borderWidth;
-
-    // #4ba3f7 = R:75, G:163, B:247
-    const int circleR = 75;
-    const int circleG = 163;
-    const int circleB = 247;
-
-    final minX = max(0, cx - radius);
-    final maxX = min(width - 1, cx + radius);
-    final minY = max(0, cy - radius);
-    final maxY = min(height - 1, cy + radius);
-
-    for (var y = minY; y <= maxY; y++) {
-      for (var x = minX; x <= maxX; x++) {
-        final dx = x - cx;
-        final dy = y - cy;
-        final distSq = dx * dx + dy * dy;
-
-        if (distSq > radius * radius) continue;
-
-        final offset = (y * width + x) * 4;
-
-        int alpha;
-        if (distSq > innerRadius * innerRadius) {
-          alpha = 200;
-        } else {
-          alpha = 80;
-        }
-
-        final a = alpha / 255.0;
-        final invA = 1.0 - a;
-        pixels[offset + 0] = (circleR * a + pixels[offset + 0] * invA).round();
-        pixels[offset + 1] = (circleG * a + pixels[offset + 1] * invA).round();
-        pixels[offset + 2] = (circleB * a + pixels[offset + 2] * invA).round();
-      }
-    }
-  }
-
   Future<SessionRecordingPayload?> captureRecording(
     String exceptionId,
   ) async {
@@ -180,52 +121,32 @@ class ScreenRecorder with WidgetsBindingObserver {
 
     try {
       final first = frames.first;
-      final width = first.width;
-      final height = first.height;
       final fps = 1000 ~/ captureIntervalMs;
       final durationSeconds = frames.length * captureIntervalMs / 1000.0;
 
-      final tempDir = await getTemporaryDirectory();
-      final outputPath = '${tempDir.path}/traceway_$exceptionId.mp4';
-
-      await FlutterQuickVideoEncoder.setLogLevel(
-        debug ? LogLevel.standard : LogLevel.none,
-      );
-
-      await FlutterQuickVideoEncoder.setup(
-        width: width,
-        height: height,
+      // Single native call — PNG decoding, touch circles, and H.264 encoding
+      // all happen on a native background thread with zero main-thread work.
+      final mp4Bytes = await FlutterQuickVideoEncoder.encodeFrames(
+        pngFrames: frames.map((f) => f.pngBytes).toList(),
+        width: first.width,
+        height: first.height,
         fps: fps,
         videoBitrate: 2000000,
         profileLevel: ProfileLevel.baselineAutoLevel,
-        audioChannels: 0,
-        audioBitrate: 0,
-        sampleRate: 0,
-        filepath: outputPath,
+        touchPositions: frames.map((f) {
+          if (f.touchPosition == null) return null;
+          return {
+            'x': f.touchPosition!.dx * pixelRatio,
+            'y': f.touchPosition!.dy * pixelRatio,
+          };
+        }).toList(),
       );
 
-      // Decode each PNG → RGBA, draw touch circle if needed, feed to encoder
-      for (final frame in frames) {
-        final rgba = await _decodePngToRgba(frame.pngBytes, frame.width, frame.height);
-
-        if (frame.touchPosition != null) {
-          _drawTouchCircle(rgba, frame.width, frame.height, frame.touchPosition!);
-        }
-
-        await FlutterQuickVideoEncoder.appendVideoFrame(rgba);
-      }
-
-      await FlutterQuickVideoEncoder.finish();
-
-      final videoFile = File(outputPath);
-      final videoBytes = await videoFile.readAsBytes();
-      final base64Video = base64Encode(videoBytes);
-
-      await videoFile.delete();
+      final base64Video = base64Encode(mp4Bytes);
 
       if (debug) {
         final bufferKB = frames.fold<int>(0, (sum, f) => sum + f.pngBytes.length) ~/ 1024;
-        print('Traceway: encoded ${frames.length} frames (buffer: ${bufferKB}KB) to ${videoBytes.length ~/ 1024}KB MP4 (${durationSeconds.toStringAsFixed(1)}s)');
+        print('Traceway: encoded ${frames.length} frames (buffer: ${bufferKB}KB) to ${mp4Bytes.length ~/ 1024}KB MP4 (${durationSeconds.toStringAsFixed(1)}s)');
       }
 
       return SessionRecordingPayload(
