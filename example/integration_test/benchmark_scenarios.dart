@@ -583,12 +583,12 @@ Future<List<BenchmarkMetric>> runSdkBurstWithCapture(
     } catch (e, st) {
       captureTimes.add(_fireException('#${i + 1}/5 (MP4 encode)', e, st));
     }
-    await _pumpFor(tester, const Duration(seconds: 3));
+    await _pumpFor(tester, const Duration(seconds: 2));
   }
 
   // Keep pumping so the SDK can encode recordings and sync naturally.
   _showStatus('Waiting for MP4 encoding + auto-sync...');
-  await _pumpFor(tester, const Duration(seconds: 20));
+  await _pumpFor(tester, const Duration(seconds: 10));
 
   _showSnackbar('Done', color: Colors.green);
   _showStatus('Collecting metrics...');
@@ -668,12 +668,12 @@ Future<List<BenchmarkMetric>> runVideoBurstWithCapture(
       captureTimes.add(
           _fireException('#${i + 1}/5 (video + MP4 encode)', e, st));
     }
-    await _pumpFor(tester, const Duration(seconds: 3));
+    await _pumpFor(tester, const Duration(seconds: 2));
   }
 
   // Keep pumping so the SDK can encode recordings and sync naturally.
   _showStatus('Waiting for MP4 encoding + auto-sync...');
-  await _pumpFor(tester, const Duration(seconds: 20));
+  await _pumpFor(tester, const Duration(seconds: 10));
 
   _showSnackbar('Done', color: Colors.green);
   _showStatus('Collecting metrics...');
