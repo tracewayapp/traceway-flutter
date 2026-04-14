@@ -343,7 +343,7 @@ Future<List<BenchmarkMetric>> runBaseline(WidgetTester tester) async {
       child: const _StressContent(),
     ),
   );
-  await tester.pumpAndSettle();
+  await _pumpFor(tester, const Duration(milliseconds: 500));
 
   await _stressInteractions(tester);
 
@@ -388,7 +388,7 @@ Future<List<BenchmarkMetric>> runSdkIdleNoCapture(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  await _pumpFor(tester, const Duration(milliseconds: 500));
 
   await _stressInteractions(tester);
 
@@ -439,7 +439,7 @@ Future<List<BenchmarkMetric>> runSdkBurstNoCapture(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  await _pumpFor(tester, const Duration(milliseconds: 500));
 
   await _stressInteractions(tester);
 
@@ -509,7 +509,7 @@ Future<List<BenchmarkMetric>> runSdkIdleWithCapture(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  await _pumpFor(tester, const Duration(milliseconds: 500));
 
   await _stressInteractions(tester);
 
@@ -563,7 +563,7 @@ Future<List<BenchmarkMetric>> runSdkBurstWithCapture(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  await _pumpFor(tester, const Duration(milliseconds: 500));
 
   await _stressInteractions(tester);
 
@@ -646,7 +646,7 @@ Future<List<BenchmarkMetric>> runVideoBurstWithCapture(
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  await _pumpFor(tester, const Duration(milliseconds: 500));
 
   // Start playback.
   await videoController.play();
