@@ -49,7 +49,7 @@ class _TracewayState extends State<Traceway> {
         repaintBoundaryKey: _repaintBoundaryKey,
         maxFrames: client.options.maxBufferFrames,
         pixelRatio: client.options.capturePixelRatio,
-        captureIntervalMs: client.options.captureIntervalMs,
+        fps: client.options.fps,
         debug: client.debug,
       );
       client.screenRecorder = _screenRecorder;

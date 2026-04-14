@@ -32,9 +32,11 @@ class CapturedFrame {
 class ScreenRecorder with WidgetsBindingObserver {
   final GlobalKey repaintBoundaryKey;
   final double pixelRatio;
-  final int captureIntervalMs;
+  final int fps;
   final CircularBuffer<CapturedFrame> _buffer;
   final bool debug;
+
+  late final int _captureIntervalMs = 1000 ~/ fps;
 
   Timer? _captureTimer;
   bool _isCapturing = false;
@@ -47,7 +49,7 @@ class ScreenRecorder with WidgetsBindingObserver {
     required this.repaintBoundaryKey,
     required int maxFrames,
     this.pixelRatio = 0.5,
-    this.captureIntervalMs = 67,
+    this.fps = 15,
     this.debug = false,
   }) : _buffer = CircularBuffer<CapturedFrame>(maxFrames);
 
@@ -62,11 +64,11 @@ class ScreenRecorder with WidgetsBindingObserver {
   void start() {
     WidgetsBinding.instance.addObserver(this);
     _captureTimer = Timer.periodic(
-      Duration(milliseconds: captureIntervalMs),
+      Duration(milliseconds: _captureIntervalMs),
       (_) => _captureFrame(),
     );
     if (debug) {
-      print('Traceway: screen recorder started (${1000 ~/ captureIntervalMs}fps, ${pixelRatio}x)');
+      print('Traceway: screen recorder started (${fps}fps, ${pixelRatio}x)');
     }
   }
 
@@ -182,8 +184,7 @@ class ScreenRecorder with WidgetsBindingObserver {
       final first = frames.first;
       final width = first.width;
       final height = first.height;
-      final fps = 1000 ~/ captureIntervalMs;
-      final durationSeconds = frames.length * captureIntervalMs / 1000.0;
+      final durationSeconds = frames.length * _captureIntervalMs / 1000.0;
 
       final tempDir = await getTemporaryDirectory();
       final outputPath = '${tempDir.path}/traceway_$exceptionId.mp4';

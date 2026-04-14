@@ -489,7 +489,7 @@ Future<List<BenchmarkMetric>> runSdkIdleWithCapture(
     const TracewayOptions(
       screenCapture: true,
       debug: false,
-      captureIntervalMs: 67,
+      fps: 15,
       maxBufferFrames: 150,
       capturePixelRatio: 0.75,
     ),
@@ -542,7 +542,7 @@ Future<List<BenchmarkMetric>> runSdkBurstWithCapture(
     const TracewayOptions(
       screenCapture: true,
       debug: false,
-      captureIntervalMs: 67,
+      fps: 15,
       maxBufferFrames: 150,
       capturePixelRatio: 0.75,
       maxPendingExceptions: 10,
@@ -618,7 +618,7 @@ Future<List<BenchmarkMetric>> runVideoBurstWithCapture(
     const TracewayOptions(
       screenCapture: true,
       debug: false,
-      captureIntervalMs: 67,
+      fps: 15,
       maxBufferFrames: 150,
       capturePixelRatio: 0.75,
       maxPendingExceptions: 10,

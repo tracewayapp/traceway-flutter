@@ -83,7 +83,7 @@ await TracewayClient.instance?.flush();
 | `retryDelayMs` | `10000` | Retry delay on failed uploads |
 | `capturePixelRatio` | `0.75` | Screenshot resolution scale factor |
 | `maxBufferFrames` | `150` | Max frames in recording buffer (~10s at 15fps) |
-| `captureIntervalMs` | `67` | Frame capture interval (~15fps) |
+| `fps` | `15` | Frames per second for screen capture (1–59) |
 
 ## Platform Setup
 
