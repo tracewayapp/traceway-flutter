@@ -28,6 +28,10 @@ on:
           - android
           - ios
 
+permissions:
+  contents: read
+  id-token: write
+
 # ──────────────────────────────────────────────────────────────────────────
 # Build jobs — produce test artifacts for each platform
 # ──────────────────────────────────────────────────────────────────────────
