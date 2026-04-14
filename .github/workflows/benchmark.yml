@@ -395,7 +395,7 @@ jobs:
 
       - name: Generate summary report
         run: |
-          dart run .github/scripts/parse_benchmark_results.dart ./results \
+          dart .github/scripts/parse_benchmark_results.dart ./results \
             "${{ github.event.inputs.branch || github.ref_name }}" \
             "${{ github.sha }}" \
             "${{ github.run_id }}"
