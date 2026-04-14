@@ -209,8 +209,8 @@ jobs:
           gcloud firebase test android run \
             --project=${{ secrets.GCP_PROJECT_ID }} \
             --type instrumentation \
-            --app apks/example/build/app/outputs/flutter-apk/app-debug.apk \
-            --test apks/example/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --app apks/flutter-apk/app-debug.apk \
+            --test apks/apk/androidTest/debug/app-debug-androidTest.apk \
             --device model=${{ matrix.device }},version=${{ matrix.api }},locale=en,orientation=portrait \
             --timeout 10m \
             --results-dir=benchmark-${{ github.run_id }}-android-${{ matrix.device }} \
