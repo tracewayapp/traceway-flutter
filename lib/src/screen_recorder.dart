@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'circular_buffer.dart';
 import 'models/session_recording_payload.dart';
+import 'traceway_mask_mode.dart';
 
 class CapturedFrame {
   final Uint8List pngBytes;
@@ -19,6 +20,7 @@ class CapturedFrame {
   final int height;
   final DateTime timestamp;
   final Offset? touchPosition;
+  final List<MaskRegion> maskRegions;
 
   const CapturedFrame({
     required this.pngBytes,
@@ -26,6 +28,7 @@ class CapturedFrame {
     required this.height,
     required this.timestamp,
     this.touchPosition,
+    this.maskRegions = const [],
   });
 }
 
@@ -45,6 +48,9 @@ class ScreenRecorder with WidgetsBindingObserver {
   // Touch tracking (logical coordinates)
   Offset? _touchPosition;
 
+  // Privacy mask tracking (logical coordinates, relative to RepaintBoundary)
+  final Map<Key, MaskRegion> _maskRegions = {};
+
   ScreenRecorder({
     required this.repaintBoundaryKey,
     required int maxFrames,
@@ -59,6 +65,14 @@ class ScreenRecorder with WidgetsBindingObserver {
 
   void clearTouchPosition() {
     _touchPosition = null;
+  }
+
+  void addMaskRegion(Key key, Rect rect, TracewayMaskMode mode) {
+    _maskRegions[key] = MaskRegion(key: key, rect: rect, mode: mode);
+  }
+
+  void removeMaskRegion(Key key) {
+    _maskRegions.remove(key);
   }
 
   void start() {
@@ -107,6 +121,7 @@ class ScreenRecorder with WidgetsBindingObserver {
           height: height,
           timestamp: DateTime.now(),
           touchPosition: _touchPosition,
+          maskRegions: _maskRegions.values.toList(),
         ));
       }
     } catch (e) {
@@ -174,6 +189,78 @@ class ScreenRecorder with WidgetsBindingObserver {
     }
   }
 
+  /// Pixelates a rectangular region by averaging NxN blocks of pixels.
+  void _applyPixelation(
+    Uint8List pixels, int width, int height, Rect logicalRect, double ratio,
+  ) {
+    final left = (logicalRect.left * pixelRatio).round().clamp(0, width - 1);
+    final top = (logicalRect.top * pixelRatio).round().clamp(0, height - 1);
+    final right = (logicalRect.right * pixelRatio).round().clamp(0, width);
+    final bottom = (logicalRect.bottom * pixelRatio).round().clamp(0, height);
+
+    final blockSize = max(2, (ratio * 20).round());
+
+    for (var by = top; by < bottom; by += blockSize) {
+      for (var bx = left; bx < right; bx += blockSize) {
+        final bw = min(blockSize, right - bx);
+        final bh = min(blockSize, bottom - by);
+        final count = bw * bh;
+        if (count == 0) continue;
+
+        int sumR = 0, sumG = 0, sumB = 0, sumA = 0;
+        for (var y = by; y < by + bh; y++) {
+          for (var x = bx; x < bx + bw; x++) {
+            final offset = (y * width + x) * 4;
+            sumR += pixels[offset];
+            sumG += pixels[offset + 1];
+            sumB += pixels[offset + 2];
+            sumA += pixels[offset + 3];
+          }
+        }
+
+        final avgR = sumR ~/ count;
+        final avgG = sumG ~/ count;
+        final avgB = sumB ~/ count;
+        final avgA = sumA ~/ count;
+
+        for (var y = by; y < by + bh; y++) {
+          for (var x = bx; x < bx + bw; x++) {
+            final offset = (y * width + x) * 4;
+            pixels[offset] = avgR;
+            pixels[offset + 1] = avgG;
+            pixels[offset + 2] = avgB;
+            pixels[offset + 3] = avgA;
+          }
+        }
+      }
+    }
+  }
+
+  /// Fills a rectangular region with a solid color.
+  void _applyBlank(
+    Uint8List pixels, int width, int height, Rect logicalRect, ui.Color color,
+  ) {
+    final left = (logicalRect.left * pixelRatio).round().clamp(0, width - 1);
+    final top = (logicalRect.top * pixelRatio).round().clamp(0, height - 1);
+    final right = (logicalRect.right * pixelRatio).round().clamp(0, width);
+    final bottom = (logicalRect.bottom * pixelRatio).round().clamp(0, height);
+
+    final r = (color.r * 255.0).round().clamp(0, 255);
+    final g = (color.g * 255.0).round().clamp(0, 255);
+    final b = (color.b * 255.0).round().clamp(0, 255);
+    final a = (color.a * 255.0).round().clamp(0, 255);
+
+    for (var y = top; y < bottom; y++) {
+      for (var x = left; x < right; x++) {
+        final offset = (y * width + x) * 4;
+        pixels[offset] = r;
+        pixels[offset + 1] = g;
+        pixels[offset + 2] = b;
+        pixels[offset + 3] = a;
+      }
+    }
+  }
+
   Future<SessionRecordingPayload?> captureRecording(
     String exceptionId,
   ) async {
@@ -205,9 +292,18 @@ class ScreenRecorder with WidgetsBindingObserver {
         filepath: outputPath,
       );
 
-      // Decode each PNG → RGBA, draw touch circle if needed, feed to encoder
+      // Decode each PNG → RGBA, apply masks, draw touch circle, feed to encoder
       for (final frame in frames) {
         final rgba = await _decodePngToRgba(frame.pngBytes, frame.width, frame.height);
+
+        for (final region in frame.maskRegions) {
+          switch (region.mode) {
+            case TracewayMaskBlur(:final ratio):
+              _applyPixelation(rgba, frame.width, frame.height, region.rect, ratio);
+            case TracewayMaskBlank(:final color):
+              _applyBlank(rgba, frame.width, frame.height, region.rect, color);
+          }
+        }
 
         if (frame.touchPosition != null) {
           _drawTouchCircle(rgba, frame.width, frame.height, frame.touchPosition!);
