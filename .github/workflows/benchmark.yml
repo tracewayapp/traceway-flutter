@@ -216,7 +216,7 @@ jobs:
             --timeout 20m \
             --results-dir=benchmark-${{ github.run_id }}-android-${{ matrix.device }} \
             --results-bucket=${{ secrets.GCS_BUCKET }} \
-            --no-record-video \
+            --record-video \
             --no-performance-metrics \
             2>&1 | tee ftl_output.txt
         continue-on-error: true
@@ -319,7 +319,7 @@ jobs:
             --timeout 20m \
             --results-dir=benchmark-${{ github.run_id }}-ios-${{ matrix.device }} \
             --results-bucket=${{ secrets.GCS_BUCKET }} \
-            --no-record-video \
+            --record-video \
             2>&1 | tee ftl_output.txt
         continue-on-error: true
 
