@@ -38,7 +38,7 @@ class TracewayClient {
   Timer? _retryTimer;
 
   Map<String, String> _deviceAttributes = {};
-  ReportSender _reportSender;
+  final ReportSender _reportSender;
 
   ScreenRecorder? screenRecorder;
 
@@ -281,10 +281,14 @@ class TracewayClient {
 
     bool failed = false;
     try {
+      final jsonBody = jsonEncode(payload.toJson());
+      if (_options.debug) {
+        print('Traceway: payload_size_bytes=${utf8.encode(jsonBody).length}');
+      }
       final success = await _reportSender(
         _apiUrl,
         _token,
-        jsonEncode(payload.toJson()),
+        jsonBody,
       );
       if (!success) {
         failed = true;
@@ -296,10 +300,7 @@ class TracewayClient {
         }
       } else {
         // Sync succeeded — remove persisted files from disk
-        final fileIds = batch
-            .map((e) => e.fileId)
-            .whereType<String>()
-            .toList();
+        final fileIds = batch.map((e) => e.fileId).whereType<String>().toList();
         if (fileIds.isNotEmpty) {
           _store.remove(fileIds);
         }

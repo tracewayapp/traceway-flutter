@@ -22,13 +22,29 @@ final bool _useRealBackend = _dsn.isNotEmpty;
 final String _connectionString =
     _useRealBackend ? _dsn : 'benchmark-token@http://localhost:9999/noop';
 
+/// Tracks which scenario is running so the no-op sender can tag payload metrics.
+String _currentScenario = '';
+
 /// When no real DSN, use a no-op sender that includes gzip cost but discards.
 /// When a real DSN is set, pass null to use the SDK's default sendReport.
 ReportSender? get _reportSender =>
     _useRealBackend ? null : _noOpSender;
 
 Future<bool> _noOpSender(String url, String token, String body) async {
-  gzip.encode(utf8.encode(body));
+  final raw = utf8.encode(body);
+  final compressed = gzip.encode(raw);
+  final ts = DateTime.now().toUtc().toIso8601String();
+  for (final entry in [
+    {'metric': 'payload_raw_bytes', 'value': raw.length, 'unit': 'bytes'},
+    {'metric': 'payload_gzip_bytes', 'value': compressed.length, 'unit': 'bytes'},
+  ]) {
+    final line = 'BENCHMARK_RESULT:${jsonEncode({
+      'scenario': _currentScenario,
+      ...entry,
+      'ts': ts,
+    })}';
+    print(line);
+  }
   return true;
 }
 
@@ -392,6 +408,7 @@ Future<List<BenchmarkMetric>> runScenario({
 
   final hasCapture = cfg == SdkConfig.sdkCapture || cfg == SdkConfig.sdkCaptureDisk;
   final hasSdk = cfg != SdkConfig.noSdk;
+  _currentScenario = scenario;
 
   // ── Phase 1: SDK setup ──────────────────────────────────────────────
   Directory? storeDir;
@@ -404,7 +421,7 @@ Future<List<BenchmarkMetric>> runScenario({
       _showStatus('Initializing SDK (no capture)...');
       TracewayClient.initializeForTest(
         _connectionString,
-        const TracewayOptions(screenCapture: false, debug: false),
+        const TracewayOptions(screenCapture: false, debug: true),
         reportSender: _reportSender,
       );
       _showSnackbar('SDK initialized (capture OFF)', color: Colors.blue);
@@ -416,7 +433,7 @@ Future<List<BenchmarkMetric>> runScenario({
         _connectionString,
         const TracewayOptions(
           screenCapture: true,
-          debug: false,
+          debug: true,
           fps: 15,
           maxBufferFrames: 150,
           capturePixelRatio: 0.75,
@@ -440,7 +457,7 @@ Future<List<BenchmarkMetric>> runScenario({
         _connectionString,
         const TracewayOptions(
           screenCapture: true,
-          debug: false,
+          debug: true,
           fps: 15,
           maxBufferFrames: 150,
           capturePixelRatio: 0.75,
