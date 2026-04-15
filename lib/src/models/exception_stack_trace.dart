@@ -8,6 +8,9 @@ class ExceptionStackTrace {
   String? sessionRecordingId;
   String? distributedTraceId;
 
+  /// Transient file ID for disk persistence. Not serialized to the API.
+  String? fileId;
+
   ExceptionStackTrace({
     this.traceId,
     this.isTask = false,
@@ -29,4 +32,18 @@ class ExceptionStackTrace {
     'sessionRecordingId': sessionRecordingId,
     'distributedTraceId': distributedTraceId,
   };
+
+  factory ExceptionStackTrace.fromJson(Map<String, dynamic> json) {
+    return ExceptionStackTrace(
+      traceId: json['traceId'] as String?,
+      isTask: json['isTask'] as bool? ?? false,
+      stackTrace: json['stackTrace'] as String,
+      recordedAt: DateTime.parse(json['recordedAt'] as String),
+      attributes: (json['attributes'] as Map<String, dynamic>?)
+          ?.map((k, v) => MapEntry(k, v.toString())),
+      isMessage: json['isMessage'] as bool? ?? false,
+      sessionRecordingId: json['sessionRecordingId'] as String?,
+      distributedTraceId: json['distributedTraceId'] as String?,
+    );
+  }
 }

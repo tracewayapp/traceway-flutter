@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:traceway/src/exception_store.dart';
 import 'package:traceway/traceway.dart';
 import 'package:video_player/video_player.dart';
 
@@ -681,6 +682,202 @@ Future<List<BenchmarkMetric>> runVideoBurstWithCapture(
 
   await videoController.pause();
   await videoController.dispose();
+
+  final metrics = <BenchmarkMetric>[
+    ...collector.stopFrameTiming(scenario),
+    ...collector.snapshotMemory(scenario),
+    collector.wallClock(scenario, sw..stop()),
+    collector.exceptionCaptureAvg(scenario, captureTimes),
+  ];
+
+  await TracewayClient.resetForTest();
+  return metrics;
+}
+
+// ── Scenario G: Baseline video playback (no SDK) ────────────────────────
+
+Future<List<BenchmarkMetric>> runVideoBaseline(WidgetTester tester) async {
+  const scenario = 'video_baseline';
+  final collector = BenchmarkCollector();
+
+  _showStatus('Loading video (no SDK)...');
+  final videoController = VideoPlayerController.asset(
+    'assets/videos/BigBuckBunny_15snonSeg.mp4',
+  );
+  await videoController.initialize();
+  await videoController.setLooping(false);
+  _showSnackbar('Video loaded, starting playback (no SDK)', color: Colors.blue);
+
+  final sw = Stopwatch()..start();
+  collector.snapshotMemoryStart();
+  collector.startFrameTiming();
+
+  await tester.pumpWidget(
+    _BenchmarkShell(
+      scenarioName: 'G: Video baseline (no SDK)',
+      child: _VideoContent(controller: videoController),
+    ),
+  );
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  await videoController.play();
+  _showStatus('Video playing — no SDK overhead...');
+
+  await _pumpFor(tester, const Duration(seconds: 10));
+
+  _showSnackbar('Done', color: Colors.green);
+  _showStatus('Collecting metrics...');
+  await tester.pump();
+
+  await videoController.pause();
+  await videoController.dispose();
+
+  final metrics = <BenchmarkMetric>[
+    ...collector.stopFrameTiming(scenario),
+    ...collector.snapshotMemory(scenario),
+    collector.wallClock(scenario, sw..stop()),
+  ];
+  return metrics;
+}
+
+// ── Scenario H: Burst exceptions WITH disk store ────────────────────────
+
+Future<List<BenchmarkMetric>> runSdkBurstWithDiskStore(
+    WidgetTester tester) async {
+  const scenario = 'sdk_burst_with_disk_store';
+  final collector = BenchmarkCollector();
+
+  // Create a real temp directory for disk persistence.
+  final storeDir = await Directory.systemTemp.createTemp('traceway_bench_');
+  final store = ExceptionStore(
+    maxLocalFiles: 30,
+    maxAgeHours: 48,
+    testDir: storeDir,
+  );
+  await store.init();
+
+  _showStatus('Initializing SDK (disk store ON)...');
+  TracewayClient.initializeForTest(
+    _connectionString,
+    const TracewayOptions(
+      screenCapture: false,
+      debug: false,
+      persistToDisk: true,
+      maxPendingExceptions: 25,
+    ),
+    reportSender: _reportSender,
+    store: store,
+  );
+  _showSnackbar('SDK initialized (disk ON)', color: Colors.orange);
+
+  final sw = Stopwatch()..start();
+  collector.snapshotMemoryStart();
+  collector.startFrameTiming();
+
+  await tester.pumpWidget(
+    Traceway(
+      child: _BenchmarkShell(
+        scenarioName: 'H: SDK + 20 exceptions (disk ON)',
+        child: const _StressContent(),
+      ),
+    ),
+  );
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  await _stressInteractions(tester);
+
+  _showStatus('Firing 20 exceptions (disk store ON)...');
+  await tester.pump();
+  final captureTimes = <int>[];
+  for (var i = 0; i < 20; i++) {
+    try {
+      throw FormatException('Disk store benchmark exception #$i');
+    } catch (e, st) {
+      captureTimes.add(_fireException('#${i + 1}/20 (disk ON)', e, st));
+    }
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+
+  _showStatus('Waiting for sync to settle...');
+  await _pumpFor(tester, const Duration(seconds: 3));
+  await TracewayClient.instance!.flush(3000);
+
+  _showSnackbar('Flush complete (disk ON)', color: Colors.green);
+  _showStatus('Collecting metrics...');
+  await tester.pump();
+
+  final metrics = <BenchmarkMetric>[
+    ...collector.stopFrameTiming(scenario),
+    ...collector.snapshotMemory(scenario),
+    collector.wallClock(scenario, sw..stop()),
+    collector.exceptionCaptureAvg(scenario, captureTimes),
+  ];
+
+  await TracewayClient.resetForTest();
+
+  // Clean up temp directory.
+  if (storeDir.existsSync()) {
+    storeDir.deleteSync(recursive: true);
+  }
+
+  return metrics;
+}
+
+// ── Scenario I: Burst exceptions WITHOUT disk store ─────────────────────
+
+Future<List<BenchmarkMetric>> runSdkBurstNoDiskStore(
+    WidgetTester tester) async {
+  const scenario = 'sdk_burst_no_disk_store';
+  final collector = BenchmarkCollector();
+
+  _showStatus('Initializing SDK (disk store OFF)...');
+  TracewayClient.initializeForTest(
+    _connectionString,
+    const TracewayOptions(
+      screenCapture: false,
+      debug: false,
+      persistToDisk: false,
+      maxPendingExceptions: 25,
+    ),
+    reportSender: _reportSender,
+  );
+  _showSnackbar('SDK initialized (disk OFF)', color: Colors.blue);
+
+  final sw = Stopwatch()..start();
+  collector.snapshotMemoryStart();
+  collector.startFrameTiming();
+
+  await tester.pumpWidget(
+    Traceway(
+      child: _BenchmarkShell(
+        scenarioName: 'I: SDK + 20 exceptions (disk OFF)',
+        child: const _StressContent(),
+      ),
+    ),
+  );
+  await _pumpFor(tester, const Duration(milliseconds: 500));
+
+  await _stressInteractions(tester);
+
+  _showStatus('Firing 20 exceptions (disk store OFF)...');
+  await tester.pump();
+  final captureTimes = <int>[];
+  for (var i = 0; i < 20; i++) {
+    try {
+      throw FormatException('No-disk benchmark exception #$i');
+    } catch (e, st) {
+      captureTimes.add(_fireException('#${i + 1}/20 (disk OFF)', e, st));
+    }
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+
+  _showStatus('Waiting for sync to settle...');
+  await _pumpFor(tester, const Duration(seconds: 3));
+  await TracewayClient.instance!.flush(3000);
+
+  _showSnackbar('Flush complete (disk OFF)', color: Colors.green);
+  _showStatus('Collecting metrics...');
+  await tester.pump();
 
   final metrics = <BenchmarkMetric>[
     ...collector.stopFrameTiming(scenario),

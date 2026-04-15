@@ -11,4 +11,11 @@ class SessionRecordingPayload {
     'exceptionId': exceptionId,
     'events': events,
   };
+
+  factory SessionRecordingPayload.fromJson(Map<String, dynamic> json) {
+    return SessionRecordingPayload(
+      exceptionId: json['exceptionId'] as String,
+      events: json['events'],
+    );
+  }
 }

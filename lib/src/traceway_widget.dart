@@ -25,6 +25,7 @@ class Traceway extends StatefulWidget {
         final client = TracewayClient.initialize(connectionString, options);
         client.collectSyncDeviceInfo();
         client.collectDeviceInfo();
+        client.loadPendingFromDisk();
         errorHandler.install();
         runApp(Traceway(child: child));
       },
