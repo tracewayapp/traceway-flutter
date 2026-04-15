@@ -158,6 +158,7 @@ void main(List<String> args) {
       _writeMemoryTable(buf, wlData, sortedDevices);
       _writeFrameTimingTable(buf, wlData, sortedDevices);
       _writeJankTable(buf, wlData, sortedDevices);
+      _writePayloadSizeTable(buf, wlData, sortedDevices);
 
       if (wl == 'exceptionBurst') {
         _writeExceptionCostTable(buf, wlData, sortedDevices);
@@ -326,6 +327,46 @@ void _writeExceptionCostTable(
         buf.write(' - |');
       } else {
         buf.write(' ${(avg / 1000).toStringAsFixed(2)}ms |');
+      }
+    }
+    buf.writeln();
+  }
+  buf.writeln();
+}
+
+void _writePayloadSizeTable(
+  StringBuffer buf,
+  Map<String, Map<String, Map<String, double>>> wlData,
+  List<String> devices,
+) {
+  // Only render if any config has payload data.
+  final hasData = wlData.values.any((cfgData) =>
+      cfgData.values.any((devData) => devData.containsKey('payload_raw_bytes')));
+  if (!hasData) return;
+
+  buf.writeln('**Payload Size**');
+  buf.writeln();
+  buf.write('| Config |');
+  for (final d in devices) { buf.write(' $d raw / gzip |'); }
+  buf.writeln();
+  buf.write('|--------|');
+  for (final _ in devices) { buf.write('---------------|'); }
+  buf.writeln();
+
+  for (final cfg in configOrder) {
+    final cfgData = wlData[cfg];
+    if (cfgData == null) continue;
+    final label = configLabels[cfg] ?? cfg;
+    buf.write('| $label |');
+    for (final d in devices) {
+      final raw = cfgData[d]?['payload_raw_bytes'];
+      final gz = cfgData[d]?['payload_gzip_bytes'];
+      if (raw == null) {
+        buf.write(' - |');
+      } else {
+        final rawKb = (raw / 1024).toStringAsFixed(1);
+        final gzKb = (gz! / 1024).toStringAsFixed(1);
+        buf.write(' ${rawKb}KB / ${gzKb}KB |');
       }
     }
     buf.writeln();
