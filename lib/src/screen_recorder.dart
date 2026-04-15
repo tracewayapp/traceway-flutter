@@ -268,9 +268,14 @@ class ScreenRecorder with WidgetsBindingObserver {
     if (frames.isEmpty) return null;
 
     try {
-      final first = frames.first;
-      final width = first.width;
-      final height = first.height;
+      // Find max dimensions across all frames so the encoder can handle
+      // screen size changes (rotation, keyboard, navigation bar).
+      int maxWidth = 0;
+      int maxHeight = 0;
+      for (final f in frames) {
+        if (f.width > maxWidth) maxWidth = f.width;
+        if (f.height > maxHeight) maxHeight = f.height;
+      }
       final durationSeconds = frames.length * _captureIntervalMs / 1000.0;
 
       final tempDir = await getTemporaryDirectory();
@@ -281,8 +286,8 @@ class ScreenRecorder with WidgetsBindingObserver {
       );
 
       await FlutterQuickVideoEncoder.setup(
-        width: width,
-        height: height,
+        width: maxWidth,
+        height: maxHeight,
         fps: fps,
         videoBitrate: 2000000,
         profileLevel: ProfileLevel.baselineAutoLevel,
@@ -292,7 +297,9 @@ class ScreenRecorder with WidgetsBindingObserver {
         filepath: outputPath,
       );
 
-      // Decode each PNG → RGBA, apply masks, draw touch circle, feed to encoder
+      // Decode each PNG → RGBA, apply masks, draw touch circle, feed to encoder.
+      // Frames smaller than maxWidth×maxHeight are padded with dark grey.
+      final canvasSize = maxWidth * maxHeight * 4;
       for (final frame in frames) {
         final rgba = await _decodePngToRgba(frame.pngBytes, frame.width, frame.height);
 
@@ -309,7 +316,29 @@ class ScreenRecorder with WidgetsBindingObserver {
           _drawTouchCircle(rgba, frame.width, frame.height, frame.touchPosition!);
         }
 
-        await FlutterQuickVideoEncoder.appendVideoFrame(rgba);
+        // Pad to encoder dimensions if this frame is smaller.
+        Uint8List output;
+        if (frame.width == maxWidth && frame.height == maxHeight) {
+          output = rgba;
+        } else {
+          // Dark grey background (30, 30, 30, 255).
+          output = Uint8List(canvasSize);
+          for (var i = 0; i < canvasSize; i += 4) {
+            output[i] = 30;
+            output[i + 1] = 30;
+            output[i + 2] = 30;
+            output[i + 3] = 255;
+          }
+          // Copy original frame rows into top-left corner.
+          for (var y = 0; y < frame.height; y++) {
+            final srcOffset = y * frame.width * 4;
+            final dstOffset = y * maxWidth * 4;
+            output.setRange(dstOffset, dstOffset + frame.width * 4,
+                rgba, srcOffset);
+          }
+        }
+
+        await FlutterQuickVideoEncoder.appendVideoFrame(output);
       }
 
       await FlutterQuickVideoEncoder.finish();
