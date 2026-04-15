@@ -45,6 +45,10 @@ class ScreenRecorder with WidgetsBindingObserver {
   bool _isCapturing = false;
   bool _isPaused = false;
 
+  // Serializes encoding — FlutterQuickVideoEncoder is a singleton native
+  // resource, so concurrent captureRecording calls must wait their turn.
+  Future<void> _encodingLock = Future.value();
+
   // Touch tracking (logical coordinates)
   Offset? _touchPosition;
 
@@ -267,6 +271,11 @@ class ScreenRecorder with WidgetsBindingObserver {
     final frames = _buffer.readAll();
     if (frames.isEmpty) return null;
 
+    final previous = _encodingLock;
+    final completer = Completer<void>();
+    _encodingLock = completer.future;
+    await previous;
+
     try {
       // Find max dimensions across all frames so the encoder can handle
       // screen size changes (rotation, keyboard, navigation bar).
@@ -371,6 +380,8 @@ class ScreenRecorder with WidgetsBindingObserver {
         print('Traceway: recording encoding error: $e');
       }
       return null;
+    } finally {
+      completer.complete();
     }
   }
 }
