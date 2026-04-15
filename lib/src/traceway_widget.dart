@@ -25,6 +25,7 @@ class Traceway extends StatefulWidget {
         final client = TracewayClient.initialize(connectionString, options);
         client.collectSyncDeviceInfo();
         client.collectDeviceInfo();
+        client.loadPendingFromDisk();
         errorHandler.install();
         runApp(Traceway(child: child));
       },
@@ -49,7 +50,7 @@ class _TracewayState extends State<Traceway> {
         repaintBoundaryKey: _repaintBoundaryKey,
         maxFrames: client.options.maxBufferFrames,
         pixelRatio: client.options.capturePixelRatio,
-        captureIntervalMs: client.options.captureIntervalMs,
+        fps: client.options.fps,
         debug: client.debug,
       );
       client.screenRecorder = _screenRecorder;

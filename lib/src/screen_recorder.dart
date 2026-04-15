@@ -9,6 +9,7 @@ import 'package:flutter_quick_video_encoder/flutter_quick_video_encoder.dart';
 
 import 'circular_buffer.dart';
 import 'models/session_recording_payload.dart';
+import 'traceway_mask_mode.dart';
 
 class CapturedFrame {
   final Uint8List pngBytes;
@@ -16,6 +17,7 @@ class CapturedFrame {
   final int height;
   final DateTime timestamp;
   final Offset? touchPosition;
+  final List<MaskRegion> maskRegions;
 
   const CapturedFrame({
     required this.pngBytes,
@@ -23,15 +25,18 @@ class CapturedFrame {
     required this.height,
     required this.timestamp,
     this.touchPosition,
+    this.maskRegions = const [],
   });
 }
 
 class ScreenRecorder with WidgetsBindingObserver {
   final GlobalKey repaintBoundaryKey;
   final double pixelRatio;
-  final int captureIntervalMs;
+  final int fps;
   final CircularBuffer<CapturedFrame> _buffer;
   final bool debug;
+
+  late final int _captureIntervalMs = 1000 ~/ fps;
 
   Timer? _captureTimer;
   bool _isCapturing = false;
@@ -40,11 +45,14 @@ class ScreenRecorder with WidgetsBindingObserver {
   // Touch tracking (logical coordinates)
   Offset? _touchPosition;
 
+  // Privacy mask tracking (logical coordinates, relative to RepaintBoundary)
+  final Map<Key, MaskRegion> _maskRegions = {};
+
   ScreenRecorder({
     required this.repaintBoundaryKey,
     required int maxFrames,
     this.pixelRatio = 0.5,
-    this.captureIntervalMs = 67,
+    this.fps = 15,
     this.debug = false,
   }) : _buffer = CircularBuffer<CapturedFrame>(maxFrames);
 
@@ -56,14 +64,22 @@ class ScreenRecorder with WidgetsBindingObserver {
     _touchPosition = null;
   }
 
+  void addMaskRegion(Key key, Rect rect, TracewayMaskMode mode) {
+    _maskRegions[key] = MaskRegion(key: key, rect: rect, mode: mode);
+  }
+
+  void removeMaskRegion(Key key) {
+    _maskRegions.remove(key);
+  }
+
   void start() {
     WidgetsBinding.instance.addObserver(this);
     _captureTimer = Timer.periodic(
-      Duration(milliseconds: captureIntervalMs),
+      Duration(milliseconds: _captureIntervalMs),
       (_) => _captureFrame(),
     );
     if (debug) {
-      print('Traceway: screen recorder started (${1000 ~/ captureIntervalMs}fps, ${pixelRatio}x)');
+      print('Traceway: screen recorder started (${fps}fps, ${pixelRatio}x)');
     }
   }
 
@@ -102,6 +118,7 @@ class ScreenRecorder with WidgetsBindingObserver {
           height: height,
           timestamp: DateTime.now(),
           touchPosition: _touchPosition,
+          maskRegions: _maskRegions.values.toList(),
         ));
       }
     } catch (e) {
@@ -121,8 +138,7 @@ class ScreenRecorder with WidgetsBindingObserver {
 
     try {
       final first = frames.first;
-      final fps = 1000 ~/ captureIntervalMs;
-      final durationSeconds = frames.length * captureIntervalMs / 1000.0;
+      final durationSeconds = frames.length * _captureIntervalMs / 1000.0;
 
       // Single native call — PNG decoding, touch circles, and H.264 encoding
       // all happen on a native background thread with zero main-thread work.

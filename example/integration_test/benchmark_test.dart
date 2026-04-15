@@ -36,4 +36,19 @@ void main() {
     final metrics = await runVideoBurstWithCapture(tester);
     await BenchmarkCollector.emitResults(metrics);
   });
+
+  testWidgets('Benchmark: video_baseline', (tester) async {
+    final metrics = await runVideoBaseline(tester);
+    await BenchmarkCollector.emitResults(metrics);
+  });
+
+  testWidgets('Benchmark: sdk_burst_with_disk_store', (tester) async {
+    final metrics = await runSdkBurstWithDiskStore(tester);
+    await BenchmarkCollector.emitResults(metrics);
+  });
+
+  testWidgets('Benchmark: sdk_burst_no_disk_store', (tester) async {
+    final metrics = await runSdkBurstNoDiskStore(tester);
+    await BenchmarkCollector.emitResults(metrics);
+  });
 }

@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import 'connection_string.dart';
 import 'device_info_collector.dart';
+import 'exception_store.dart';
 import 'models/collection_frame.dart';
 import 'models/exception_stack_trace.dart';
 import 'models/report_request.dart';
@@ -41,9 +42,21 @@ class TracewayClient {
 
   ScreenRecorder? screenRecorder;
 
-  TracewayClient._(this._apiUrl, this._token, this._options,
-      [ReportSender? reportSender])
-      : _reportSender = reportSender ?? sendReport;
+  final ExceptionStore _store;
+
+  TracewayClient._(
+    this._apiUrl,
+    this._token,
+    this._options, {
+    ReportSender? reportSender,
+    ExceptionStore? store,
+  })  : _reportSender = reportSender ?? sendReport,
+        _store = store ??
+            ExceptionStore(
+              maxLocalFiles: _options.maxLocalFiles,
+              maxAgeHours: _options.localFileMaxAgeHours,
+              debug: _options.debug,
+            );
 
   static TracewayClient initialize(
     String connectionString,
@@ -60,10 +73,16 @@ class TracewayClient {
     String connectionString,
     TracewayOptions options, {
     ReportSender? reportSender,
+    ExceptionStore? store,
   }) {
     final parsed = parseConnectionString(connectionString);
-    final client =
-        TracewayClient._(parsed.apiUrl, parsed.token, options, reportSender);
+    final client = TracewayClient._(
+      parsed.apiUrl,
+      parsed.token,
+      options,
+      reportSender: reportSender,
+      store: store,
+    );
     _instance = client;
     return client;
   }
@@ -83,6 +102,35 @@ class TracewayClient {
 
   bool get debug => _options.debug;
   TracewayOptions get options => _options;
+
+  /// Initializes disk storage and loads any previously persisted exceptions
+  /// into memory for syncing. Call once after [initialize].
+  /// No-op when [TracewayOptions.persistToDisk] is false.
+  Future<void> loadPendingFromDisk() async {
+    if (!_options.persistToDisk) return;
+    await _store.init();
+    if (!_store.available) return;
+
+    final entries = _store.loadAll();
+    if (entries.isEmpty) return;
+
+    for (final entry in entries) {
+      entry.exception.fileId = entry.id;
+      _pendingExceptions.add(entry.exception);
+      if (entry.recording != null) {
+        _pendingRecordings.add(entry.recording!);
+      }
+    }
+    _trimPending();
+
+    if (_options.debug) {
+      print('Traceway: loaded ${entries.length} pending entries from disk');
+    }
+
+    if (_pendingExceptions.isNotEmpty) {
+      _scheduleSync();
+    }
+  }
 
   @visibleForTesting
   int get pendingExceptionCount => _pendingExceptions.length;
@@ -136,6 +184,13 @@ class TracewayClient {
     }
 
     _pendingExceptions.add(exception);
+
+    // Persist to disk (best-effort)
+    final fileId = _store.write(exception);
+    if (fileId != null) {
+      exception.fileId = fileId;
+    }
+
     _trimPending();
 
     if (screenRecorder != null) {
@@ -147,6 +202,9 @@ class TracewayClient {
               .any((e) => e.sessionRecordingId == exceptionId);
           if (stillPending) {
             _pendingRecordings.add(recording);
+            if (exception.fileId != null) {
+              _store.writeRecording(exception.fileId!, recording);
+            }
           }
         }
         _scheduleSync();
@@ -179,6 +237,9 @@ class TracewayClient {
       if (dropped.sessionRecordingId != null) {
         _pendingRecordings
             .removeWhere((r) => r.exceptionId == dropped.sessionRecordingId);
+      }
+      if (dropped.fileId != null) {
+        _store.remove([dropped.fileId!]);
       }
       if (_options.debug) {
         print('Traceway: dropped oldest exception (buffer full)');
@@ -232,6 +293,15 @@ class TracewayClient {
         _trimPending();
         if (_options.debug) {
           print('Traceway: sync failed, re-queued exceptions');
+        }
+      } else {
+        // Sync succeeded — remove persisted files from disk
+        final fileIds = batch
+            .map((e) => e.fileId)
+            .whereType<String>()
+            .toList();
+        if (fileIds.isNotEmpty) {
+          _store.remove(fileIds);
         }
       }
     } catch (e) {
