@@ -91,7 +91,7 @@ class _BenchmarkShell extends StatelessWidget {
                   top: 48, bottom: 8, left: 12, right: 12),
               child: ValueListenableBuilder<String>(
                 valueListenable: _statusNotifier,
-                builder: (_, status, __) => Column(
+                builder: (_, status, _) => Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
@@ -348,32 +348,32 @@ enum Workload {
   idle,
   scroll,
   navigation,
-  full_interaction,
-  exception_burst,
-  video_playback,
+  fullInteraction,
+  exceptionBurst,
+  videoPlayback,
 }
 
 enum SdkConfig {
-  no_sdk,
-  sdk_no_capture,
-  sdk_capture,
-  sdk_capture_disk,
+  noSdk,
+  sdkNoCapture,
+  sdkCapture,
+  sdkCaptureDisk,
 }
 
 const _workloadLabels = {
   Workload.idle: 'Idle Rendering',
   Workload.scroll: 'Scroll Stress',
   Workload.navigation: 'Navigation',
-  Workload.full_interaction: 'Full Interaction',
-  Workload.exception_burst: 'Exception Burst',
-  Workload.video_playback: 'Video Playback',
+  Workload.fullInteraction: 'Full Interaction',
+  Workload.exceptionBurst: 'Exception Burst',
+  Workload.videoPlayback: 'Video Playback',
 };
 
 const _configLabels = {
-  SdkConfig.no_sdk: 'No SDK',
-  SdkConfig.sdk_no_capture: 'SDK (no capture)',
-  SdkConfig.sdk_capture: 'SDK + capture',
-  SdkConfig.sdk_capture_disk: 'SDK + capture + disk',
+  SdkConfig.noSdk: 'No SDK',
+  SdkConfig.sdkNoCapture: 'SDK (no capture)',
+  SdkConfig.sdkCapture: 'SDK + capture',
+  SdkConfig.sdkCaptureDisk: 'SDK + capture + disk',
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -390,17 +390,17 @@ Future<List<BenchmarkMetric>> runScenario({
   final scenario = '${workload}__$config';
   final displayName = '${_workloadLabels[wl]} | ${_configLabels[cfg]}';
 
-  final hasCapture = cfg == SdkConfig.sdk_capture || cfg == SdkConfig.sdk_capture_disk;
-  final hasSdk = cfg != SdkConfig.no_sdk;
+  final hasCapture = cfg == SdkConfig.sdkCapture || cfg == SdkConfig.sdkCaptureDisk;
+  final hasSdk = cfg != SdkConfig.noSdk;
 
   // ── Phase 1: SDK setup ──────────────────────────────────────────────
   Directory? storeDir;
 
   switch (cfg) {
-    case SdkConfig.no_sdk:
+    case SdkConfig.noSdk:
       break;
 
-    case SdkConfig.sdk_no_capture:
+    case SdkConfig.sdkNoCapture:
       _showStatus('Initializing SDK (no capture)...');
       TracewayClient.initializeForTest(
         _connectionString,
@@ -410,7 +410,7 @@ Future<List<BenchmarkMetric>> runScenario({
       _showSnackbar('SDK initialized (capture OFF)', color: Colors.blue);
       break;
 
-    case SdkConfig.sdk_capture:
+    case SdkConfig.sdkCapture:
       _showStatus('Initializing SDK (screen capture ON)...');
       TracewayClient.initializeForTest(
         _connectionString,
@@ -427,7 +427,7 @@ Future<List<BenchmarkMetric>> runScenario({
       _showSnackbar('SDK initialized (capture ON)', color: Colors.orange);
       break;
 
-    case SdkConfig.sdk_capture_disk:
+    case SdkConfig.sdkCaptureDisk:
       storeDir = await Directory.systemTemp.createTemp('traceway_bench_');
       final store = ExceptionStore(
         maxLocalFiles: 30,
@@ -458,7 +458,7 @@ Future<List<BenchmarkMetric>> runScenario({
   VideoPlayerController? videoController;
   Widget content;
 
-  if (wl == Workload.video_playback) {
+  if (wl == Workload.videoPlayback) {
     _showStatus('Loading video...');
     videoController = VideoPlayerController.asset(
       'assets/videos/BigBuckBunny_15snonSeg.mp4',
@@ -503,13 +503,13 @@ Future<List<BenchmarkMetric>> runScenario({
         await _pumpFor(tester, const Duration(seconds: 3));
         break;
 
-      case Workload.full_interaction:
+      case Workload.fullInteraction:
         await _stressInteractions(tester);
         _showStatus('Settling...');
         await _pumpFor(tester, const Duration(seconds: 3));
         break;
 
-      case Workload.exception_burst:
+      case Workload.exceptionBurst:
         await _stressInteractions(tester);
         if (hasCapture) {
           _showStatus('Filling capture buffer...');
@@ -529,7 +529,7 @@ Future<List<BenchmarkMetric>> runScenario({
         await _pumpFor(tester, const Duration(seconds: 10));
         break;
 
-      case Workload.video_playback:
+      case Workload.videoPlayback:
         await videoController!.play();
         _showStatus('Video playing...');
         await _pumpFor(tester, const Duration(seconds: 10));
@@ -548,7 +548,7 @@ Future<List<BenchmarkMetric>> runScenario({
       collector.wallClock(scenario, sw..stop()),
     ];
 
-    if (wl == Workload.exception_burst) {
+    if (wl == Workload.exceptionBurst) {
       metrics.add(collector.exceptionCaptureAvg(scenario, captureTimes));
     }
 

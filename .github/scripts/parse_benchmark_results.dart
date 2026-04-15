@@ -12,32 +12,32 @@ const workloadOrder = [
   'idle',
   'scroll',
   'navigation',
-  'full_interaction',
-  'exception_burst',
-  'video_playback',
+  'fullInteraction',
+  'exceptionBurst',
+  'videoPlayback',
 ];
 
 const configOrder = [
-  'no_sdk',
-  'sdk_no_capture',
-  'sdk_capture',
-  'sdk_capture_disk',
+  'noSdk',
+  'sdkNoCapture',
+  'sdkCapture',
+  'sdkCaptureDisk',
 ];
 
 const workloadLabels = {
   'idle': 'Idle Rendering',
   'scroll': 'Scroll Stress',
   'navigation': 'Navigation',
-  'full_interaction': 'Full Interaction',
-  'exception_burst': 'Exception Burst',
-  'video_playback': 'Video Playback',
+  'fullInteraction': 'Full Interaction',
+  'exceptionBurst': 'Exception Burst',
+  'videoPlayback': 'Video Playback',
 };
 
 const configLabels = {
-  'no_sdk': 'No Traceway',
-  'sdk_no_capture': 'SDK (no capture)',
-  'sdk_capture': 'SDK + capture',
-  'sdk_capture_disk': 'SDK + capture + disk',
+  'noSdk': 'No Traceway',
+  'sdkNoCapture': 'SDK (no capture)',
+  'sdkCapture': 'SDK + capture',
+  'sdkCaptureDisk': 'SDK + capture + disk',
 };
 
 void main(List<String> args) {
@@ -159,7 +159,7 @@ void main(List<String> args) {
       _writeFrameTimingTable(buf, wlData, sortedDevices);
       _writeJankTable(buf, wlData, sortedDevices);
 
-      if (wl == 'exception_burst') {
+      if (wl == 'exceptionBurst') {
         _writeExceptionCostTable(buf, wlData, sortedDevices);
       }
     }
@@ -194,16 +194,16 @@ void _writeMemoryTable(
   buf.writeln('**Memory Impact (RSS)**');
   buf.writeln();
   buf.write('| Config |');
-  for (final d in devices) buf.write(' $d |');
+  for (final d in devices) { buf.write(' $d |'); }
   buf.writeln();
   buf.write('|--------|');
-  for (final _ in devices) buf.write('---------|');
+  for (final _ in devices) { buf.write('---------|'); }
   buf.writeln();
 
   // Baseline RSS per device from no_sdk config.
   final baselineRss = <String, double>{};
   for (final d in devices) {
-    baselineRss[d] = wlData['no_sdk']?[d]?['rss_bytes'] ?? 0;
+    baselineRss[d] = wlData['noSdk']?[d]?['rss_bytes'] ?? 0;
   }
 
   for (final cfg in configOrder) {
@@ -217,7 +217,7 @@ void _writeMemoryTable(
         buf.write(' - |');
       } else {
         final mb = (rss / 1024 / 1024).toStringAsFixed(1);
-        if (cfg == 'no_sdk') {
+        if (cfg == 'noSdk') {
           buf.write(' $mb MB |');
         } else {
           final delta = rss - (baselineRss[d] ?? 0);
@@ -240,10 +240,10 @@ void _writeFrameTimingTable(
   buf.writeln('**Frame Timing (build duration)**');
   buf.writeln();
   buf.write('| Config |');
-  for (final d in devices) buf.write(' $d p50 / p99 |');
+  for (final d in devices) { buf.write(' $d p50 / p99 |'); }
   buf.writeln();
   buf.write('|--------|');
-  for (final _ in devices) buf.write('-------------|');
+  for (final _ in devices) { buf.write('-------------|'); }
   buf.writeln();
 
   for (final cfg in configOrder) {
@@ -275,10 +275,10 @@ void _writeJankTable(
   buf.writeln('**Jank Frames (> 16.67ms)**');
   buf.writeln();
   buf.write('| Config |');
-  for (final d in devices) buf.write(' $d |');
+  for (final d in devices) { buf.write(' $d |'); }
   buf.writeln();
   buf.write('|--------|');
-  for (final _ in devices) buf.write('---------|');
+  for (final _ in devices) { buf.write('---------|'); }
   buf.writeln();
 
   for (final cfg in configOrder) {
@@ -309,10 +309,10 @@ void _writeExceptionCostTable(
   buf.writeln('**Exception Capture Cost**');
   buf.writeln();
   buf.write('| Config |');
-  for (final d in devices) buf.write(' $d avg |');
+  for (final d in devices) { buf.write(' $d avg |'); }
   buf.writeln();
   buf.write('|--------|');
-  for (final _ in devices) buf.write('---------|');
+  for (final _ in devices) { buf.write('---------|'); }
   buf.writeln();
 
   for (final cfg in configOrder) {

@@ -11,15 +11,15 @@ void main() {
     'idle',
     'scroll',
     'navigation',
-    'full_interaction',
-    'exception_burst',
-    'video_playback',
+    'fullInteraction',
+    'exceptionBurst',
+    'videoPlayback',
   ];
   const configs = [
-    'no_sdk',
-    'sdk_no_capture',
-    'sdk_capture',
-    'sdk_capture_disk',
+    'noSdk',
+    'sdkNoCapture',
+    'sdkCapture',
+    'sdkCaptureDisk',
   ];
 
   for (final workload in workloads) {
