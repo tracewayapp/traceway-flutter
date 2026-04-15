@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_quick_video_encoder/flutter_quick_video_encoder.dart';
@@ -21,14 +22,16 @@ class CapturedFrame {
   final DateTime timestamp;
   final Offset? touchPosition;
   final List<MaskRegion> maskRegions;
+  int repeatCount;
 
-  const CapturedFrame({
+  CapturedFrame({
     required this.pngBytes,
     required this.width,
     required this.height,
     required this.timestamp,
     this.touchPosition,
     this.maskRegions = const [],
+    this.repeatCount = 1,
   });
 }
 
@@ -44,6 +47,7 @@ class ScreenRecorder with WidgetsBindingObserver {
   Timer? _captureTimer;
   bool _isCapturing = false;
   bool _isPaused = false;
+  CapturedFrame? _lastFrame;
 
   // Touch tracking (logical coordinates)
   Offset? _touchPosition;
@@ -89,6 +93,7 @@ class ScreenRecorder with WidgetsBindingObserver {
   void stop() {
     _captureTimer?.cancel();
     _captureTimer = null;
+    _lastFrame = null;
     WidgetsBinding.instance.removeObserver(this);
   }
 
@@ -115,14 +120,21 @@ class ScreenRecorder with WidgetsBindingObserver {
       image.dispose();
 
       if (byteData != null) {
-        _buffer.push(CapturedFrame(
-          pngBytes: byteData.buffer.asUint8List(),
-          width: width,
-          height: height,
-          timestamp: DateTime.now(),
-          touchPosition: _touchPosition,
-          maskRegions: _maskRegions.values.toList(),
-        ));
+        final pngBytes = byteData.buffer.asUint8List();
+        if (_lastFrame != null && listEquals(_lastFrame!.pngBytes, pngBytes)) {
+          _lastFrame!.repeatCount++;
+        } else {
+          final frame = CapturedFrame(
+            pngBytes: pngBytes,
+            width: width,
+            height: height,
+            timestamp: DateTime.now(),
+            touchPosition: _touchPosition,
+            maskRegions: _maskRegions.values.toList(),
+          );
+          _buffer.push(frame);
+          _lastFrame = frame;
+        }
       }
     } catch (e) {
       if (debug) {
@@ -271,7 +283,8 @@ class ScreenRecorder with WidgetsBindingObserver {
       final first = frames.first;
       final width = first.width;
       final height = first.height;
-      final durationSeconds = frames.length * _captureIntervalMs / 1000.0;
+      final totalFrameCount = frames.fold<int>(0, (sum, f) => sum + f.repeatCount);
+      final durationSeconds = totalFrameCount * _captureIntervalMs / 1000.0;
 
       final tempDir = await getTemporaryDirectory();
       final outputPath = '${tempDir.path}/traceway_$exceptionId.mp4';
@@ -309,7 +322,9 @@ class ScreenRecorder with WidgetsBindingObserver {
           _drawTouchCircle(rgba, frame.width, frame.height, frame.touchPosition!);
         }
 
-        await FlutterQuickVideoEncoder.appendVideoFrame(rgba);
+        for (var i = 0; i < frame.repeatCount; i++) {
+          await FlutterQuickVideoEncoder.appendVideoFrame(rgba);
+        }
       }
 
       await FlutterQuickVideoEncoder.finish();
@@ -322,7 +337,8 @@ class ScreenRecorder with WidgetsBindingObserver {
 
       if (debug) {
         final bufferKB = frames.fold<int>(0, (sum, f) => sum + f.pngBytes.length) ~/ 1024;
-        print('Traceway: encoded ${frames.length} frames (buffer: ${bufferKB}KB) to ${videoBytes.length ~/ 1024}KB MP4 (${durationSeconds.toStringAsFixed(1)}s)');
+        final deduped = totalFrameCount - frames.length;
+        print('Traceway: encoded ${frames.length} unique frames ($totalFrameCount total, $deduped deduped) (buffer: ${bufferKB}KB) to ${videoBytes.length ~/ 1024}KB MP4 (${durationSeconds.toStringAsFixed(1)}s)');
       }
 
       return SessionRecordingPayload(
