@@ -48,6 +48,12 @@ class ScreenRecorder with WidgetsBindingObserver {
   // Touch tracking (logical coordinates)
   Offset? _touchPosition;
 
+  // Interaction-aware capture: reuse last frame when idle
+  static const _interactionTimeoutMs = 500;
+  DateTime? _lastInteractionTime;
+  CapturedFrame? _lastFrame;
+  DateTime? _lastRealCaptureTime;
+
   // Privacy mask tracking (logical coordinates, relative to RepaintBoundary)
   final Map<Key, MaskRegion> _maskRegions = {};
 
@@ -61,10 +67,12 @@ class ScreenRecorder with WidgetsBindingObserver {
 
   void setTouchPosition(Offset position) {
     _touchPosition = position;
+    _lastInteractionTime = DateTime.now();
   }
 
   void clearTouchPosition() {
     _touchPosition = null;
+    _lastInteractionTime = DateTime.now();
   }
 
   void addMaskRegion(Key key, Rect rect, TracewayMaskMode mode) {
@@ -97,8 +105,37 @@ class ScreenRecorder with WidgetsBindingObserver {
     _isPaused = state != AppLifecycleState.resumed;
   }
 
+  bool get _isInteracting {
+    if (_lastInteractionTime == null) return false;
+    return DateTime.now().difference(_lastInteractionTime!).inMilliseconds <
+        _interactionTimeoutMs;
+  }
+
   Future<void> _captureFrame() async {
     if (_isCapturing || _isPaused) return;
+
+    final now = DateTime.now();
+
+    // When idle, reuse the previous frame instead of capturing a new one.
+    // Still capture at least 1 real frame per second to pick up non-interactive
+    // visual changes (animations, loading spinners, video playback, etc.).
+    if (!_isInteracting && _lastFrame != null) {
+      final msSinceLastReal = _lastRealCaptureTime != null
+          ? now.difference(_lastRealCaptureTime!).inMilliseconds
+          : 999999;
+
+      if (msSinceLastReal < 1000) {
+        _buffer.push(CapturedFrame(
+          pngBytes: _lastFrame!.pngBytes,
+          width: _lastFrame!.width,
+          height: _lastFrame!.height,
+          timestamp: now,
+          touchPosition: _touchPosition,
+          maskRegions: _maskRegions.values.toList(),
+        ));
+        return;
+      }
+    }
 
     final context = repaintBoundaryKey.currentContext;
     if (context == null) return;
@@ -115,14 +152,17 @@ class ScreenRecorder with WidgetsBindingObserver {
       image.dispose();
 
       if (byteData != null) {
-        _buffer.push(CapturedFrame(
+        final frame = CapturedFrame(
           pngBytes: byteData.buffer.asUint8List(),
           width: width,
           height: height,
-          timestamp: DateTime.now(),
+          timestamp: now,
           touchPosition: _touchPosition,
           maskRegions: _maskRegions.values.toList(),
-        ));
+        );
+        _buffer.push(frame);
+        _lastFrame = frame;
+        _lastRealCaptureTime = now;
       }
     } catch (e) {
       if (debug) {
