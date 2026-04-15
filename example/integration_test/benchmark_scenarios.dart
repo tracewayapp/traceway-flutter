@@ -501,6 +501,11 @@ Future<List<BenchmarkMetric>> runScenario({
       break;
   }
 
+  if (hasSdk && TracewayClient.instance != null) {
+    TracewayClient.instance!.collectSyncDeviceInfo();
+    await TracewayClient.instance!.collectDeviceInfo();
+  }
+
   // ── Phase 2: Render widget tree ─────────────────────────────────────
   VideoPlayerController? videoController;
   Widget content;
