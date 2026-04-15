@@ -421,7 +421,7 @@ Future<List<BenchmarkMetric>> runScenario({
       _showStatus('Initializing SDK (no capture)...');
       TracewayClient.initializeForTest(
         _connectionString,
-        const TracewayOptions(screenCapture: false, debug: true),
+        const TracewayOptions(screenCapture: false, debug: false),
         reportSender: _reportSender,
       );
       _showSnackbar('SDK initialized (capture OFF)', color: Colors.blue);
@@ -433,7 +433,7 @@ Future<List<BenchmarkMetric>> runScenario({
         _connectionString,
         const TracewayOptions(
           screenCapture: true,
-          debug: true,
+          debug: false,
           fps: 15,
           maxBufferFrames: 150,
           capturePixelRatio: 0.75,
@@ -457,7 +457,7 @@ Future<List<BenchmarkMetric>> runScenario({
         _connectionString,
         const TracewayOptions(
           screenCapture: true,
-          debug: true,
+          debug: false,
           fps: 15,
           maxBufferFrames: 150,
           capturePixelRatio: 0.75,
