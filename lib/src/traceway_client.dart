@@ -33,6 +33,7 @@ class TracewayClient {
 
   final List<ExceptionStackTrace> _pendingExceptions = [];
   final List<SessionRecordingPayload> _pendingRecordings = [];
+  final List<Future<void>> _pendingEncodings = [];
   bool _isSyncing = false;
   Timer? _debounceTimer;
   Timer? _retryTimer;
@@ -91,6 +92,9 @@ class TracewayClient {
   static Future<void> resetForTest() async {
     final client = _instance;
     if (client != null) {
+      if (client._pendingEncodings.isNotEmpty) {
+        await Future.wait(List.from(client._pendingEncodings));
+      }
       await client.flush(1000);
       client._debounceTimer?.cancel();
       client._retryTimer?.cancel();
@@ -196,7 +200,7 @@ class TracewayClient {
     if (screenRecorder != null) {
       final exceptionId = _uuid.v4();
       exception.sessionRecordingId = exceptionId;
-      screenRecorder!.captureRecording(exceptionId).then((recording) {
+      final future = screenRecorder!.captureRecording(exceptionId).then((recording) {
         if (recording != null) {
           final stillPending = _pendingExceptions
               .any((e) => e.sessionRecordingId == exceptionId);
@@ -209,6 +213,8 @@ class TracewayClient {
         }
         _scheduleSync();
       });
+      _pendingEncodings.add(future);
+      future.whenComplete(() => _pendingEncodings.remove(future));
     } else {
       _scheduleSync();
     }
@@ -341,6 +347,11 @@ class TracewayClient {
     _debounceTimer = null;
     _retryTimer?.cancel();
     _retryTimer = null;
+
+    // Wait for in-flight recordings to finish encoding before syncing.
+    if (_pendingEncodings.isNotEmpty) {
+      await Future.wait(List.from(_pendingEncodings));
+    }
 
     final syncFuture = _doSync();
 
