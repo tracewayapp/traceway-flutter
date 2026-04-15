@@ -1,0 +1,112 @@
+name: Benchmark Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to test'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        working-directory: example
+        run: flutter pub get
+
+      - name: Build app APK
+        working-directory: example
+        run: |
+          flutter build apk --debug \
+            --target=integration_test/benchmark_smoke_test.dart \
+            --dart-define=TRACEWAY_DSN=${{ secrets.TRACEWAY_DSN }} \
+            --dart-define=BENCH_BRANCH=${{ github.event.inputs.branch || github.ref_name }} \
+            --dart-define=BENCH_COMMIT=${{ github.sha }} \
+            --dart-define=BENCH_RUN_ID=${{ github.run_id }}
+
+      - name: Build instrumentation test APK
+        working-directory: example/android
+        run: ./gradlew app:assembleAndroidTest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apks
+          path: |
+            example/build/app/outputs/flutter-apk/app-debug.apk
+            example/build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+
+  firebase-android:
+    needs: build-android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apks
+          path: ./apks
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run on Firebase Test Lab (Pixel 8)
+        run: |
+          gcloud firebase test android run \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --type instrumentation \
+            --app apks/flutter-apk/app-debug.apk \
+            --test apks/apk/androidTest/debug/app-debug-androidTest.apk \
+            --device model=shiba,version=34,locale=en,orientation=portrait \
+            --timeout 10m \
+            --results-dir=smoke-${{ github.run_id }} \
+            --results-bucket=${{ secrets.GCS_BUCKET }} \
+            --directories-to-pull=/sdcard/Download \
+            --record-video \
+            --no-performance-metrics \
+            2>&1 | tee ftl_output.txt
+        continue-on-error: true
+
+      - name: Download results from GCS
+        run: |
+          GCS_PATH="gs://${{ secrets.GCS_BUCKET }}/smoke-${{ github.run_id }}"
+          mkdir -p ./results
+          gsutil -m cp -r "$GCS_PATH/" ./results/ 2>&1 || echo "WARNING: gsutil download failed"
+
+      - name: Extract benchmark results
+        run: |
+          PULLED_FILE=$(find ./results -path "*/sdcard/Download/benchmark_results.jsonl" -type f 2>/dev/null | head -1)
+          if [ -n "$PULLED_FILE" ] && [ -s "$PULLED_FILE" ]; then
+            echo "=== Found pulled results file ==="
+            cat "$PULLED_FILE"
+          else
+            echo "=== Falling back to logcat grep ==="
+            grep -rh "BENCHMARK_RESULT:" ./results/ 2>/dev/null | sed 's/.*BENCHMARK_RESULT://' || echo "No results found"
+          fi
+
+      - name: Show logcat (for debugging)
+        if: always()
+        run: |
+          echo "=== Searching for Traceway logs ==="
+          grep -rh "Traceway:\|captureRecording\|encoded.*frames\|payload_size\|sync" ./results/ 2>/dev/null | head -50 || echo "No Traceway logs found"
+          echo ""
+          echo "=== Searching for errors ==="
+          grep -rh "Exception\|Error\|EXCEPTION CAPTURED" ./results/ 2>/dev/null | grep -i "flutter\|traceway" | head -30 || echo "No errors found"
