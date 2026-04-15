@@ -268,20 +268,42 @@ class TracewayClient {
     if (_isSyncing) return;
     if (_pendingExceptions.isEmpty) return;
 
-    // Wait for in-flight recordings to finish encoding before sending,
-    // but cap at 2 seconds so a stuck encoding can't block sync forever.
-    if (_pendingEncodings.isNotEmpty) {
-      await Future.any([
-        Future.wait(List.from(_pendingEncodings)),
-        Future.delayed(const Duration(seconds: 2)),
-      ]);
+    _isSyncing = true;
+
+    // Split exceptions into ready (recording done or no recording) vs waiting.
+    final readyRecordingIds = _pendingRecordings
+        .map((r) => r.exceptionId)
+        .toSet();
+    final batch = <ExceptionStackTrace>[];
+    final waiting = <ExceptionStackTrace>[];
+    for (final e in _pendingExceptions) {
+      if (e.sessionRecordingId == null ||
+          readyRecordingIds.contains(e.sessionRecordingId)) {
+        batch.add(e);
+      } else {
+        waiting.add(e);
+      }
     }
 
-    _isSyncing = true;
-    final batch = List<ExceptionStackTrace>.from(_pendingExceptions);
-    final recordings = List<SessionRecordingPayload>.from(_pendingRecordings);
-    _pendingExceptions.clear();
-    _pendingRecordings.clear();
+    if (batch.isEmpty) {
+      _isSyncing = false;
+      return;
+    }
+
+    // Take only the recordings that match the batch being sent.
+    final batchRecordingIds = batch
+        .map((e) => e.sessionRecordingId)
+        .whereType<String>()
+        .toSet();
+    final recordings = _pendingRecordings
+        .where((r) => batchRecordingIds.contains(r.exceptionId))
+        .toList();
+
+    _pendingExceptions
+      ..clear()
+      ..addAll(waiting);
+    _pendingRecordings.removeWhere(
+        (r) => batchRecordingIds.contains(r.exceptionId));
 
     final frame = CollectionFrame(
       stackTraces: batch,
