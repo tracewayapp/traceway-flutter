@@ -342,6 +342,28 @@ Future<void> _stressInteractions(WidgetTester tester) async {
 // Exception firing helper with visual feedback
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Fires a burst of [count] exceptions with [interval] between each.
+/// Returns the list of capture times in microseconds.
+Future<List<int>> _fireExceptionBurst(
+  WidgetTester tester, {
+  required String scenario,
+  int count = 5,
+  Duration interval = const Duration(seconds: 2),
+}) async {
+  final times = <int>[];
+  _showStatus('Firing $count exceptions [$scenario]...');
+  await tester.pump();
+  for (var i = 0; i < count; i++) {
+    try {
+      throw StateError('[$scenario] exception #${i + 1}/$count');
+    } catch (e, st) {
+      times.add(_fireException('[$scenario] #${i + 1}/$count', e, st));
+    }
+    await _pumpFor(tester, interval);
+  }
+  return times;
+}
+
 /// Fires an exception, shows a snackbar, and returns the capture time in us.
 /// If TracewayClient is not initialized (no_sdk config), just measures
 /// throw+catch time without calling captureException.
@@ -367,6 +389,10 @@ enum Workload {
   fullInteraction,
   exceptionBurst,
   videoPlayback,
+  idleBurst,
+  scrollBurst,
+  navigationBurst,
+  videoPlaybackBurst,
 }
 
 enum SdkConfig {
@@ -383,6 +409,10 @@ const _workloadLabels = {
   Workload.fullInteraction: 'Full Interaction',
   Workload.exceptionBurst: 'Exception Burst',
   Workload.videoPlayback: 'Video Playback',
+  Workload.idleBurst: 'Idle + Exceptions',
+  Workload.scrollBurst: 'Scroll + Exceptions',
+  Workload.navigationBurst: 'Navigation + Exceptions',
+  Workload.videoPlaybackBurst: 'Video + Exceptions',
 };
 
 const _configLabels = {
@@ -475,7 +505,7 @@ Future<List<BenchmarkMetric>> runScenario({
   VideoPlayerController? videoController;
   Widget content;
 
-  if (wl == Workload.videoPlayback) {
+  if (wl == Workload.videoPlayback || wl == Workload.videoPlaybackBurst) {
     _showStatus('Loading video...');
     videoController = VideoPlayerController.asset(
       'assets/videos/BigBuckBunny_15snonSeg.mp4',
@@ -532,16 +562,7 @@ Future<List<BenchmarkMetric>> runScenario({
           _showStatus('Filling capture buffer...');
           await _pumpFor(tester, const Duration(seconds: 8));
         }
-        _showStatus('Firing 5 exceptions...');
-        await tester.pump();
-        for (var i = 0; i < 5; i++) {
-          try {
-            throw StateError('Benchmark exception #$i');
-          } catch (e, st) {
-            captureTimes.add(_fireException('#${i + 1}/5', e, st));
-          }
-          await _pumpFor(tester, const Duration(seconds: 2));
-        }
+        captureTimes.addAll(await _fireExceptionBurst(tester, scenario: scenario));
         _showStatus('Settling after exceptions...');
         await _pumpFor(tester, const Duration(seconds: 10));
         break;
@@ -550,6 +571,55 @@ Future<List<BenchmarkMetric>> runScenario({
         await videoController!.play();
         _showStatus('Video playing...');
         await _pumpFor(tester, const Duration(seconds: 10));
+        _showStatus('Settling...');
+        await _pumpFor(tester, const Duration(seconds: 3));
+        break;
+
+      case Workload.idleBurst:
+        _showStatus('Idle rendering...');
+        await _pumpFor(tester, const Duration(seconds: 5));
+        if (hasCapture) {
+          _showStatus('Filling capture buffer...');
+          await _pumpFor(tester, const Duration(seconds: 8));
+        }
+        captureTimes.addAll(await _fireExceptionBurst(tester, scenario: scenario));
+        _showStatus('Settling after exceptions...');
+        await _pumpFor(tester, const Duration(seconds: 10));
+        break;
+
+      case Workload.scrollBurst:
+        await _scrollInteraction(tester);
+        if (hasCapture) {
+          _showStatus('Filling capture buffer...');
+          await _pumpFor(tester, const Duration(seconds: 8));
+        }
+        captureTimes.addAll(await _fireExceptionBurst(tester, scenario: scenario));
+        _showStatus('Settling after exceptions...');
+        await _pumpFor(tester, const Duration(seconds: 10));
+        break;
+
+      case Workload.navigationBurst:
+        await _navInteraction(tester);
+        if (hasCapture) {
+          _showStatus('Filling capture buffer...');
+          await _pumpFor(tester, const Duration(seconds: 8));
+        }
+        captureTimes.addAll(await _fireExceptionBurst(tester, scenario: scenario));
+        _showStatus('Settling after exceptions...');
+        await _pumpFor(tester, const Duration(seconds: 10));
+        break;
+
+      case Workload.videoPlaybackBurst:
+        await videoController!.play();
+        _showStatus('Video playing...');
+        await _pumpFor(tester, const Duration(seconds: 10));
+        _showStatus('Firing exceptions while video plays...');
+        captureTimes.addAll(await _fireExceptionBurst(
+          tester,
+          scenario: scenario,
+          count: 5,
+          interval: const Duration(seconds: 1),
+        ));
         _showStatus('Settling...');
         await _pumpFor(tester, const Duration(seconds: 3));
         break;
@@ -565,7 +635,7 @@ Future<List<BenchmarkMetric>> runScenario({
       collector.wallClock(scenario, sw..stop()),
     ];
 
-    if (wl == Workload.exceptionBurst) {
+    if (captureTimes.isNotEmpty) {
       metrics.add(collector.exceptionCaptureAvg(scenario, captureTimes));
     }
 

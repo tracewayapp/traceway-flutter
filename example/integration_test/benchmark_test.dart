@@ -14,6 +14,10 @@ void main() {
     'fullInteraction',
     'exceptionBurst',
     'videoPlayback',
+    'idleBurst',
+    'scrollBurst',
+    'navigationBurst',
+    'videoPlaybackBurst',
   ];
   const configs = [
     'noSdk',

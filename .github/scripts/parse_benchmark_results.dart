@@ -15,6 +15,10 @@ const workloadOrder = [
   'fullInteraction',
   'exceptionBurst',
   'videoPlayback',
+  'idleBurst',
+  'scrollBurst',
+  'navigationBurst',
+  'videoPlaybackBurst',
 ];
 
 const configOrder = [
@@ -31,6 +35,10 @@ const workloadLabels = {
   'fullInteraction': 'Full Interaction',
   'exceptionBurst': 'Exception Burst',
   'videoPlayback': 'Video Playback',
+  'idleBurst': 'Idle + Exceptions',
+  'scrollBurst': 'Scroll + Exceptions',
+  'navigationBurst': 'Navigation + Exceptions',
+  'videoPlaybackBurst': 'Video + Exceptions',
 };
 
 const configLabels = {
@@ -160,7 +168,7 @@ void main(List<String> args) {
       _writeJankTable(buf, wlData, sortedDevices);
       _writePayloadSizeTable(buf, wlData, sortedDevices);
 
-      if (wl == 'exceptionBurst') {
+      if (wl == 'exceptionBurst' || wl.endsWith('Burst')) {
         _writeExceptionCostTable(buf, wlData, sortedDevices);
       }
     }
