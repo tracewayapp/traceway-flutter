@@ -7,48 +7,31 @@ import 'benchmark_scenarios.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('Benchmark: baseline', (tester) async {
-    final metrics = await runBaseline(tester);
-    await BenchmarkCollector.emitResults(metrics);
-  });
+  const workloads = [
+    'idle',
+    'scroll',
+    'navigation',
+    'full_interaction',
+    'exception_burst',
+    'video_playback',
+  ];
+  const configs = [
+    'no_sdk',
+    'sdk_no_capture',
+    'sdk_capture',
+    'sdk_capture_disk',
+  ];
 
-  testWidgets('Benchmark: sdk_idle_no_capture', (tester) async {
-    final metrics = await runSdkIdleNoCapture(tester);
-    await BenchmarkCollector.emitResults(metrics);
-  });
-
-  testWidgets('Benchmark: sdk_burst_no_capture', (tester) async {
-    final metrics = await runSdkBurstNoCapture(tester);
-    await BenchmarkCollector.emitResults(metrics);
-  });
-
-  testWidgets('Benchmark: sdk_idle_with_capture', (tester) async {
-    final metrics = await runSdkIdleWithCapture(tester);
-    await BenchmarkCollector.emitResults(metrics);
-  });
-
-  testWidgets('Benchmark: sdk_burst_with_capture', (tester) async {
-    final metrics = await runSdkBurstWithCapture(tester);
-    await BenchmarkCollector.emitResults(metrics);
-  });
-
-  testWidgets('Benchmark: video_burst_with_capture', (tester) async {
-    final metrics = await runVideoBurstWithCapture(tester);
-    await BenchmarkCollector.emitResults(metrics);
-  });
-
-  testWidgets('Benchmark: video_baseline', (tester) async {
-    final metrics = await runVideoBaseline(tester);
-    await BenchmarkCollector.emitResults(metrics);
-  });
-
-  testWidgets('Benchmark: sdk_burst_with_disk_store', (tester) async {
-    final metrics = await runSdkBurstWithDiskStore(tester);
-    await BenchmarkCollector.emitResults(metrics);
-  });
-
-  testWidgets('Benchmark: sdk_burst_no_disk_store', (tester) async {
-    final metrics = await runSdkBurstNoDiskStore(tester);
-    await BenchmarkCollector.emitResults(metrics);
-  });
+  for (final workload in workloads) {
+    for (final config in configs) {
+      testWidgets('Benchmark: ${workload}__$config', (tester) async {
+        final metrics = await runScenario(
+          tester: tester,
+          workload: workload,
+          config: config,
+        );
+        await BenchmarkCollector.emitResults(metrics);
+      });
+    }
+  }
 }

@@ -126,7 +126,7 @@ class _BenchmarkShell extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Test App 1: Stress Test App (scenarios A–E)
+// Test App 1: Stress Test App
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _StressContent extends StatefulWidget {
@@ -257,36 +257,8 @@ class _DetailPage extends StatelessWidget {
   }
 }
 
-/// Performs scroll fling + page navigation to stress the rendering pipeline.
-Future<void> _stressInteractions(WidgetTester tester) async {
-  _showStatus('Fling scrolling down...');
-  final listFinder = find.byKey(const Key('stressList'));
-  if (listFinder.evaluate().isNotEmpty) {
-    await tester.fling(listFinder, const Offset(0, -3000), 2000);
-    await _pumpFor(tester, const Duration(seconds: 1));
-
-    _showStatus('Fling scrolling back up...');
-    await tester.fling(listFinder, const Offset(0, 3000), 2000);
-    await _pumpFor(tester, const Duration(milliseconds: 500));
-  }
-
-  _showStatus('Navigating to detail page...');
-  final firstTile = find.byType(ListTile).first;
-  if (firstTile.evaluate().isNotEmpty) {
-    await tester.tap(firstTile);
-    await _pumpFor(tester, const Duration(milliseconds: 500));
-
-    _showStatus('Navigating back...');
-    final backButton = find.byType(BackButton);
-    if (backButton.evaluate().isNotEmpty) {
-      await tester.tap(backButton);
-      await _pumpFor(tester, const Duration(milliseconds: 500));
-    }
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
-// Test App 2: Video Playback Content (scenario F)
+// Test App 2: Video Playback Content
 // ═══════════════════════════════════════════════════════════════════════════
 
 class _VideoContent extends StatelessWidget {
@@ -310,13 +282,58 @@ class _VideoContent extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Interaction helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Fling scroll down and back up.
+Future<void> _scrollInteraction(WidgetTester tester) async {
+  _showStatus('Fling scrolling down...');
+  final listFinder = find.byKey(const Key('stressList'));
+  if (listFinder.evaluate().isNotEmpty) {
+    await tester.fling(listFinder, const Offset(0, -3000), 2000);
+    await _pumpFor(tester, const Duration(seconds: 1));
+
+    _showStatus('Fling scrolling back up...');
+    await tester.fling(listFinder, const Offset(0, 3000), 2000);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+  }
+}
+
+/// Tap first ListTile, navigate to detail page, navigate back.
+Future<void> _navInteraction(WidgetTester tester) async {
+  _showStatus('Navigating to detail page...');
+  final firstTile = find.byType(ListTile).first;
+  if (firstTile.evaluate().isNotEmpty) {
+    await tester.tap(firstTile);
+    await _pumpFor(tester, const Duration(milliseconds: 500));
+
+    _showStatus('Navigating back...');
+    final backButton = find.byType(BackButton);
+    if (backButton.evaluate().isNotEmpty) {
+      await tester.tap(backButton);
+      await _pumpFor(tester, const Duration(milliseconds: 500));
+    }
+  }
+}
+
+/// Combined scroll + navigation stress test.
+Future<void> _stressInteractions(WidgetTester tester) async {
+  await _scrollInteraction(tester);
+  await _navInteraction(tester);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Exception firing helper with visual feedback
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Fires an exception, shows a snackbar, and returns the capture time in us.
+/// If TracewayClient is not initialized (no_sdk config), just measures
+/// throw+catch time without calling captureException.
 int _fireException(String label, Object error, StackTrace st) {
   final capSw = Stopwatch()..start();
-  TracewayClient.instance!.captureException(error, st);
+  if (TracewayClient.instance != null) {
+    TracewayClient.instance!.captureException(error, st);
+  }
   final elapsed = capSw.elapsedMicroseconds;
   _showStatus('EXCEPTION CAPTURED: $label (${elapsed}us)');
   _showSnackbar('Exception: $label');
@@ -324,568 +341,234 @@ int _fireException(String label, Object error, StackTrace st) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Scenarios
+// Workload x SDK Config matrix
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── Scenario A: Baseline (no SDK) ────────────────────────────────────────
-
-Future<List<BenchmarkMetric>> runBaseline(WidgetTester tester) async {
-  const scenario = 'baseline';
-  final collector = BenchmarkCollector();
-  final sw = Stopwatch()..start();
-
-  collector.snapshotMemoryStart();
-  collector.startFrameTiming();
-
-  _showStatus('Rendering stress app (no SDK)...');
-  await tester.pumpWidget(
-    _BenchmarkShell(
-      scenarioName: 'A: Baseline (no SDK)',
-      child: const _StressContent(),
-    ),
-  );
-  await _pumpFor(tester, const Duration(milliseconds: 500));
-
-  await _stressInteractions(tester);
-
-  _showStatus('Idle rendering...');
-  await _pumpFor(tester, const Duration(seconds: 3));
-
-  _showStatus('Collecting metrics...');
-  await tester.pump();
-
-  final metrics = <BenchmarkMetric>[
-    ...collector.stopFrameTiming(scenario),
-    ...collector.snapshotMemory(scenario),
-    collector.wallClock(scenario, sw..stop()),
-  ];
-  return metrics;
+enum Workload {
+  idle,
+  scroll,
+  navigation,
+  full_interaction,
+  exception_burst,
+  video_playback,
 }
 
-// ── Scenario B: SDK idle, no screen capture ──────────────────────────────
-
-Future<List<BenchmarkMetric>> runSdkIdleNoCapture(
-    WidgetTester tester) async {
-  const scenario = 'sdk_idle_no_capture';
-  final collector = BenchmarkCollector();
-
-  _showStatus('Initializing SDK (no capture)...');
-  TracewayClient.initializeForTest(
-    _connectionString,
-    const TracewayOptions(screenCapture: false, debug: false),
-    reportSender: _reportSender,
-  );
-  _showSnackbar('SDK initialized (capture OFF)', color: Colors.blue);
-
-  final sw = Stopwatch()..start();
-  collector.snapshotMemoryStart();
-  collector.startFrameTiming();
-
-  await tester.pumpWidget(
-    Traceway(
-      child: _BenchmarkShell(
-        scenarioName: 'B: SDK idle (no capture)',
-        child: const _StressContent(),
-      ),
-    ),
-  );
-  await _pumpFor(tester, const Duration(milliseconds: 500));
-
-  await _stressInteractions(tester);
-
-  _showStatus('Idle rendering with SDK...');
-  await _pumpFor(tester, const Duration(seconds: 3));
-
-  _showStatus('Collecting metrics...');
-  await tester.pump();
-
-  final metrics = <BenchmarkMetric>[
-    ...collector.stopFrameTiming(scenario),
-    ...collector.snapshotMemory(scenario),
-    collector.wallClock(scenario, sw..stop()),
-  ];
-
-  await TracewayClient.resetForTest();
-  return metrics;
+enum SdkConfig {
+  no_sdk,
+  sdk_no_capture,
+  sdk_capture,
+  sdk_capture_disk,
 }
 
-// ── Scenario C: SDK burst exceptions, no screen capture ──────────────────
+const _workloadLabels = {
+  Workload.idle: 'Idle Rendering',
+  Workload.scroll: 'Scroll Stress',
+  Workload.navigation: 'Navigation',
+  Workload.full_interaction: 'Full Interaction',
+  Workload.exception_burst: 'Exception Burst',
+  Workload.video_playback: 'Video Playback',
+};
 
-Future<List<BenchmarkMetric>> runSdkBurstNoCapture(
-    WidgetTester tester) async {
-  const scenario = 'sdk_burst_no_capture';
+const _configLabels = {
+  SdkConfig.no_sdk: 'No SDK',
+  SdkConfig.sdk_no_capture: 'SDK (no capture)',
+  SdkConfig.sdk_capture: 'SDK + capture',
+  SdkConfig.sdk_capture_disk: 'SDK + capture + disk',
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Unified scenario runner
+// ═══════════════════════════════════════════════════════════════════════════
+
+Future<List<BenchmarkMetric>> runScenario({
+  required WidgetTester tester,
+  required String workload,
+  required String config,
+}) async {
+  final wl = Workload.values.byName(workload);
+  final cfg = SdkConfig.values.byName(config);
+  final scenario = '${workload}__$config';
+  final displayName = '${_workloadLabels[wl]} | ${_configLabels[cfg]}';
+
+  final hasCapture = cfg == SdkConfig.sdk_capture || cfg == SdkConfig.sdk_capture_disk;
+  final hasSdk = cfg != SdkConfig.no_sdk;
+
+  // ── Phase 1: SDK setup ──────────────────────────────────────────────
+  Directory? storeDir;
+
+  switch (cfg) {
+    case SdkConfig.no_sdk:
+      break;
+
+    case SdkConfig.sdk_no_capture:
+      _showStatus('Initializing SDK (no capture)...');
+      TracewayClient.initializeForTest(
+        _connectionString,
+        const TracewayOptions(screenCapture: false, debug: false),
+        reportSender: _reportSender,
+      );
+      _showSnackbar('SDK initialized (capture OFF)', color: Colors.blue);
+      break;
+
+    case SdkConfig.sdk_capture:
+      _showStatus('Initializing SDK (screen capture ON)...');
+      TracewayClient.initializeForTest(
+        _connectionString,
+        const TracewayOptions(
+          screenCapture: true,
+          debug: false,
+          fps: 15,
+          maxBufferFrames: 150,
+          capturePixelRatio: 0.75,
+          maxPendingExceptions: 10,
+        ),
+        reportSender: _reportSender,
+      );
+      _showSnackbar('SDK initialized (capture ON)', color: Colors.orange);
+      break;
+
+    case SdkConfig.sdk_capture_disk:
+      storeDir = await Directory.systemTemp.createTemp('traceway_bench_');
+      final store = ExceptionStore(
+        maxLocalFiles: 30,
+        maxAgeHours: 48,
+        testDir: storeDir,
+      );
+      await store.init();
+      _showStatus('Initializing SDK (capture + disk)...');
+      TracewayClient.initializeForTest(
+        _connectionString,
+        const TracewayOptions(
+          screenCapture: true,
+          debug: false,
+          fps: 15,
+          maxBufferFrames: 150,
+          capturePixelRatio: 0.75,
+          persistToDisk: true,
+          maxPendingExceptions: 10,
+        ),
+        reportSender: _reportSender,
+        store: store,
+      );
+      _showSnackbar('SDK initialized (capture + disk)', color: Colors.orange);
+      break;
+  }
+
+  // ── Phase 2: Render widget tree ─────────────────────────────────────
+  VideoPlayerController? videoController;
+  Widget content;
+
+  if (wl == Workload.video_playback) {
+    _showStatus('Loading video...');
+    videoController = VideoPlayerController.asset(
+      'assets/videos/BigBuckBunny_15snonSeg.mp4',
+    );
+    await videoController.initialize();
+    await videoController.setLooping(false);
+    content = _VideoContent(controller: videoController);
+  } else {
+    content = const _StressContent();
+  }
+
+  final shell = _BenchmarkShell(scenarioName: displayName, child: content);
+  final rootWidget = hasSdk ? Traceway(child: shell) : shell;
+
   final collector = BenchmarkCollector();
-
-  _showStatus('Initializing SDK (no capture, burst mode)...');
-  TracewayClient.initializeForTest(
-    _connectionString,
-    const TracewayOptions(
-      screenCapture: false,
-      debug: false,
-      maxPendingExceptions: 25,
-    ),
-    reportSender: _reportSender,
-  );
-  _showSnackbar('SDK initialized (burst test)', color: Colors.blue);
-
   final sw = Stopwatch()..start();
   collector.snapshotMemoryStart();
   collector.startFrameTiming();
 
-  await tester.pumpWidget(
-    Traceway(
-      child: _BenchmarkShell(
-        scenarioName: 'C: SDK + 20 exceptions',
-        child: const _StressContent(),
-      ),
-    ),
-  );
+  await tester.pumpWidget(rootWidget);
   await _pumpFor(tester, const Duration(milliseconds: 500));
 
-  await _stressInteractions(tester);
+  // ── Phase 3: Execute workload ───────────────────────────────────────
+  var captureTimes = <int>[];
 
-  // Fire 20 exceptions with visual feedback.
-  _showStatus('Firing 20 exceptions...');
-  await tester.pump();
-  final captureTimes = <int>[];
-  for (var i = 0; i < 20; i++) {
-    try {
-      throw FormatException('Benchmark exception #$i');
-    } catch (e, st) {
-      captureTimes.add(_fireException('#${i + 1}/20', e, st));
+  try {
+    switch (wl) {
+      case Workload.idle:
+        _showStatus('Idle rendering...');
+        await _pumpFor(tester, const Duration(seconds: 5));
+        break;
+
+      case Workload.scroll:
+        await _scrollInteraction(tester);
+        _showStatus('Settling...');
+        await _pumpFor(tester, const Duration(seconds: 3));
+        break;
+
+      case Workload.navigation:
+        await _navInteraction(tester);
+        _showStatus('Settling...');
+        await _pumpFor(tester, const Duration(seconds: 3));
+        break;
+
+      case Workload.full_interaction:
+        await _stressInteractions(tester);
+        _showStatus('Settling...');
+        await _pumpFor(tester, const Duration(seconds: 3));
+        break;
+
+      case Workload.exception_burst:
+        await _stressInteractions(tester);
+        if (hasCapture) {
+          _showStatus('Filling capture buffer...');
+          await _pumpFor(tester, const Duration(seconds: 8));
+        }
+        _showStatus('Firing 5 exceptions...');
+        await tester.pump();
+        for (var i = 0; i < 5; i++) {
+          try {
+            throw StateError('Benchmark exception #$i');
+          } catch (e, st) {
+            captureTimes.add(_fireException('#${i + 1}/5', e, st));
+          }
+          await _pumpFor(tester, const Duration(seconds: 2));
+        }
+        _showStatus('Settling after exceptions...');
+        await _pumpFor(tester, const Duration(seconds: 10));
+        break;
+
+      case Workload.video_playback:
+        await videoController!.play();
+        _showStatus('Video playing...');
+        await _pumpFor(tester, const Duration(seconds: 10));
+        _showStatus('Settling...');
+        await _pumpFor(tester, const Duration(seconds: 3));
+        break;
     }
-    // Pump a frame so the snackbar is visible.
-    await tester.pump(const Duration(milliseconds: 50));
-  }
 
-  _showStatus('Waiting for sync to settle...');
-  await _pumpFor(tester, const Duration(seconds: 3));
-  await TracewayClient.instance!.flush(3000);
+    // ── Phase 4: Collect metrics ──────────────────────────────────────
+    _showStatus('Collecting metrics...');
+    await tester.pump();
 
-  _showSnackbar('Flush complete', color: Colors.green);
-  _showStatus('Collecting metrics...');
-  await tester.pump();
+    final metrics = <BenchmarkMetric>[
+      ...collector.stopFrameTiming(scenario),
+      ...collector.snapshotMemory(scenario),
+      collector.wallClock(scenario, sw..stop()),
+    ];
 
-  final metrics = <BenchmarkMetric>[
-    ...collector.stopFrameTiming(scenario),
-    ...collector.snapshotMemory(scenario),
-    collector.wallClock(scenario, sw..stop()),
-    collector.exceptionCaptureAvg(scenario, captureTimes),
-  ];
-
-  await TracewayClient.resetForTest();
-  return metrics;
-}
-
-// ── Scenario D: SDK idle, with screen capture ────────────────────────────
-
-Future<List<BenchmarkMetric>> runSdkIdleWithCapture(
-    WidgetTester tester) async {
-  const scenario = 'sdk_idle_with_capture';
-  final collector = BenchmarkCollector();
-
-  _showStatus('Initializing SDK (screen capture ON)...');
-  TracewayClient.initializeForTest(
-    _connectionString,
-    const TracewayOptions(
-      screenCapture: true,
-      debug: false,
-      fps: 15,
-      maxBufferFrames: 150,
-      capturePixelRatio: 0.75,
-    ),
-    reportSender: _reportSender,
-  );
-  _showSnackbar('SDK initialized (capture ON)', color: Colors.orange);
-
-  final sw = Stopwatch()..start();
-  collector.snapshotMemoryStart();
-  collector.startFrameTiming();
-
-  await tester.pumpWidget(
-    Traceway(
-      child: _BenchmarkShell(
-        scenarioName: 'D: SDK + screen capture (idle)',
-        child: const _StressContent(),
-      ),
-    ),
-  );
-  await _pumpFor(tester, const Duration(milliseconds: 500));
-
-  await _stressInteractions(tester);
-
-  _showStatus('Screen capture running — filling frame buffer...');
-  await _pumpFor(tester, const Duration(seconds: 8));
-
-  _showStatus('Collecting metrics...');
-  await tester.pump();
-
-  final metrics = <BenchmarkMetric>[
-    ...collector.stopFrameTiming(scenario),
-    ...collector.snapshotMemory(scenario),
-    collector.wallClock(scenario, sw..stop()),
-  ];
-
-  await TracewayClient.resetForTest();
-  return metrics;
-}
-
-// ── Scenario E: SDK burst exceptions, with screen capture ────────────────
-
-Future<List<BenchmarkMetric>> runSdkBurstWithCapture(
-    WidgetTester tester) async {
-  const scenario = 'sdk_burst_with_capture';
-  final collector = BenchmarkCollector();
-
-  _showStatus('Initializing SDK (capture + exceptions)...');
-  TracewayClient.initializeForTest(
-    _connectionString,
-    const TracewayOptions(
-      screenCapture: true,
-      debug: false,
-      fps: 15,
-      maxBufferFrames: 150,
-      capturePixelRatio: 0.75,
-      maxPendingExceptions: 10,
-    ),
-    reportSender: _reportSender,
-  );
-  _showSnackbar('SDK initialized (capture + burst)', color: Colors.orange);
-
-  final sw = Stopwatch()..start();
-  collector.snapshotMemoryStart();
-  collector.startFrameTiming();
-
-  await tester.pumpWidget(
-    Traceway(
-      child: _BenchmarkShell(
-        scenarioName: 'E: SDK + capture + 5 exceptions',
-        child: const _StressContent(),
-      ),
-    ),
-  );
-  await _pumpFor(tester, const Duration(milliseconds: 500));
-
-  await _stressInteractions(tester);
-
-  _showStatus('Screen capture running — filling frame buffer...');
-  await _pumpFor(tester, const Duration(seconds: 8));
-
-  // Fire 5 exceptions — each triggers MP4 video encoding from the frame
-  // buffer. The SDK's debounce timer handles sync AFTER each recording
-  // completes, so we just need to keep pumping long enough for all
-  // encodings to finish and the SDK to sync on its own.
-  _showStatus('Firing 5 exceptions (triggers MP4 encoding)...');
-  await tester.pump();
-  final captureTimes = <int>[];
-  for (var i = 0; i < 5; i++) {
-    try {
-      throw StateError('Benchmark capture exception #$i');
-    } catch (e, st) {
-      captureTimes.add(_fireException('#${i + 1}/5 (MP4 encode)', e, st));
+    if (wl == Workload.exception_burst) {
+      metrics.add(collector.exceptionCaptureAvg(scenario, captureTimes));
     }
-    await _pumpFor(tester, const Duration(seconds: 2));
-  }
 
-  // Keep pumping so the SDK can encode recordings and sync naturally.
-  _showStatus('Waiting for MP4 encoding + auto-sync...');
-  await _pumpFor(tester, const Duration(seconds: 10));
-
-  _showSnackbar('Done', color: Colors.green);
-  _showStatus('Collecting metrics...');
-  await tester.pump();
-
-  final metrics = <BenchmarkMetric>[
-    ...collector.stopFrameTiming(scenario),
-    ...collector.snapshotMemory(scenario),
-    collector.wallClock(scenario, sw..stop()),
-    collector.exceptionCaptureAvg(scenario, captureTimes),
-  ];
-
-  await TracewayClient.resetForTest();
-  return metrics;
-}
-
-// ── Scenario F: Video playback + screen capture + exception burst ────────
-
-Future<List<BenchmarkMetric>> runVideoBurstWithCapture(
-    WidgetTester tester) async {
-  const scenario = 'video_burst_with_capture';
-  final collector = BenchmarkCollector();
-
-  _showStatus('Initializing SDK (capture + video)...');
-  TracewayClient.initializeForTest(
-    _connectionString,
-    const TracewayOptions(
-      screenCapture: true,
-      debug: false,
-      fps: 15,
-      maxBufferFrames: 150,
-      capturePixelRatio: 0.75,
-      maxPendingExceptions: 10,
-    ),
-    reportSender: _reportSender,
-  );
-
-  _showStatus('Loading video...');
-  final videoController = VideoPlayerController.asset(
-    'assets/videos/BigBuckBunny_15snonSeg.mp4',
-  );
-  await videoController.initialize();
-  await videoController.setLooping(false);
-  _showSnackbar('Video loaded, starting playback', color: Colors.orange);
-
-  final sw = Stopwatch()..start();
-  collector.snapshotMemoryStart();
-  collector.startFrameTiming();
-
-  await tester.pumpWidget(
-    Traceway(
-      child: _BenchmarkShell(
-        scenarioName: 'F: Video + capture + 5 exceptions',
-        child: _VideoContent(controller: videoController),
-      ),
-    ),
-  );
-  await _pumpFor(tester, const Duration(milliseconds: 500));
-
-  // Start playback.
-  await videoController.play();
-  _showStatus('Video playing — screen capture recording...');
-
-  // Let video play for 10 seconds.
-  await _pumpFor(tester, const Duration(seconds: 10));
-
-  // Fire 5 consecutive exceptions while video is still playing.
-  // Each triggers MP4 encoding from the screen recording buffer.
-  // Let the SDK sync naturally after each recording completes.
-  _showStatus('Firing 5 exceptions during video playback...');
-  await tester.pump();
-  final captureTimes = <int>[];
-  for (var i = 0; i < 5; i++) {
-    try {
-      throw StateError('Video benchmark exception #$i');
-    } catch (e, st) {
-      captureTimes.add(
-          _fireException('#${i + 1}/5 (video + MP4 encode)', e, st));
+    return metrics;
+  } finally {
+    // ── Phase 5: Cleanup ──────────────────────────────────────────────
+    if (videoController != null) {
+      await videoController.pause();
+      await videoController.dispose();
     }
-    await _pumpFor(tester, const Duration(seconds: 2));
-  }
 
-  // Keep pumping so the SDK can encode recordings and sync naturally.
-  _showStatus('Waiting for MP4 encoding + auto-sync...');
-  await _pumpFor(tester, const Duration(seconds: 10));
-
-  _showSnackbar('Done', color: Colors.green);
-  _showStatus('Collecting metrics...');
-  await tester.pump();
-
-  await videoController.pause();
-  await videoController.dispose();
-
-  final metrics = <BenchmarkMetric>[
-    ...collector.stopFrameTiming(scenario),
-    ...collector.snapshotMemory(scenario),
-    collector.wallClock(scenario, sw..stop()),
-    collector.exceptionCaptureAvg(scenario, captureTimes),
-  ];
-
-  await TracewayClient.resetForTest();
-  return metrics;
-}
-
-// ── Scenario G: Baseline video playback (no SDK) ────────────────────────
-
-Future<List<BenchmarkMetric>> runVideoBaseline(WidgetTester tester) async {
-  const scenario = 'video_baseline';
-  final collector = BenchmarkCollector();
-
-  _showStatus('Loading video (no SDK)...');
-  final videoController = VideoPlayerController.asset(
-    'assets/videos/BigBuckBunny_15snonSeg.mp4',
-  );
-  await videoController.initialize();
-  await videoController.setLooping(false);
-  _showSnackbar('Video loaded, starting playback (no SDK)', color: Colors.blue);
-
-  final sw = Stopwatch()..start();
-  collector.snapshotMemoryStart();
-  collector.startFrameTiming();
-
-  await tester.pumpWidget(
-    _BenchmarkShell(
-      scenarioName: 'G: Video baseline (no SDK)',
-      child: _VideoContent(controller: videoController),
-    ),
-  );
-  await _pumpFor(tester, const Duration(milliseconds: 500));
-
-  await videoController.play();
-  _showStatus('Video playing — no SDK overhead...');
-
-  await _pumpFor(tester, const Duration(seconds: 10));
-
-  _showSnackbar('Done', color: Colors.green);
-  _showStatus('Collecting metrics...');
-  await tester.pump();
-
-  await videoController.pause();
-  await videoController.dispose();
-
-  final metrics = <BenchmarkMetric>[
-    ...collector.stopFrameTiming(scenario),
-    ...collector.snapshotMemory(scenario),
-    collector.wallClock(scenario, sw..stop()),
-  ];
-  return metrics;
-}
-
-// ── Scenario H: Burst exceptions WITH disk store ────────────────────────
-
-Future<List<BenchmarkMetric>> runSdkBurstWithDiskStore(
-    WidgetTester tester) async {
-  const scenario = 'sdk_burst_with_disk_store';
-  final collector = BenchmarkCollector();
-
-  // Create a real temp directory for disk persistence.
-  final storeDir = await Directory.systemTemp.createTemp('traceway_bench_');
-  final store = ExceptionStore(
-    maxLocalFiles: 30,
-    maxAgeHours: 48,
-    testDir: storeDir,
-  );
-  await store.init();
-
-  _showStatus('Initializing SDK (disk store ON)...');
-  TracewayClient.initializeForTest(
-    _connectionString,
-    const TracewayOptions(
-      screenCapture: false,
-      debug: false,
-      persistToDisk: true,
-      maxPendingExceptions: 25,
-    ),
-    reportSender: _reportSender,
-    store: store,
-  );
-  _showSnackbar('SDK initialized (disk ON)', color: Colors.orange);
-
-  final sw = Stopwatch()..start();
-  collector.snapshotMemoryStart();
-  collector.startFrameTiming();
-
-  await tester.pumpWidget(
-    Traceway(
-      child: _BenchmarkShell(
-        scenarioName: 'H: SDK + 20 exceptions (disk ON)',
-        child: const _StressContent(),
-      ),
-    ),
-  );
-  await _pumpFor(tester, const Duration(milliseconds: 500));
-
-  await _stressInteractions(tester);
-
-  _showStatus('Firing 20 exceptions (disk store ON)...');
-  await tester.pump();
-  final captureTimes = <int>[];
-  for (var i = 0; i < 20; i++) {
-    try {
-      throw FormatException('Disk store benchmark exception #$i');
-    } catch (e, st) {
-      captureTimes.add(_fireException('#${i + 1}/20 (disk ON)', e, st));
+    if (hasSdk && TracewayClient.instance != null) {
+      try {
+        await TracewayClient.instance!.flush(3000);
+      } catch (_) {}
+      await TracewayClient.resetForTest();
     }
-    await tester.pump(const Duration(milliseconds: 50));
-  }
 
-  _showStatus('Waiting for sync to settle...');
-  await _pumpFor(tester, const Duration(seconds: 3));
-  await TracewayClient.instance!.flush(3000);
-
-  _showSnackbar('Flush complete (disk ON)', color: Colors.green);
-  _showStatus('Collecting metrics...');
-  await tester.pump();
-
-  final metrics = <BenchmarkMetric>[
-    ...collector.stopFrameTiming(scenario),
-    ...collector.snapshotMemory(scenario),
-    collector.wallClock(scenario, sw..stop()),
-    collector.exceptionCaptureAvg(scenario, captureTimes),
-  ];
-
-  await TracewayClient.resetForTest();
-
-  // Clean up temp directory.
-  if (storeDir.existsSync()) {
-    storeDir.deleteSync(recursive: true);
-  }
-
-  return metrics;
-}
-
-// ── Scenario I: Burst exceptions WITHOUT disk store ─────────────────────
-
-Future<List<BenchmarkMetric>> runSdkBurstNoDiskStore(
-    WidgetTester tester) async {
-  const scenario = 'sdk_burst_no_disk_store';
-  final collector = BenchmarkCollector();
-
-  _showStatus('Initializing SDK (disk store OFF)...');
-  TracewayClient.initializeForTest(
-    _connectionString,
-    const TracewayOptions(
-      screenCapture: false,
-      debug: false,
-      persistToDisk: false,
-      maxPendingExceptions: 25,
-    ),
-    reportSender: _reportSender,
-  );
-  _showSnackbar('SDK initialized (disk OFF)', color: Colors.blue);
-
-  final sw = Stopwatch()..start();
-  collector.snapshotMemoryStart();
-  collector.startFrameTiming();
-
-  await tester.pumpWidget(
-    Traceway(
-      child: _BenchmarkShell(
-        scenarioName: 'I: SDK + 20 exceptions (disk OFF)',
-        child: const _StressContent(),
-      ),
-    ),
-  );
-  await _pumpFor(tester, const Duration(milliseconds: 500));
-
-  await _stressInteractions(tester);
-
-  _showStatus('Firing 20 exceptions (disk store OFF)...');
-  await tester.pump();
-  final captureTimes = <int>[];
-  for (var i = 0; i < 20; i++) {
-    try {
-      throw FormatException('No-disk benchmark exception #$i');
-    } catch (e, st) {
-      captureTimes.add(_fireException('#${i + 1}/20 (disk OFF)', e, st));
+    if (storeDir != null && storeDir.existsSync()) {
+      storeDir.deleteSync(recursive: true);
     }
-    await tester.pump(const Duration(milliseconds: 50));
   }
-
-  _showStatus('Waiting for sync to settle...');
-  await _pumpFor(tester, const Duration(seconds: 3));
-  await TracewayClient.instance!.flush(3000);
-
-  _showSnackbar('Flush complete (disk OFF)', color: Colors.green);
-  _showStatus('Collecting metrics...');
-  await tester.pump();
-
-  final metrics = <BenchmarkMetric>[
-    ...collector.stopFrameTiming(scenario),
-    ...collector.snapshotMemory(scenario),
-    collector.wallClock(scenario, sw..stop()),
-    collector.exceptionCaptureAvg(scenario, captureTimes),
-  ];
-
-  await TracewayClient.resetForTest();
-  return metrics;
 }
