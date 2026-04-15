@@ -285,6 +285,11 @@ class ScreenRecorder with WidgetsBindingObserver {
         if (f.width > maxWidth) maxWidth = f.width;
         if (f.height > maxHeight) maxHeight = f.height;
       }
+
+      // H.264 requires even dimensions. Round up to nearest even number.
+      if (maxWidth.isOdd) maxWidth++;
+      if (maxHeight.isOdd) maxHeight++;
+
       final durationSeconds = frames.length * _captureIntervalMs / 1000.0;
 
       final tempDir = await getTemporaryDirectory();
