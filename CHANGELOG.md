@@ -1,3 +1,7 @@
+## 1.0.2 — 2026-04-16
+
+- Updated the readme with all parameters and masking
+
 ## 1.0.1 — 2026-04-15
 
 - Version update for clean git history
