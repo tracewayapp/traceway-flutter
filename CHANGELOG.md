@@ -1,3 +1,7 @@
+## 1.0.0 — 2026-04-15
+
+- Implemented git issues from 1 to 4
+
 ## 0.1.4 — 2026-04-10
 
 - Fix for the first issue sync addressed
