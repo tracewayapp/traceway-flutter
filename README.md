@@ -23,6 +23,8 @@ Error tracking and screen recording for Flutter apps. Capture exceptions with fu
 - Full Dart stack traces
 - Screen recording — last ~10 seconds encoded as MP4 video
 - Touch/click positions rendered on recordings
+- Privacy masking — blur or blank sensitive UI regions in recordings
+- Disk persistence — pending exceptions survive app restarts
 - Gzip-compressed transport
 - Simple one-line setup
 
@@ -84,6 +86,10 @@ await TracewayClient.instance?.flush();
 | `capturePixelRatio` | `0.75` | Screenshot resolution scale factor |
 | `maxBufferFrames` | `150` | Max frames in recording buffer (~10s at 15fps) |
 | `fps` | `15` | Frames per second for screen capture (1–59) |
+| `maxPendingExceptions` | `5` | Max exceptions held in memory before oldest is dropped |
+| `persistToDisk` | `true` | Persist pending exceptions to disk so they survive app restarts |
+| `maxLocalFiles` | `5` | Max exception files stored on disk |
+| `localFileMaxAgeHours` | `12` | Hours after which unsynced local files are deleted |
 
 ## Platform Setup
 
@@ -129,6 +135,38 @@ When `screenCapture: true`, the SDK:
 4. Sends the video alongside the stack trace
 
 Touch and click positions are drawn directly onto the recorded frames (invisible to the user) so you can see exactly what the user was doing before the crash.
+
+## Privacy Masking
+
+Use `TracewayPrivacyMask` to hide sensitive content in screen recordings. Masked regions are applied to the recorded frames only — the user sees no visual change in the live app.
+
+**Blur (pixelation):**
+
+```dart
+TracewayPrivacyMask(
+  child: Text('4242 4242 4242 4242'),
+)
+```
+
+The default mode is `TracewayMaskMode.blur()` which pixelates the region. You can control the intensity with the `ratio` parameter (0.0 = light, 1.0 = heavy):
+
+```dart
+TracewayPrivacyMask(
+  mode: TracewayMaskMode.blur(ratio: 0.5),
+  child: CreditCardWidget(),
+)
+```
+
+**Blank (solid fill):**
+
+```dart
+TracewayPrivacyMask(
+  mode: TracewayMaskMode.blank(color: Color(0xFF000000)),
+  child: SensitiveDataWidget(),
+)
+```
+
+This replaces the region with a solid color (black by default) in the recording.
 
 ## Platform Support
 
