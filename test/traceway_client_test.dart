@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:traceway/src/traceway_client.dart';
 import 'package:traceway/src/traceway_options.dart';
