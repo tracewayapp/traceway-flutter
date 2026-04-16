@@ -1,3 +1,7 @@
+## 1.0.1 — 2026-04-15
+
+- Version update for clean git history
+
 ## 1.0.0 — 2026-04-15
 
 - Implemented git issues from 1 to 4
