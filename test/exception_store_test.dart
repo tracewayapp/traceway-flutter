@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:traceway/src/events/traceway_event.dart';
 import 'package:traceway/src/exception_store.dart';
 import 'package:traceway/src/models/exception_stack_trace.dart';
 import 'package:traceway/src/models/session_recording_payload.dart';
@@ -327,8 +328,7 @@ void main() {
   });
 
   group('ExceptionStore pruning', () {
-    test('pruneExpired removes files older than maxAgeHours on init',
-        () async {
+    test('pruneExpired removes files older than maxAgeHours on init', () async {
       final store = createStore(maxAgeHours: 1);
       await store.init();
 
@@ -423,8 +423,7 @@ void main() {
       expect(restored.isTask, true);
       expect(restored.stackTrace, 'Error: test');
       expect(restored.recordedAt, DateTime.utc(2026, 4, 14));
-      expect(
-          restored.attributes, {'os.name': 'ios', 'device.model': 'iPhone'});
+      expect(restored.attributes, {'os.name': 'ios', 'device.model': 'iPhone'});
       expect(restored.isMessage, true);
       expect(restored.sessionRecordingId, 'session-1');
       expect(restored.distributedTraceId, 'dtrace-1');
@@ -473,14 +472,21 @@ void main() {
         events: [
           {'type': 'flutter_video', 'data': 'base64...'}
         ],
+        logs: [
+          LogEvent(message: 'hello world'),
+        ],
+        actions: [
+          CustomEvent(category: 'cart', name: 'add', data: {'sku': '123'}),
+        ],
       );
 
       final json = original.toJson();
       final restored = SessionRecordingPayload.fromJson(json);
 
       expect(restored.exceptionId, 'exc-1');
-      expect(restored.events, isA<List>());
-      expect((restored.events as List).first['type'], 'flutter_video');
+      expect(restored.events.first['type'], 'flutter_video');
+      expect(restored.logs.single.message, 'hello world');
+      expect(restored.actions.single, isA<CustomEvent>());
     });
 
     test('fromJson handles empty events', () {
@@ -494,6 +500,8 @@ void main() {
 
       expect(restored.exceptionId, 'exc-2');
       expect(restored.events, isEmpty);
+      expect(restored.logs, isEmpty);
+      expect(restored.actions, isEmpty);
     });
   });
 }

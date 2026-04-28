@@ -1,8 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 
 import 'error_handler.dart';
+import 'events/log_capture.dart';
+import 'events/network_capture.dart';
+import 'events/traceway_navigator_observer.dart';
 import 'screen_recorder.dart';
 import 'traceway_client.dart';
 import 'traceway_options.dart';
@@ -12,12 +16,40 @@ class Traceway extends StatefulWidget {
 
   const Traceway({super.key, required this.child});
 
+  /// A shared [NavigatorObserver] that records navigation transitions into the
+  /// rolling action buffer. Attach it to your `MaterialApp.navigatorObservers`
+  /// (or any custom Navigator) to enable navigation capture.
+  static final TracewayNavigatorObserver navigatorObserver =
+      TracewayNavigatorObserver();
+
+  /// Records a custom user-defined breadcrumb. Convenience pass-through to
+  /// `TracewayClient.instance?.recordAction(...)`.
+  static void recordAction({
+    required String category,
+    required String name,
+    Map<String, dynamic>? data,
+  }) {
+    TracewayClient.instance?.recordAction(
+      category: category,
+      name: name,
+      data: data,
+    );
+  }
+
   static void run({
     required String connectionString,
     required Widget child,
     TracewayOptions options = const TracewayOptions(),
   }) {
     final errorHandler = ErrorHandler();
+
+    if (options.captureNetwork) {
+      try {
+        HttpOverrides.global = TracewayHttpOverrides(HttpOverrides.current);
+      } catch (_) {
+        // Ignore — overrides may be unavailable on some platforms (e.g. web).
+      }
+    }
 
     runZonedGuarded(
       () {
@@ -30,6 +62,7 @@ class Traceway extends StatefulWidget {
         runApp(Traceway(child: child));
       },
       errorHandler.handleZoneError,
+      zoneSpecification: options.captureLogs ? buildLogZoneSpec() : null,
     );
   }
 

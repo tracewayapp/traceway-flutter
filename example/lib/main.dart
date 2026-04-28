@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:traceway/traceway.dart';
 
 // Pass via: flutter run --dart-define=TRACEWAY_DSN=token@https://...
@@ -33,6 +34,7 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
+      navigatorObservers: [Traceway.navigatorObserver],
       home: const HomePage(),
     );
   }
@@ -143,6 +145,48 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 8),
             _ActionButton(
+              label: 'Make HTTP Request',
+              icon: Icons.cloud_download,
+              color: Colors.teal,
+              onPressed: () async {
+                _addLog('GET https://example.com ...');
+                try {
+                  final res =
+                      await http.get(Uri.parse('https://example.com'));
+                  _addLog('GET example.com -> ${res.statusCode}');
+                } catch (e) {
+                  _addLog('GET failed: $e');
+                }
+              },
+            ),
+            const SizedBox(height: 8),
+            _ActionButton(
+              label: 'Open Detail Page',
+              icon: Icons.arrow_forward,
+              color: Colors.indigo,
+              onPressed: () {
+                Navigator.of(context).push(MaterialPageRoute(
+                  settings: const RouteSettings(name: '/detail'),
+                  builder: (_) => const _DetailPage(),
+                ));
+              },
+            ),
+            const SizedBox(height: 8),
+            _ActionButton(
+              label: 'Record Custom Action',
+              icon: Icons.bookmark_added,
+              color: Colors.purple,
+              onPressed: () {
+                Traceway.recordAction(
+                  category: 'cart',
+                  name: 'add_item',
+                  data: {'sku': 'SKU-123', 'qty': 2},
+                );
+                _addLog('Recorded custom action cart/add_item');
+              },
+            ),
+            const SizedBox(height: 8),
+            _ActionButton(
               label: 'Flush (Force Send)',
               icon: Icons.send,
               color: Colors.green,
@@ -187,6 +231,23 @@ class _HomePageState extends State<HomePage> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DetailPage extends StatelessWidget {
+  const _DetailPage();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Detail')),
+      body: Center(
+        child: FilledButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Back'),
         ),
       ),
     );

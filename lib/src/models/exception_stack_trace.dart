@@ -23,15 +23,15 @@ class ExceptionStackTrace {
   });
 
   Map<String, dynamic> toJson() => {
-    'traceId': traceId,
-    'isTask': isTask,
-    'stackTrace': stackTrace,
-    'recordedAt': recordedAt.toUtc().toIso8601String(),
-    'attributes': attributes ?? {},
-    'isMessage': isMessage,
-    'sessionRecordingId': sessionRecordingId,
-    'distributedTraceId': distributedTraceId,
-  };
+        'traceId': traceId,
+        'isTask': isTask,
+        'stackTrace': stackTrace,
+        'recordedAt': recordedAt.toUtc().toIso8601String(),
+        'attributes': attributes ?? {},
+        'isMessage': isMessage,
+        'sessionRecordingId': sessionRecordingId,
+        'distributedTraceId': distributedTraceId,
+      };
 
   factory ExceptionStackTrace.fromJson(Map<String, dynamic> json) {
     return ExceptionStackTrace(

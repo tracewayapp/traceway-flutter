@@ -379,6 +379,8 @@ class ScreenRecorder with WidgetsBindingObserver {
             'durationSeconds': durationSeconds,
           }
         ],
+        startedAt: frames.first.timestamp,
+        endedAt: frames.last.timestamp,
       );
     } catch (e) {
       if (debug) {

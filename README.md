@@ -23,6 +23,8 @@ Error tracking and screen recording for Flutter apps. Capture exceptions with fu
 - Full Dart stack traces
 - Screen recording — last ~10 seconds encoded as MP4 video
 - Touch/click positions rendered on recordings
+- **Logs** — every `print` / `debugPrint` from the last ~10 seconds
+- **Actions** — HTTP requests, navigation transitions, and custom user-defined breadcrumbs from the last ~10 seconds
 - Privacy masking — blur or blank sensitive UI regions in recordings
 - Disk persistence — pending exceptions survive app restarts
 - Gzip-compressed transport
@@ -90,6 +92,11 @@ await TracewayClient.instance?.flush();
 | `persistToDisk` | `true` | Persist pending exceptions to disk so they survive app restarts |
 | `maxLocalFiles` | `5` | Max exception files stored on disk |
 | `localFileMaxAgeHours` | `12` | Hours after which unsynced local files are deleted |
+| `captureLogs` | `true` | Mirror every `print` / `debugPrint` into the rolling log buffer |
+| `captureNetwork` | `true` | Install `HttpOverrides.global` to record every dart:io HTTP call |
+| `captureNavigation` | `true` | Record navigation transitions reported by `Traceway.navigatorObserver` |
+| `eventsWindow` | `10s` | Rolling window kept in the log/action buffers |
+| `eventsMaxCount` | `200` | Hard cap applied independently to logs and actions |
 
 ## Platform Setup
 
@@ -135,6 +142,62 @@ When `screenCapture: true`, the SDK:
 4. Sends the video alongside the stack trace
 
 Touch and click positions are drawn directly onto the recorded frames (invisible to the user) so you can see exactly what the user was doing before the crash.
+
+## Logs & Actions
+
+Every captured exception ships with the last ~10 seconds of session context, attached to the same session recording as the video:
+
+- **Logs** — every `print` / `debugPrint` line, captured via a Zone print override. `dart:developer.log` is **not** captured.
+- **Actions** are split into three channels:
+  - **Network** — every dart:io HTTP request (method, URL, status, duration, byte counts) via `HttpOverrides.global`. Catches `package:http`, Dio, Firebase, anything on dart:io. On Flutter web use `TracewayHttpClient` (see below).
+  - **Navigation** — push / pop / replace / remove from any `Navigator`, by attaching `Traceway.navigatorObserver` to your app.
+  - **Custom** — anything you call `Traceway.recordAction(...)` with.
+
+Logs and actions are kept in two separate rolling buffers, each capped at 200 entries / 10 seconds. They ship inside `sessionRecordings[].logs` and `sessionRecordings[].actions` on the wire — separate from the MP4 video chunks. Each recording also carries `startedAt` and `endedAt` ISO 8601 timestamps so the backend can align logs and actions onto the video timeline (`offsetIntoVideoMs = event.timestamp − recording.startedAt`).
+
+### Wire up navigation capture
+
+```dart
+MaterialApp(
+  navigatorObservers: [Traceway.navigatorObserver],
+  // ...
+)
+```
+
+### Record a custom action
+
+```dart
+Traceway.recordAction(
+  category: 'cart',
+  name: 'add_item',
+  data: {'sku': 'SKU-123', 'qty': 2},
+);
+```
+
+### Network capture on Flutter web (or with an explicit client)
+
+`HttpOverrides.global` does not run on Flutter web. Use `TracewayHttpClient` instead — it's a drop-in `http.Client`:
+
+```dart
+import 'package:traceway/traceway.dart';
+
+final client = TracewayHttpClient();
+final res = await client.get(Uri.parse('https://api.example.com/users'));
+```
+
+Pass it to Dio, Chopper, or any library that accepts a custom `http.Client`.
+
+### Disable a channel
+
+Each channel can be turned off individually via `TracewayOptions`:
+
+```dart
+TracewayOptions(
+  captureLogs: false,
+  captureNetwork: false,
+  captureNavigation: false,
+)
+```
 
 ## Privacy Masking
 
