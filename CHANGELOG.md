@@ -1,3 +1,7 @@
+## 1.0.4 — 2026-04-28
+
+- Added logs and navigation to each recording
+
 ## 1.0.3 — 2026-04-16
 
 - Updated readme
