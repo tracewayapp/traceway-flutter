@@ -81,6 +81,8 @@ class _HomePageState extends State<HomePage> {
             FilledButton.icon(
               onPressed: () {
                 setState(() => _counter++);
+                // Real `print` so the rolling log buffer picks it up.
+                print('counter incremented to $_counter');
                 _addLog('Counter incremented to $_counter');
               },
               icon: const Icon(Icons.add),
@@ -145,18 +147,53 @@ class _HomePageState extends State<HomePage> {
             ),
             const SizedBox(height: 8),
             _ActionButton(
-              label: 'Make HTTP Request',
+              label: 'Print Log Lines',
+              icon: Icons.terminal,
+              color: Colors.blueGrey,
+              onPressed: () {
+                // These flow through the Zone print override installed by
+                // Traceway.run() and end up in the rolling log buffer.
+                print('user pressed the print-log-lines button');
+                debugPrint('debugPrint also routes through print()');
+                print('three log lines, ready to ship with the next exception');
+                _addLog('Wrote 3 lines via print/debugPrint');
+              },
+            ),
+            const SizedBox(height: 8),
+            _ActionButton(
+              label: 'Burst HTTP Requests',
               icon: Icons.cloud_download,
               color: Colors.teal,
               onPressed: () async {
-                _addLog('GET https://example.com ...');
+                _addLog('Firing GET + POST + 404 ...');
+                // GET — JSONPlaceholder is a stable public test API.
                 try {
-                  final res =
-                      await http.get(Uri.parse('https://example.com'));
-                  _addLog('GET example.com -> ${res.statusCode}');
+                  final r = await http
+                      .get(Uri.parse('https://jsonplaceholder.typicode.com/posts/1'));
+                  print('GET /posts/1 -> ${r.statusCode} (${r.body.length} bytes)');
                 } catch (e) {
-                  _addLog('GET failed: $e');
+                  print('GET failed: $e');
                 }
+                // POST.
+                try {
+                  final r = await http.post(
+                    Uri.parse('https://jsonplaceholder.typicode.com/posts'),
+                    body: '{"title":"hello","body":"from traceway example","userId":1}',
+                    headers: {'content-type': 'application/json'},
+                  );
+                  print('POST /posts -> ${r.statusCode}');
+                } catch (e) {
+                  print('POST failed: $e');
+                }
+                // Non-2xx — should surface with a status code, not as an error.
+                try {
+                  final r = await http.get(Uri.parse(
+                      'https://jsonplaceholder.typicode.com/this-route-does-not-exist'));
+                  print('GET /missing -> ${r.statusCode}');
+                } catch (e) {
+                  print('GET missing failed: $e');
+                }
+                _addLog('Burst complete — check actions tab');
               },
             ),
             const SizedBox(height: 8),
@@ -165,6 +202,7 @@ class _HomePageState extends State<HomePage> {
               icon: Icons.arrow_forward,
               color: Colors.indigo,
               onPressed: () {
+                print('navigating to /detail');
                 Navigator.of(context).push(MaterialPageRoute(
                   settings: const RouteSettings(name: '/detail'),
                   builder: (_) => const _DetailPage(),
@@ -177,12 +215,48 @@ class _HomePageState extends State<HomePage> {
               icon: Icons.bookmark_added,
               color: Colors.purple,
               onPressed: () {
+                print('recording cart.add_item action');
                 Traceway.recordAction(
                   category: 'cart',
                   name: 'add_item',
                   data: {'sku': 'SKU-123', 'qty': 2},
                 );
                 _addLog('Recorded custom action cart/add_item');
+              },
+            ),
+            const SizedBox(height: 8),
+            _ActionButton(
+              label: 'Generate Activity, Then Crash',
+              icon: Icons.flash_on,
+              color: Colors.deepPurple,
+              onPressed: () async {
+                _addLog('Generating activity...');
+                print('checkout flow started');
+                Traceway.recordAction(
+                  category: 'checkout',
+                  name: 'started',
+                  data: {'cart_total': 49.95},
+                );
+                try {
+                  final r = await http.get(Uri.parse(
+                      'https://jsonplaceholder.typicode.com/users/1'));
+                  print('GET /users/1 -> ${r.statusCode}');
+                } catch (e) {
+                  print('GET /users/1 failed: $e');
+                }
+                Traceway.recordAction(
+                  category: 'checkout',
+                  name: 'payment_attempted',
+                );
+                debugPrint('about to throw the simulated payment error');
+                // Caught synchronously so the recording snapshot includes the
+                // print + http + 2 actions we just emitted.
+                try {
+                  throw StateError('payment gateway returned 502');
+                } catch (e, st) {
+                  TracewayClient.instance?.captureException(e, st);
+                }
+                _addLog('Activity recorded + exception captured');
               },
             ),
             const SizedBox(height: 8),

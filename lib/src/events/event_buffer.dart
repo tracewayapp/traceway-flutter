@@ -14,7 +14,7 @@ class EventBuffer<T extends TracewayEvent> {
 
   EventBuffer({
     this.window = const Duration(seconds: 10),
-    this.maxSize = 500,
+    this.maxSize = 200,
   });
 
   void add(T event) {
