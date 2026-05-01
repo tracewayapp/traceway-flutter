@@ -326,14 +326,14 @@ jobs:
             version: "16.6"
             tier: slow
             label: "iPhone 8 (iOS 16.6)"
-          - device: iphone13pro
-            version: "17.5"
+          - device: iphone14pro
+            version: "16.6"
             tier: mid
-            label: "iPhone 13 Pro (iOS 17.5)"
-          - device: iphone15
-            version: "18.0"
+            label: "iPhone 14 Pro (iOS 16.6)"
+          - device: iphone16pro
+            version: "18.3"
             tier: fast
-            label: "iPhone 15 (iOS 18.0)"
+            label: "iPhone 16 Pro (iOS 18.3)"
     steps:
       - uses: actions/checkout@v4
 
