@@ -5,11 +5,7 @@ import 'benchmark_harness.dart';
 import 'benchmark_scenarios.dart';
 
 void main() {
-  // ignore: avoid_print
-  print('BENCHMARK_RESULT:{"marker":"main_entered","file":"benchmark_test.dart"}');
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-  // ignore: avoid_print
-  print('BENCHMARK_RESULT:{"marker":"binding_initialized"}');
 
   const workloads = [
     'idle',
