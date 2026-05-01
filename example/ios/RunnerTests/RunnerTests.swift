@@ -9,8 +9,8 @@ class RunnerTests: XCTestCase {
   func testBenchmarks() {
     let app = XCUIApplication()
     app.launch()
-    let integrationTest = IntegrationTestPlugin.instance
-    let testResult = integrationTest.testResults
+    let integrationTest = IntegrationTestPlugin.instance()
+    let testResult = integrationTest.testResults ?? [:]
     for (testName, result) in testResult {
       XCTAssertEqual(
         result, "success",

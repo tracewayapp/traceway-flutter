@@ -155,7 +155,7 @@ jobs:
 
       - name: Zip test bundle for Firebase Test Lab
         working-directory: example/build/ios_integ/Build/Products
-        run: zip -r ${{ github.workspace }}/ios_tests.zip Release-iphoneos *.xctestrun
+        run: zip -r ${{ github.workspace }}/ios_tests.zip Debug-iphoneos *.xctestrun
 
       - uses: actions/upload-artifact@v4
         with:
