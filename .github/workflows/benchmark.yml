@@ -105,13 +105,18 @@ jobs:
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          # Decode secrets
+          set -x
           CERT_PATH=$RUNNER_TEMP/certificate.p12
           PP_PATH=$RUNNER_TEMP/profile.mobileprovision
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
 
           echo -n "$APPLE_CERTIFICATE_P12" | base64 --decode -o $CERT_PATH
           echo -n "$APPLE_PROVISIONING_PROFILE" | base64 --decode -o $PP_PATH
+
+          # Sanity-check decoded files
+          ls -la $CERT_PATH $PP_PATH
+          file $CERT_PATH $PP_PATH
+          openssl pkcs12 -in $CERT_PATH -info -nokeys -passin pass:"$APPLE_CERTIFICATE_PASSWORD" 2>&1 | head -20 || echo "openssl rejected the .p12"
 
           # Create and configure keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
@@ -121,6 +126,8 @@ jobs:
           # Import certificate (and private key) from the .p12 bundle
           security import $CERT_PATH -P "$APPLE_CERTIFICATE_PASSWORD" \
             -A -f pkcs12 -k $KEYCHAIN_PATH
+          # Show what actually landed in the keychain
+          security find-identity -v -p codesigning $KEYCHAIN_PATH || true
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
             -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
