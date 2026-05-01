@@ -170,6 +170,43 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS'
 
+      - name: Sanitize xctestrun for Firebase Test Lab
+        working-directory: example/build/ios_integ/Build/Products
+        run: |
+          # Strip Xcode 16+ profiler injection from xctestrun. FTL device images
+          # often lack /usr/lib/libRPAC.dylib so dyld load fails with "test failed
+          # to run". Also drop PERFC_* and APP_DISTRIBUTOR_ID_OVERRIDE.
+          for f in *.xctestrun; do
+            echo "=== Before cleanup: $f ==="
+            plutil -p "$f" | grep -E "DYLD_INSERT|PERFC_|APP_DISTRIBUTOR" || true
+
+            python3 <<PY
+          import plistlib
+          path = "$f"
+          with open(path, "rb") as fh:
+              data = plistlib.load(fh)
+          for key, val in data.items():
+              if key.startswith("__") or not isinstance(val, dict):
+                  continue
+              for env_key in ("EnvironmentVariables", "TestingEnvironmentVariables"):
+                  env = val.get(env_key, {})
+                  for k in list(env.keys()):
+                      if k.startswith("PERFC_") or k == "APP_DISTRIBUTOR_ID_OVERRIDE":
+                          del env[k]
+                      elif k == "DYLD_INSERT_LIBRARIES":
+                          paths = [p for p in env[k].split(":") if "libRPAC" not in p and p]
+                          if paths:
+                              env[k] = ":".join(paths)
+                          else:
+                              del env[k]
+          with open(path, "wb") as fh:
+              plistlib.dump(data, fh)
+          PY
+
+            echo "=== After cleanup: $f ==="
+            plutil -p "$f" | grep -E "DYLD_INSERT|PERFC_|APP_DISTRIBUTOR" || echo "(no profiler entries)"
+          done
+
       - name: Zip test bundle for Firebase Test Lab
         working-directory: example/build/ios_integ/Build/Products
         run: zip -r ${{ github.workspace }}/ios_tests.zip Debug-iphoneos *.xctestrun
