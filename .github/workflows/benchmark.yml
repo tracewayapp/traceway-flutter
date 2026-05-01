@@ -98,25 +98,23 @@ jobs:
         working-directory: example/ios
         run: pod install
 
-      - name: Install Apple certificate and provisioning profile
+      - name: Install Apple certificate and provisioning profiles
         env:
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          APPLE_PROVISIONING_PROFILE_TESTS: ${{ secrets.APPLE_PROVISIONING_PROFILE_TESTS }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -x
           CERT_PATH=$RUNNER_TEMP/certificate.p12
           PP_PATH=$RUNNER_TEMP/profile.mobileprovision
+          PP_TESTS_PATH=$RUNNER_TEMP/profile_tests.mobileprovision
           KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
 
           echo -n "$APPLE_CERTIFICATE_P12" | base64 --decode -o $CERT_PATH
           echo -n "$APPLE_PROVISIONING_PROFILE" | base64 --decode -o $PP_PATH
-
-          # Sanity-check decoded files
-          ls -la $CERT_PATH $PP_PATH
-          file $CERT_PATH $PP_PATH
-          openssl pkcs12 -in $CERT_PATH -info -nokeys -passin pass:"$APPLE_CERTIFICATE_PASSWORD" 2>&1 | head -20 || echo "openssl rejected the .p12"
+          echo -n "$APPLE_PROVISIONING_PROFILE_TESTS" | base64 --decode -o $PP_TESTS_PATH
 
           # Create and configure keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
@@ -126,15 +124,15 @@ jobs:
           # Import certificate (and private key) from the .p12 bundle
           security import $CERT_PATH -P "$APPLE_CERTIFICATE_PASSWORD" \
             -A -f pkcs12 -k $KEYCHAIN_PATH
-          # Show what actually landed in the keychain
           security find-identity -v -p codesigning $KEYCHAIN_PATH || true
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
             -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
           security list-keychain -d user -s $KEYCHAIN_PATH
 
-          # Install provisioning profile
+          # Install both provisioning profiles
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+          cp $PP_TESTS_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Pre-build Flutter iOS with dart-defines
         working-directory: example
