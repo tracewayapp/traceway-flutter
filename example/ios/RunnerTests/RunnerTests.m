@@ -1,44 +1,20 @@
 @import XCTest;
-@import ObjectiveC.runtime;
-@import integration_test;
+
+// Minimal native-only test bundle. No Flutter integration_test plugin.
+// If FTL can't run THIS, the issue is entirely outside our Flutter setup —
+// it's bundle handling, code signing, or DDI on FTL's side.
 
 @interface RunnerTests : XCTestCase
 @end
 
 @implementation RunnerTests
 
-// Hardcoded sanity test. Always exists, always passes.
-// Confirms XCTest can discover and execute tests in this bundle.
 - (void)testNativeSanityCheck {
   XCTAssertTrue(YES, @"native test bundle is reachable");
 }
 
-+ (NSArray<NSInvocation *> *)testInvocations {
-  NSMutableArray<NSInvocation *> *invocations = [NSMutableArray array];
-
-  // 1. Include the native sanity test via standard XCTest discovery.
-  [invocations addObjectsFromArray:[super testInvocations]];
-
-  // 2. Drive the Flutter integration test runner and synthesize XCTest
-  //    methods for each Dart test result it reports.
-  FLTIntegrationTestRunner *runner = [[FLTIntegrationTestRunner alloc] init];
-  NSMutableSet<NSString *> *seen = [NSMutableSet set];
-  [runner testIntegrationTestWithResults:^(SEL testSelector, BOOL success, NSString *failureMessage) {
-    NSString *name = NSStringFromSelector(testSelector);
-    if ([seen containsObject:name]) return;
-    [seen addObject:name];
-
-    IMP imp = imp_implementationWithBlock(^(id _self) {
-      XCTAssertTrue(success, @"%@", failureMessage ?: @"(no message)");
-    });
-    class_addMethod(self, testSelector, imp, "v@:");
-    NSMethodSignature *sig = [self instanceMethodSignatureForSelector:testSelector];
-    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-    inv.selector = testSelector;
-    [invocations addObject:inv];
-  }];
-
-  return invocations;
+- (void)testNativeArithmetic {
+  XCTAssertEqual(2 + 2, 4);
 }
 
 @end
