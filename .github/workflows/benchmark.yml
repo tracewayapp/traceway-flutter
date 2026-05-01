@@ -134,6 +134,22 @@ jobs:
           cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
           cp $PP_TESTS_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
 
+          # Diagnostics: dump what's actually installed
+          echo "===== Installed profiles ====="
+          for p in ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision; do
+            security cms -D -i "$p" 2>/dev/null > /tmp/pp.plist
+            echo "FILE: $(basename "$p")"
+            echo "  Name:   $(/usr/libexec/PlistBuddy -c 'Print :Name' /tmp/pp.plist 2>/dev/null)"
+            echo "  Team:   $(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' /tmp/pp.plist 2>/dev/null)"
+            echo "  AppID:  $(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /tmp/pp.plist 2>/dev/null)"
+            /usr/libexec/PlistBuddy -x -c 'Print :DeveloperCertificates:0' /tmp/pp.plist 2>/dev/null | \
+              grep -A100 '<data>' | sed 's/<[^>]*>//g' | tr -d '[:space:]' | \
+              base64 --decode 2>/dev/null | openssl x509 -inform DER -noout -fingerprint -sha1 2>/dev/null | \
+              sed 's/^/  Cert:   /'
+          done
+          echo "===== Cert in keychain ====="
+          security find-identity -v -p codesigning $KEYCHAIN_PATH
+
       - name: Pre-build Flutter iOS with dart-defines
         working-directory: example
         run: |
