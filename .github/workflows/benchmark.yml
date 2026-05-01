@@ -330,10 +330,10 @@ jobs:
             version: "17.5"
             tier: mid
             label: "iPhone 13 Pro (iOS 17.5)"
-          - device: iphone15pro
+          - device: iphone15
             version: "18.0"
             tier: fast
-            label: "iPhone 15 Pro (iOS 18.0)"
+            label: "iPhone 15 (iOS 18.0)"
     steps:
       - uses: actions/checkout@v4
 
