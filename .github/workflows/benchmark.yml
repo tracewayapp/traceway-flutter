@@ -388,11 +388,43 @@ jobs:
           github.event.inputs.device_tier == 'all' ||
           github.event.inputs.device_tier == matrix.tier
         run: |
-          echo "=== Searching all files for BENCHMARK_RESULT ==="
-          grep -r "BENCHMARK_RESULT:" ./results/ 2>/dev/null | head -5 || echo "(no matches in any file)"
+          echo "=== File inventory by extension ==="
+          find ./results -type f 2>/dev/null | sed 's/.*\.//' | sort -u | while read ext; do
+            COUNT=$(find ./results -type f -name "*.$ext" 2>/dev/null | wc -l)
+            echo "  .$ext: $COUNT"
+          done
 
-          grep -rh "BENCHMARK_RESULT:" ./results/ 2>/dev/null | \
-            sed 's/.*BENCHMARK_RESULT://' \
+          echo ""
+          echo "=== Plain-text logs found ==="
+          find ./results -type f \( -name "*.log" -o -name "*.txt" \) 2>/dev/null | head -20
+
+          echo ""
+          echo "=== Looking for BENCHMARK_RESULT in plain-text files ==="
+          find ./results -type f \( -name "*.log" -o -name "*.txt" \) -exec grep -l "BENCHMARK_RESULT" {} \; 2>/dev/null | head -10
+
+          echo ""
+          echo "=== Looking for BENCHMARK_RESULT in ALL files (including binary) ==="
+          grep -rao "BENCHMARK_RESULT:[^[:cntrl:]]*" ./results/ 2>/dev/null | head -10 || echo "(no matches anywhere)"
+
+          echo ""
+          echo "=== Looking for any BENCHMARK token (case-insensitive) ==="
+          grep -rli "BENCHMARK" ./results/ 2>/dev/null | head -10 || echo "(no benchmark tokens found at all — test likely never reached emitResults)"
+
+          echo ""
+          echo "=== Sample of test log content (first .txt or .log) ==="
+          FIRST_LOG=$(find ./results -type f \( -name "*.log" -o -name "*.txt" \) 2>/dev/null | head -1)
+          if [ -n "$FIRST_LOG" ]; then
+            echo "Log: $FIRST_LOG"
+            echo "--- last 50 lines ---"
+            tail -50 "$FIRST_LOG"
+          else
+            echo "(no log files at all — extraction is impossible without xcresulttool)"
+          fi
+
+          echo ""
+          echo "=== Now extracting matched lines (if any) ==="
+          grep -rhao "BENCHMARK_RESULT:[^[:cntrl:]]*" ./results/ 2>/dev/null | \
+            sed 's/^BENCHMARK_RESULT://' \
             > benchmark_results_ios_${{ matrix.device }}.jsonl || true
 
           # Inject device metadata
