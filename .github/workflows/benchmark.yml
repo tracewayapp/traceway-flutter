@@ -392,7 +392,15 @@ jobs:
           github.event.inputs.device_tier == 'all' ||
           github.event.inputs.device_tier == matrix.tier
         run: |
-          gcloud firebase test ios run \
+          # Inspect what we're uploading
+          echo "=== ios_tests.zip contents ==="
+          unzip -l ios/ios_tests.zip | head -20
+          echo ""
+          echo "=== xctestrun in zip ==="
+          unzip -p ios/ios_tests.zip "*.xctestrun" 2>/dev/null | plutil -p - 2>&1 | head -50 || echo "(could not parse xctestrun)"
+          echo ""
+          echo "=== Submitting to FTL with verbose logging ==="
+          gcloud --verbosity=debug firebase test ios run \
             --project=${{ secrets.GCP_PROJECT_ID }} \
             --test ios/ios_tests.zip \
             --device model=${{ matrix.device }},version=${{ matrix.version }},locale=en,orientation=portrait \
