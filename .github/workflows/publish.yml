@@ -1,16 +1,9 @@
 name: Publish to pub.dev
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'New version (semver, e.g. 1.0.5 or 1.0.0-beta.1).'
-        required: true
-        type: string
-      release_notes:
-        description: 'Release notes (markdown). Used for both CHANGELOG.md entry and GitHub Release.'
-        required: true
-        type: string
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
 
 permissions:
   id-token: write
@@ -23,7 +16,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.ref_name }}
 
       - uses: dart-lang/setup-dart@v1
 
@@ -31,64 +23,37 @@ jobs:
         with:
           channel: stable
 
-      - name: Validate version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
+      - name: Resolve version from tag
+        id: ver
         run: |
-          if ! [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$ ]]; then
-            echo "Invalid version: '$INPUT_VERSION' (must be semver, e.g. 1.0.5 or 1.0.0-beta.1)"
+          VERSION="${GITHUB_REF_NAME#v}"
+          PUBSPEC=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          if [ "$PUBSPEC" != "$VERSION" ]; then
+            echo "Version mismatch: pubspec.yaml=$PUBSPEC vs tag=$VERSION"
             exit 1
           fi
-          CURRENT=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
-          if [ "$CURRENT" = "$INPUT_VERSION" ]; then
-            echo "Version $INPUT_VERSION already in pubspec.yaml — already released?"
-            exit 1
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing traceway $VERSION"
+
+      - name: Resolve release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          awk -v ver="$VERSION" '
+            /^## / {
+              if (found) exit
+              if ($2 == ver) { found=1; next }
+            }
+            found
+          ' CHANGELOG.md > /tmp/release_notes.md
+          if [ ! -s /tmp/release_notes.md ]; then
+            echo "Release $VERSION" > /tmp/release_notes.md
           fi
-          echo "Bumping $CURRENT → $INPUT_VERSION"
-
-      - name: Bump pubspec.yaml
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          sed -i.bak "s/^version: .*/version: $INPUT_VERSION/" pubspec.yaml
-          rm -f pubspec.yaml.bak
-          echo "--- pubspec.yaml ---"
-          grep '^version:' pubspec.yaml
-
-      - name: Prepend entry to CHANGELOG.md
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-          INPUT_NOTES: ${{ inputs.release_notes }}
-        run: |
-          DATE=$(date +%Y-%m-%d)
-          {
-            echo "## $INPUT_VERSION — $DATE"
-            echo ""
-            printf '%s\n' "$INPUT_NOTES"
-            echo ""
-            cat CHANGELOG.md
-          } > CHANGELOG.md.new
-          mv CHANGELOG.md.new CHANGELOG.md
-          echo "--- new CHANGELOG.md head ---"
-          head -30 CHANGELOG.md
+          echo "--- Release notes ---"
+          cat /tmp/release_notes.md
 
       - name: Install dependencies
         run: flutter pub get
-
-      - name: Analyze
-        run: flutter analyze
-
-      - name: Test
-        run: flutter test
-
-      - name: Stage version-bump commit
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          git add pubspec.yaml CHANGELOG.md
-          git commit -m "v$INPUT_VERSION"
 
       - name: Publish - dry run
         run: dart pub publish --dry-run
@@ -96,26 +61,16 @@ jobs:
       - name: Publish to pub.dev
         run: dart pub publish --force
 
-      - name: Tag and push
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          TAG="v$INPUT_VERSION"
-          git tag "$TAG"
-          git push origin "HEAD:$BRANCH" "$TAG"
-
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUT_VERSION: ${{ inputs.version }}
-          INPUT_NOTES: ${{ inputs.release_notes }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          TAG="v$INPUT_VERSION"
+          TAG="v$VERSION"
           PRERELEASE=""
-          [[ "$INPUT_VERSION" == *"-"* ]] && PRERELEASE="--prerelease"
-          printf '%s\n' "$INPUT_NOTES" > /tmp/release_notes.md
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --notes-file /tmp/release_notes.md \
-            $PRERELEASE
+          [[ "$VERSION" == *"-"* ]] && PRERELEASE="--prerelease"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file /tmp/release_notes.md
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/release_notes.md $PRERELEASE
+          fi

@@ -1,0 +1,89 @@
+name: Release (bump + tag)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New version (semver, e.g. 1.0.5 or 1.0.0-beta.1).'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes (markdown). Used for both CHANGELOG.md entry and GitHub Release.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Validate version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if ! [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Invalid version: '$INPUT_VERSION' (must be semver, e.g. 1.0.5 or 1.0.0-beta.1)"
+            exit 1
+          fi
+          CURRENT=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          if [ "$CURRENT" = "$INPUT_VERSION" ]; then
+            echo "Version $INPUT_VERSION already in pubspec.yaml — already released?"
+            exit 1
+          fi
+          echo "Bumping $CURRENT → $INPUT_VERSION"
+
+      - name: Bump pubspec.yaml
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          sed -i.bak "s/^version: .*/version: $INPUT_VERSION/" pubspec.yaml
+          rm -f pubspec.yaml.bak
+          grep '^version:' pubspec.yaml
+
+      - name: Prepend entry to CHANGELOG.md
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_NOTES: ${{ inputs.release_notes }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          {
+            echo "## $INPUT_VERSION — $DATE"
+            echo ""
+            printf '%s\n' "$INPUT_NOTES"
+            echo ""
+            cat CHANGELOG.md
+          } > CHANGELOG.md.new
+          mv CHANGELOG.md.new CHANGELOG.md
+          head -30 CHANGELOG.md
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Commit, tag, and push
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          TAG="v$INPUT_VERSION"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add pubspec.yaml CHANGELOG.md
+          git commit -m "v$INPUT_VERSION"
+          git tag "$TAG"
+          git push origin "HEAD:$BRANCH" "$TAG"
