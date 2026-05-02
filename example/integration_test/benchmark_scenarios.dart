@@ -535,6 +535,7 @@ Future<List<BenchmarkMetric>> runScenario({
 
   // ── Phase 3: Execute workload ───────────────────────────────────────
   var captureTimes = <int>[];
+  final metrics = <BenchmarkMetric>[];
 
   try {
     switch (wl) {
@@ -634,11 +635,10 @@ Future<List<BenchmarkMetric>> runScenario({
     _showStatus('Collecting metrics...');
     await tester.pump();
 
-    final metrics = <BenchmarkMetric>[
-      ...collector.stopFrameTiming(scenario),
-      ...collector.snapshotMemory(scenario),
-      collector.wallClock(scenario, sw..stop()),
-    ];
+    metrics
+      ..addAll(collector.stopFrameTiming(scenario))
+      ..addAll(collector.snapshotMemory(scenario))
+      ..add(collector.wallClock(scenario, sw..stop()));
 
     if (captureTimes.isNotEmpty) {
       metrics.add(collector.exceptionCaptureAvg(scenario, captureTimes));
@@ -660,6 +660,26 @@ Future<List<BenchmarkMetric>> runScenario({
     }
 
     if (storeDir != null && storeDir.existsSync()) {
+      var totalMp4Bytes = 0;
+      for (final entity in storeDir.listSync()) {
+        if (entity is! File || !entity.path.endsWith('.json')) continue;
+        try {
+          final data = jsonDecode(entity.readAsStringSync()) as Map<String, dynamic>;
+          final recording = data['recording'] as Map<String, dynamic>?;
+          if (recording == null) continue;
+          final events = recording['events'] as List?;
+          if (events == null) continue;
+          for (final event in events) {
+            final b64 = (event as Map)['data'] as String?;
+            if (b64 != null) totalMp4Bytes += base64Decode(b64).length;
+          }
+        } catch (_) {}
+      }
+      if (totalMp4Bytes > 0) {
+        final size = totalMp4Bytes;
+        metrics.add(BenchmarkMetric(scenario: scenario, metric: 'mp4_bytes', value: size.toDouble(), unit: 'bytes'));
+      }
+
       storeDir.deleteSync(recursive: true);
     }
   }
