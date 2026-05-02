@@ -1,0 +1,49 @@
+name: Publish to pub.dev
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dart-lang/setup-dart@v1
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Verify pubspec version matches tag
+        if: github.ref_type == 'tag'
+        run: |
+          PUBSPEC=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$PUBSPEC" != "$TAG" ]; then
+            echo "Version mismatch: pubspec.yaml=$PUBSPEC vs tag=$TAG"
+            exit 1
+          fi
+          echo "Publishing traceway $PUBSPEC"
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Publish - dry run
+        run: dart pub publish --dry-run
+
+      - name: Publish
+        run: dart pub publish --force
