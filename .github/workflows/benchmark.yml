@@ -153,7 +153,7 @@ jobs:
       - name: Pre-build Flutter iOS with dart-defines
         working-directory: example
         run: |
-          flutter build ios --debug --no-codesign \
+          flutter build ios --release --no-codesign \
             --target=integration_test/benchmark_test.dart \
             --dart-define=TRACEWAY_DSN=${{ secrets.TRACEWAY_DSN }} \
             --dart-define=BENCH_BRANCH=${{ github.event.inputs.branch || github.ref_name }} \
@@ -166,6 +166,8 @@ jobs:
           xcodebuild build-for-testing \
             -workspace Runner.xcworkspace \
             -scheme Runner \
+            -configuration Release \
+            -xcconfig Flutter/Release.xcconfig \
             -derivedDataPath ../build/ios_integ \
             -sdk iphoneos \
             -destination 'generic/platform=iOS'
@@ -209,7 +211,7 @@ jobs:
 
       - name: Zip test bundle for Firebase Test Lab
         working-directory: example/build/ios_integ/Build/Products
-        run: zip -r ${{ github.workspace }}/ios_tests.zip Debug-iphoneos *.xctestrun
+        run: zip -r ${{ github.workspace }}/ios_tests.zip Release-iphoneos *.xctestrun
 
       - uses: actions/upload-artifact@v4
         with:
