@@ -1,0 +1,140 @@
+name: iOS Smoke Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to test'
+        required: false
+        default: 'main'
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  ios-smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        working-directory: example
+        run: flutter pub get
+
+      - name: Install CocoaPods
+        working-directory: example/ios
+        run: pod install
+
+      - name: Install Apple certificate and provisioning profiles
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_PROVISIONING_PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE }}
+          APPLE_PROVISIONING_PROFILE_TESTS: ${{ secrets.APPLE_PROVISIONING_PROFILE_TESTS }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH=$RUNNER_TEMP/certificate.p12
+          PP_PATH=$RUNNER_TEMP/profile.mobileprovision
+          PP_TESTS_PATH=$RUNNER_TEMP/profile_tests.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          echo -n "$APPLE_CERTIFICATE_P12" | base64 --decode -o $CERT_PATH
+          echo -n "$APPLE_PROVISIONING_PROFILE" | base64 --decode -o $PP_PATH
+          echo -n "$APPLE_PROVISIONING_PROFILE_TESTS" | base64 --decode -o $PP_TESTS_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import $CERT_PATH -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+          cp $PP_TESTS_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Pre-build Flutter iOS
+        working-directory: example
+        run: |
+          flutter build ios --release --no-codesign \
+            --target=integration_test/ios_smoke_test.dart
+
+      - name: Build iOS test bundle
+        working-directory: example/ios
+        run: |
+          xcodebuild build-for-testing \
+            -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -xcconfig Flutter/Release.xcconfig \
+            -derivedDataPath ../build/ios_integ \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS'
+
+      - name: Zip test bundle
+        working-directory: example/build/ios_integ/Build/Products
+        run: zip -r ${{ github.workspace }}/ios_tests.zip Release-iphoneos *.xctestrun
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run on Firebase Test Lab
+        run: |
+          gcloud firebase test ios run \
+            --project=${{ secrets.GCP_PROJECT_ID }} \
+            --test ios_tests.zip \
+            --device model=iphone16pro,version=18.3,locale=en,orientation=portrait \
+            --timeout 10m \
+            --results-dir=ios-smoke-${{ github.run_id }} \
+            --results-bucket=${{ secrets.GCS_BUCKET }} \
+            2>&1 | tee ftl_output.txt
+        continue-on-error: true
+
+      - name: Download results from GCS
+        if: always()
+        run: |
+          GCS_PATH="gs://${{ secrets.GCS_BUCKET }}/ios-smoke-${{ github.run_id }}"
+          echo "=== GCS contents ==="
+          gsutil ls -r "$GCS_PATH/" 2>&1 | head -30 || echo "(listing failed)"
+          mkdir -p ./results
+          gsutil -m cp -r "$GCS_PATH/" ./results/ 2>&1 || echo "(download failed)"
+          echo "=== Local files ==="
+          find ./results -type f 2>/dev/null | head -30
+
+      - name: Verify smoke marker in device output
+        if: always()
+        run: |
+          if grep -r "IOS_SMOKE_OK" ./results/ 2>/dev/null; then
+            echo "PASS: IOS_SMOKE_OK found — Dart code ran to completion on device"
+          else
+            echo "FAIL: IOS_SMOKE_OK not found"
+            echo ""
+            echo "=== Sample log content (first .log/.txt) ==="
+            FIRST_LOG=$(find ./results -type f \( -name "*.log" -o -name "*.txt" \) 2>/dev/null | head -1)
+            if [ -n "$FIRST_LOG" ]; then
+              echo "Log: $FIRST_LOG"
+              tail -80 "$FIRST_LOG"
+            else
+              echo "(no log files at all)"
+            fi
+            exit 1
+          fi
+
+      - name: Clean up keychain
+        if: always()
+        run: security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
