@@ -81,9 +81,6 @@ jobs:
       - name: Test
         run: flutter test
 
-      - name: Publish - dry run
-        run: dart pub publish --dry-run
-
       - name: Stage version-bump commit
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -92,6 +89,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git add pubspec.yaml CHANGELOG.md
           git commit -m "v$INPUT_VERSION"
+
+      - name: Publish - dry run
+        run: dart pub publish --dry-run
 
       - name: Publish to pub.dev
         run: dart pub publish --force
