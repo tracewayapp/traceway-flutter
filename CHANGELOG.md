@@ -1,3 +1,7 @@
+## 1.0.5 — 2026-05-02
+
+Testing CI
+
 ## 1.0.4 — 2026-04-28
 
 - Added logs and navigation to each recording
