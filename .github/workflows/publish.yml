@@ -5,16 +5,32 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g. 1.0.5). Defaults to pubspec.yaml.'
+        required: false
+        type: string
+      release_notes:
+        description: 'Release notes (markdown). Defaults to CHANGELOG.md section for this version.'
+        required: false
+        type: string
+      create_tag:
+        description: 'Create and push v{version} tag after publishing'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: dart-lang/setup-dart@v1
 
@@ -22,16 +38,47 @@ jobs:
         with:
           channel: stable
 
-      - name: Verify pubspec version matches tag
-        if: github.ref_type == 'tag'
+      - name: Resolve version
+        id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           PUBSPEC=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
-          TAG="${GITHUB_REF_NAME#v}"
-          if [ "$PUBSPEC" != "$TAG" ]; then
-            echo "Version mismatch: pubspec.yaml=$PUBSPEC vs tag=$TAG"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          elif [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="$PUBSPEC"
+          fi
+          if [ "$PUBSPEC" != "$VERSION" ]; then
+            echo "Version mismatch: pubspec.yaml=$PUBSPEC vs resolved=$VERSION"
             exit 1
           fi
-          echo "Publishing traceway $PUBSPEC"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Publishing traceway $VERSION"
+
+      - name: Resolve release notes
+        env:
+          INPUT_NOTES: ${{ inputs.release_notes }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          if [ -n "$INPUT_NOTES" ]; then
+            printf '%s\n' "$INPUT_NOTES" > /tmp/release_notes.md
+          else
+            awk -v ver="$VERSION" '
+              /^## / {
+                if (found) exit
+                if ($2 == ver) { found=1; next }
+              }
+              found
+            ' CHANGELOG.md > /tmp/release_notes.md
+            if [ ! -s /tmp/release_notes.md ]; then
+              echo "Release $VERSION" > /tmp/release_notes.md
+            fi
+          fi
+          echo "--- Release notes ---"
+          cat /tmp/release_notes.md
 
       - name: Install dependencies
         run: flutter pub get
@@ -47,3 +94,30 @@ jobs:
 
       - name: Publish
         run: dart pub publish --force
+
+      - name: Create and push git tag
+        if: github.event_name == 'workflow_dispatch' && inputs.create_tag
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping"
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          TAG="v$VERSION"
+          PRERELEASE=""
+          [[ "$VERSION" == *"-"* ]] && PRERELEASE="--prerelease"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file /tmp/release_notes.md
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/release_notes.md $PRERELEASE
+          fi
