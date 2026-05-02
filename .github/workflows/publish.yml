@@ -1,24 +1,16 @@
 name: Publish to pub.dev
 
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g. 1.0.5). Defaults to pubspec.yaml.'
-        required: false
+        description: 'Version to publish (must match pubspec.yaml, e.g. 1.0.5).'
+        required: true
         type: string
       release_notes:
         description: 'Release notes (markdown). Defaults to CHANGELOG.md section for this version.'
         required: false
         type: string
-      create_tag:
-        description: 'Create and push v{version} tag after publishing'
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   id-token: write
@@ -38,30 +30,22 @@ jobs:
         with:
           channel: stable
 
-      - name: Resolve version
-        id: ver
+      - name: Verify version matches pubspec.yaml
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           PUBSPEC=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            VERSION="${GITHUB_REF_NAME#v}"
-          elif [ -n "$INPUT_VERSION" ]; then
-            VERSION="$INPUT_VERSION"
-          else
-            VERSION="$PUBSPEC"
-          fi
-          if [ "$PUBSPEC" != "$VERSION" ]; then
-            echo "Version mismatch: pubspec.yaml=$PUBSPEC vs resolved=$VERSION"
+          if [ "$PUBSPEC" != "$INPUT_VERSION" ]; then
+            echo "Version mismatch: pubspec.yaml=$PUBSPEC vs input=$INPUT_VERSION"
+            echo "Bump pubspec.yaml to $INPUT_VERSION first, then re-run."
             exit 1
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Publishing traceway $VERSION"
+          echo "Publishing traceway $INPUT_VERSION"
 
       - name: Resolve release notes
         env:
           INPUT_NOTES: ${{ inputs.release_notes }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ inputs.version }}
         run: |
           if [ -n "$INPUT_NOTES" ]; then
             printf '%s\n' "$INPUT_NOTES" > /tmp/release_notes.md
@@ -96,9 +80,10 @@ jobs:
         run: dart pub publish --force
 
       - name: Create and push git tag
-        if: github.event_name == 'workflow_dispatch' && inputs.create_tag
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          TAG="v${{ steps.ver.outputs.version }}"
+          TAG="v$VERSION"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
@@ -111,7 +96,7 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.ver.outputs.version }}
+          VERSION: ${{ inputs.version }}
         run: |
           TAG="v$VERSION"
           PRERELEASE=""
