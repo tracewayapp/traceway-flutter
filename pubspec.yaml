@@ -15,7 +15,7 @@ dependencies:
   uuid: ^4.0.0
   path_provider: ^2.1.0
   flutter_quick_video_encoder: ^1.7.2
-  device_info_plus: ^10.1.0
+  device_info_plus: ^13.1.0
 
 dev_dependencies:
   flutter_test:
