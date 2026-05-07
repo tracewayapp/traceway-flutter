@@ -1,3 +1,7 @@
+## 1.0.8 — 2026-05-07
+
+Upped the version of device_info_plus
+
 ## 1.0.7 — 2026-05-04
 
 updated device_info_plus version
