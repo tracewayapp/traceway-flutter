@@ -48,7 +48,7 @@ String formatFlutterError(Object error, StackTrace? stackTrace) {
   }
   final raw = stackTrace.toString();
   if (isNonSymbolicTrace(raw)) {
-    return '${error.runtimeType}: $error\n$raw';
+    return '$error\n$raw';
   }
   return formatException(error, stackTrace);
 }
