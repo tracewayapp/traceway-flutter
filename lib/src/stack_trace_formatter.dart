@@ -2,6 +2,14 @@ final _framePattern = RegExp(
   r'#(\d+)\s+(.+?)\s+\((.+?)(?::(\d+)(?::(\d+))?)?\)',
 );
 
+final _nonSymbolicFramePattern = RegExp(r'SnapshotInstructions\+0x');
+final _buildIdPattern = RegExp(r"build_id:\s*'([0-9a-fA-F]+)'");
+
+bool isNonSymbolicTrace(String raw) => _nonSymbolicFramePattern.hasMatch(raw);
+
+String? extractBuildId(String raw) =>
+    _buildIdPattern.firstMatch(raw)?.group(1)?.toLowerCase();
+
 String formatException(Object error, StackTrace stackTrace) {
   final errorType = error.runtimeType.toString();
   final errorMessage = error.toString();
@@ -35,8 +43,12 @@ String formatException(Object error, StackTrace stackTrace) {
 }
 
 String formatFlutterError(Object error, StackTrace? stackTrace) {
-  if (stackTrace != null) {
-    return formatException(error, stackTrace);
+  if (stackTrace == null) {
+    return '${error.runtimeType}: $error';
   }
-  return '${error.runtimeType}: $error';
+  final raw = stackTrace.toString();
+  if (isNonSymbolicTrace(raw)) {
+    return '${error.runtimeType}: $error\n$raw';
+  }
+  return formatException(error, stackTrace);
 }

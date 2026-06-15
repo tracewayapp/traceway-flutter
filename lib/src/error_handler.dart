@@ -39,10 +39,20 @@ class ErrorHandler {
     if (client == null) return;
 
     final formatted = formatFlutterError(error, stackTrace);
+
+    Map<String, String>? attributes;
+    if (stackTrace != null) {
+      final buildId = extractBuildId(stackTrace.toString());
+      if (buildId != null) {
+        attributes = {'flutter.build_id': buildId};
+      }
+    }
+
     client.addException(ExceptionStackTrace(
       stackTrace: formatted,
       recordedAt: DateTime.now(),
       isMessage: false,
+      attributes: attributes,
     ));
   }
 }

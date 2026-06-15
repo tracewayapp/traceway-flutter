@@ -302,6 +302,54 @@ npm install @tracewayapp/frontend
 
 See the full [JS SDK documentation](https://docs.tracewayapp.com/client/js-sdk?sdk=js-generic) for all options.
 
+## Release symbolication (only for obfuscated/split builds)
+
+You usually don't need to do anything. A plain `flutter build --release` keeps
+enough symbol information that crash stack traces are already readable
+(function names + file:line), and the SDK reports them as-is.
+
+You only need to upload debug symbols **if you build with `--obfuscate` and/or
+`--split-debug-info`**. Those flags shrink the app and protect your code by
+stripping and renaming that information, so release traces then arrive as bare
+instruction offsets. In that case the SDK forwards the raw trace and Traceway
+turns it back into `function (file:line:col)` server-side using the `.symbols`
+files you upload.
+
+### One-time setup
+
+Add a `traceway:` block to your app's `pubspec.yaml`:
+
+```yaml
+traceway:
+  url: https://your-traceway-host   # omit if you use Traceway Cloud
+  # upload_token: ...               # prefer the env var below, especially in CI
+```
+
+The upload token is your project's upload token from the dashboard (the same
+one used for JavaScript source maps), not the runtime token in your
+`Traceway.run()` connection string.
+
+### Per release
+
+```sh
+flutter build apk --release --obfuscate --split-debug-info=build/symbols
+
+TRACEWAY_UPLOAD_TOKEN=your-token dart run traceway:upload_symbols
+```
+
+The uploader reads `url` and the token from config/env and auto-discovers
+`build/symbols`, so no flags are required. Each value resolves from a CLI flag
+first (`--token`, `--url`, `--symbols-dir`), then an env var
+(`TRACEWAY_UPLOAD_TOKEN`, `TRACEWAY_URL`), then `pubspec.yaml`. Use
+`--dry-run` to preview. Symbols are unique to each build, so upload on every
+release; a crash can only be symbolicated against the exact build it came from.
+
+Each symbols file is keyed by its debug id plus architecture. On Android the
+debug id is read from the file directly. On iOS and macOS the file doesn't carry
+it, so the uploader reads it from the built app's Mach-O UUID (the same value
+the runtime reports); it auto-discovers the `.app` under `build/`, or point it
+explicitly with `--app build/macos/Build/Products/Release/YourApp.app`.
+
 ## Links
 
 - [Traceway Website](https://tracewayapp.com)
