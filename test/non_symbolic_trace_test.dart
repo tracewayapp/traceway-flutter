@@ -36,12 +36,13 @@ void main() {
   });
 
   group('formatFlutterError on a release trace', () {
-    test('sends the raw trace with all frames and the build_id intact', () {
+    test('sends the raw trace without a runtimeType prefix', () {
       final result = formatFlutterError(
         StateError('card declined'),
         StackTrace.fromString(_releaseTrace),
       );
-      expect(result, startsWith('StateError: Bad state: card declined'));
+      expect(result.split('\n').first, 'Bad state: card declined');
+      expect(result, isNot(startsWith('StateError:')));
       expect(result, contains('_kDartIsolateSnapshotInstructions+0x141e6b'));
       expect(result, contains('_kDartIsolateSnapshotInstructions+0x141d9b'));
       expect(result, contains("build_id: 'fe664295997135e7b67b648ba66ca9eb'"));
