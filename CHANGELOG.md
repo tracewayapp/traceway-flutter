@@ -1,3 +1,7 @@
+## 1.0.9 — 2026-06-16
+
+Flutter symbolication for obfuscated builds
+
 ## 1.0.8 — 2026-05-07
 
 Upped the version of device_info_plus
