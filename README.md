@@ -13,21 +13,24 @@
 
 # Traceway Flutter SDK
 
-Error tracking and screen recording for Flutter apps. Capture exceptions with full stack traces and the last 10 seconds of screen recording — automatically.
+Error tracking, session context and screen recording for Flutter apps, built on the standard [OpenTelemetry](https://opentelemetry.io) SDK for Dart. Exceptions arrive with full stack traces, the breadcrumbs that led up to them and the last ~10 seconds of screen recording — automatically.
 
 [Traceway](https://tracewayapp.com) is a completely open-source error tracking platform. You can [self-host](https://docs.tracewayapp.com/server) it or use [Traceway Cloud](https://tracewayapp.com).
+
+> **2.0 is a beta.** It speaks OTLP and OpAMP and needs a Traceway server that supports Flutter projects on those endpoints. On an older server stay on `traceway: ^1.0.9`. See [Migrating from 1.x](#migrating-from-1x).
 
 ## Features
 
 - Automatic capture of all Flutter errors (framework, platform, and async)
-- Full Dart stack traces
-- Screen recording — last ~10 seconds encoded as MP4 video
+- Full Dart stack traces, with symbolication for obfuscated builds
+- **OpenTelemetry inside** — logs and spans go through the standard OTel SDK (`dartastic_opentelemetry`) and leave as OTLP/HTTP
+- **Ring buffer** — logs, HTTP requests, navigation and custom events stay on the device and are uploaded only when something goes wrong
+- **Remote config over OpAMP** — change what is collected from the dashboard, per app version, user or device, without a release
+- Screen recording — the last ~10 seconds encoded as MP4, uploaded only as the clip of an exception
 - Touch/click positions rendered on recordings
-- **Logs** — every `print` / `debugPrint` from the last ~10 seconds
-- **Actions** — HTTP requests, navigation transitions, and custom user-defined breadcrumbs from the last ~10 seconds
 - Privacy masking — blur or blank sensitive UI regions in recordings
-- Disk persistence — pending exceptions survive app restarts
-- Gzip-compressed transport
+- Sessions, with the breadcrumb timeline of each one
+- Telemetry that failed to send is kept on disk and retried
 - Simple one-line setup
 
 ## Installation
@@ -71,89 +74,90 @@ try {
 // Capture a message
 TracewayClient.instance?.captureMessage('User completed checkout');
 
-// Force send pending events
+// A named product event; triggers can match it by name
+Traceway.track('checkout_failed', {'reason': 'card_declined'});
+
+// Attributes attached to every later record, and usable to target this
+// user or device from the dashboard
+Traceway.setAttribute('user.id', user.id);
+
+// Send what is ready now
 await TracewayClient.instance?.flush();
 ```
+
+## How collection works
+
+Every record is an OpenTelemetry log record or span and belongs to a *signal*. Each signal has a mode:
+
+| Mode | Meaning |
+|------|---------|
+| `stream` | sent as soon as it is produced |
+| `buffer` | kept in a ring buffer on the device (2 MB / 10 minutes by default) until a trigger flushes it |
+| `off` | dropped |
+
+| Signal | Source | Default |
+|--------|--------|---------|
+| `errors` | uncaught errors, `captureException` | stream |
+| `messages` | `captureMessage` | stream |
+| `console` | `print` / `debugPrint` | buffer |
+| `network` | HTTP requests (client spans) | buffer |
+| `navigation` | `Traceway.navigatorObserver` | buffer |
+| `custom` | `Traceway.recordAction`, `Traceway.track` | buffer |
+| replay | screen recording | buffer — never streamed |
+
+The built-in trigger fires on every exception: it uploads the buffered breadcrumbs of the last 10 minutes and the screen-recording clip. An app that never throws sends only its session start and end. Clips are rationed to one per 5 seconds and 20 per session; breadcrumbs are still sent for the exceptions in between.
+
+## Remote config
+
+The SDK polls the server over [OpAMP](https://opentelemetry.io/docs/specs/opamp/) (plain HTTP, every 5 minutes by default) and applies the collection settings you define under **Project → Data Collection** in the dashboard: signal modes and sample rates, buffer sizes, extra triggers (for example "flush when `checkout_failed` happens twice in a minute") and on-demand captures of one user or device.
+
+- The options you pass to `Traceway.run` are **ceilings**. Remote settings can lower what is collected but never raise it: with `captureNetwork: false` no rule can turn network capture on.
+- **The screen recording cannot be streamed remotely.** A rule that sets replay to `stream`, or an action that asks for replay, is treated as `buffer`: video leaves the device only as the clip of an exception, and never more than the frame buffer holds (`maxBufferFrames`, ~10 seconds).
+- The last applied settings are cached, so they are in effect from the first frame of the next start.
+- Set `remoteConfig: false` to never poll.
 
 ## Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `sampleRate` | `1.0` | Error sampling rate (0.0 - 1.0) |
-| `screenCapture` | `false` | Record last ~10 seconds of screen |
+| `sampleRate` | `1.0` | Share of exceptions and messages that are reported (0.0 - 1.0) |
+| `screenCapture` | `false` | Keep the last ~10 seconds of screen and upload it with an exception |
 | `debug` | `false` | Print debug info to console |
-| `version` | `''` | App version string |
-| `debounceMs` | `1500` | Milliseconds before sending batched events |
-| `retryDelayMs` | `10000` | Retry delay on failed uploads |
+| `version` | `''` | App version, sent as `service.version` |
+| `serviceName` | `flutter-app` | Sent as `service.name` |
+| `environment` | — | Sent as `deployment.environment.name` |
+| `attributes` | `{}` | Attributes attached to every record |
 | `capturePixelRatio` | `0.75` | Screenshot resolution scale factor |
-| `maxBufferFrames` | `150` | Max frames in recording buffer (~10s at 15fps) |
+| `maxBufferFrames` | `150` | Frames in the recording ring buffer (~10s at 15fps); the upper bound of every clip |
 | `fps` | `15` | Frames per second for screen capture (1–59) |
-| `maxPendingExceptions` | `5` | Max exceptions held in memory before oldest is dropped |
-| `persistToDisk` | `true` | Persist pending exceptions to disk so they survive app restarts |
-| `maxLocalFiles` | `5` | Max exception files stored on disk |
-| `localFileMaxAgeHours` | `12` | Hours after which unsynced local files are deleted |
-| `captureLogs` | `true` | Mirror every `print` / `debugPrint` into the rolling log buffer |
+| `persistToDisk` | `true` | Keep SDK state and undelivered telemetry on disk across restarts |
+| `captureLogs` | `true` | Capture every `print` / `debugPrint` |
 | `captureNetwork` | `true` | Install `HttpOverrides.global` to record every dart:io HTTP call |
 | `captureNavigation` | `true` | Record navigation transitions reported by `Traceway.navigatorObserver` |
-| `eventsWindow` | `10s` | Rolling window kept in the log/action buffers |
-| `eventsMaxCount` | `200` | Hard cap applied independently to logs and actions |
-
-## Platform Setup
-
-Traceway needs network access to send error reports. Depending on the platform, you may need to add permissions manually.
-
-### Android
-
-Add the `INTERNET` permission to `android/app/src/main/AndroidManifest.xml`:
-
-```xml
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.INTERNET"/>
-    <application
-      ...
-```
-
-### macOS
-
-macOS apps are sandboxed by default and cannot make network requests without the `com.apple.security.network.client` entitlement.
-
-Add it to both `macos/Runner/DebugProfile.entitlements` and `macos/Runner/Release.entitlements`:
-
-```xml
-<dict>
-    <key>com.apple.security.app-sandbox</key>
-    <true/>
-    <key>com.apple.security.network.client</key>
-    <true/>
-</dict>
-```
-
-### iOS
-
-No additional configuration is required. iOS apps can make HTTPS requests by default.
+| `sessions` | `true` | Track sessions |
+| `baselineSampleRate` | `0` | Share of sessions whose breadcrumbs are sent continuously, not only around errors |
+| `remoteConfig` | `true` | Poll the server for collection settings over OpAMP |
+| `exportDelayMs` | `1000` | How long finished records wait to be sent as one batch |
 
 ## Screen Recording
 
 When `screenCapture: true`, the SDK:
 
 1. Wraps your app in a `RepaintBoundary`
-2. Captures frames at ~15fps into a circular buffer
-3. On exception, encodes the last ~10 seconds to MP4
-4. Sends the video alongside the stack trace
+2. Captures frames at ~15fps into a circular buffer of `maxBufferFrames` frames (~10 seconds)
+3. On an exception, encodes the buffered frames to MP4
+4. Uploads the clip to the recordings endpoint, linked to the exception by its id
 
-Touch and click positions are drawn directly onto the recorded frames (invisible to the user) so you can see exactly what the user was doing before the crash.
+Nothing is encoded or uploaded unless an exception is captured, and a clip can never be longer than the frame buffer. Touch and click positions are drawn directly onto the recorded frames (invisible to the user) so you can see exactly what the user was doing before the crash.
 
 ## Logs & Actions
 
-Every captured exception ships with the last ~10 seconds of session context, attached to the same session recording as the video:
+Breadcrumbs are OpenTelemetry records held in the ring buffer and shown on the session timeline next to the exception that flushed them:
 
 - **Logs** — every `print` / `debugPrint` line, captured via a Zone print override. `dart:developer.log` is **not** captured.
-- **Actions** are split into three channels:
-  - **Network** — every dart:io HTTP request (method, URL, status, duration, byte counts) via `HttpOverrides.global`. Catches `package:http`, Dio, Firebase, anything on dart:io. On Flutter web use `TracewayHttpClient` (see below).
-  - **Navigation** — push / pop / replace / remove from any `Navigator`, by attaching `Traceway.navigatorObserver` to your app.
-  - **Custom** — anything you call `Traceway.recordAction(...)` with.
-
-Logs and actions are kept in two separate rolling buffers, each capped at 200 entries / 10 seconds. They ship inside `sessionRecordings[].logs` and `sessionRecordings[].actions` on the wire — separate from the MP4 video chunks. Each recording also carries `startedAt` and `endedAt` ISO 8601 timestamps so the backend can align logs and actions onto the video timeline (`offsetIntoVideoMs = event.timestamp − recording.startedAt`).
+- **Network** — every dart:io HTTP request as a client span (method, URL, status, duration, byte counts) via `HttpOverrides.global`. Catches `package:http`, Dio, Firebase, anything on dart:io. The SDK's own requests are not recorded. On Flutter web use `TracewayHttpClient` (see below).
+- **Navigation** — push / pop / replace / remove from any `Navigator`, by attaching `Traceway.navigatorObserver` to your app.
+- **Custom** — anything you call `Traceway.recordAction(...)` or `Traceway.track(...)` with.
 
 ### Wire up navigation capture
 
@@ -244,6 +248,8 @@ For Flutter web, use the JS SDK instead — see [Flutter Web](#flutter-web) belo
 
 ## Performance
 
+> These numbers were measured on 1.x. The capture path (frames, encoding) is unchanged in 2.0, but the transport is new and has not been re-benchmarked yet.
+
 Measured on Firebase Test Lab — Pixel 5 (API 30), Pixel 6 (API 33), Pixel 8 (API 34), iPhone 8 / 14 Pro / 16 Pro across 10 workloads (idle, scroll, navigation, video playback, exception bursts, and combinations) for each of four configs: no SDK, SDK loaded but idle, SDK actively recording, and SDK recording with disk persistence. Full benchmark harness lives in [`example/integration_test/`](example/integration_test/) and runs as a GitHub Action — re-run it on your own device tier any time.
 
 | Cost | When idle (`screenCapture: false` or no recording yet) | While actively recording |
@@ -273,6 +279,15 @@ Measured on Firebase Test Lab — Pixel 5 (API 30), Pixel 6 (API 33), Pixel 8 (A
 - **Flutter framework errors** — rendering, layout, gestures via `FlutterError.onError`
 - **Platform errors** — native plugin crashes via `PlatformDispatcher.onError`
 - **Uncaught async errors** — unhandled futures via `runZonedGuarded`
+
+## Migrating from 1.x
+
+- **Server**: 2.0 sends OTLP to `/api/otel/v1/logs` and `/api/otel/v1/traces`, polls `/api/otel/v1/opamp` and uploads clips to `/api/recordings`. There is no fallback to the 1.x `/api/report` protocol.
+- **Connection string**: unchanged. `token@https://host/api/report` still works; the other endpoints are derived from it.
+- **Behaviour**: logs and actions are no longer limited to the last 10 seconds and no longer travel inside the recording. They are buffered for up to 10 minutes and sent as their own records with an exception. `captureMessage` no longer attaches a screen recording.
+- **Removed options**: `debounceMs`, `retryDelayMs`, `maxPendingExceptions`, `maxLocalFiles`, `localFileMaxAgeHours`, `eventsWindow`, `eventsMaxCount`.
+- **New API**: `Traceway.track`, `Traceway.setAttribute`, `TracewayClient.refreshConfig`, `shutdown`, `getInstanceId`.
+- **OpenTelemetry**: the SDK initializes the global `OTel` instance of `dartastic_opentelemetry`. If your app already initializes it, Traceway attaches its processors to the existing providers instead.
 
 ## Flutter Web
 

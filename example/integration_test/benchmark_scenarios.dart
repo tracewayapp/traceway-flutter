@@ -2,9 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart'
+    show ExportResult, LogRecordExporter, ReadableLogRecord, Span, SpanExporter;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:traceway/src/exception_store.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:traceway/src/traceway_client.dart' show TracewayTestOverrides;
 import 'package:traceway/traceway.dart';
 import 'package:video_player/video_player.dart';
 
@@ -22,30 +26,54 @@ final bool _useRealBackend = _dsn.isNotEmpty;
 final String _connectionString =
     _useRealBackend ? _dsn : 'benchmark-token@http://localhost:9999/noop';
 
-/// Tracks which scenario is running so the no-op sender can tag payload metrics.
+/// Tracks which scenario is running so the no-op transport can tag payload metrics.
 String _currentScenario = '';
 
-/// When no real DSN, use a no-op sender that includes gzip cost but discards.
-/// When a real DSN is set, pass null to use the SDK's default sendReport.
-ReportSender? get _reportSender =>
-    _useRealBackend ? null : _noOpSender;
+class _NoOpLogExporter implements LogRecordExporter {
+  @override
+  Future<ExportResult> export(List<ReadableLogRecord> logRecords) async =>
+      ExportResult.success;
+  @override
+  Future<void> forceFlush() async {}
+  @override
+  Future<void> shutdown() async {}
+}
 
-Future<bool> _noOpSender(String url, String token, String body) async {
-  final raw = utf8.encode(body);
-  final compressed = gzip.encode(raw);
-  final ts = DateTime.now().toUtc().toIso8601String();
-  for (final entry in [
-    {'metric': 'payload_raw_bytes', 'value': raw.length, 'unit': 'bytes'},
-    {'metric': 'payload_gzip_bytes', 'value': compressed.length, 'unit': 'bytes'},
-  ]) {
-    final line = 'BENCHMARK_RESULT:${jsonEncode({
-      'scenario': _currentScenario,
-      ...entry,
-      'ts': ts,
-    })}';
-    print(line);
+class _NoOpSpanExporter implements SpanExporter {
+  @override
+  Future<void> export(List<Span> spans) async {}
+  @override
+  Future<void> forceFlush() async {}
+  @override
+  Future<void> shutdown() async {}
+}
+
+/// With a real DSN the SDK talks to the backend. Without one, telemetry is
+/// discarded and replay uploads are measured (the clip is already gzipped,
+/// which is the cost worth tracking) and dropped.
+TracewayTestOverrides _overrides({Directory? stateDirectory}) {
+  if (_useRealBackend) {
+    return TracewayTestOverrides(stateDirectory: stateDirectory);
   }
-  return true;
+  return TracewayTestOverrides(
+    stateDirectory: stateDirectory,
+    logExporter: _NoOpLogExporter(),
+    spanExporter: _NoOpSpanExporter(),
+    httpClient: MockClient((request) async {
+      if (request.url.path.endsWith('/api/recordings')) {
+        final line = 'BENCHMARK_RESULT:${jsonEncode({
+              'scenario': _currentScenario,
+              'metric': 'payload_gzip_bytes',
+              'value': request.bodyBytes.length,
+              'unit': 'bytes',
+              'ts': DateTime.now().toUtc().toIso8601String(),
+            })}';
+        // ignore: avoid_print
+        print(line);
+      }
+      return http.Response('{}', 200);
+    }),
+  );
 }
 
 /// Pumps frames for [duration], driving the engine at ~60 fps.
@@ -449,17 +477,17 @@ Future<List<BenchmarkMetric>> runScenario({
 
     case SdkConfig.sdkNoCapture:
       _showStatus('Initializing SDK (no capture)...');
-      TracewayClient.initializeForTest(
+      await TracewayClient.initializeForTest(
         _connectionString,
         const TracewayOptions(screenCapture: false, debug: false),
-        reportSender: _reportSender,
+        overrides: _overrides(),
       );
       _showSnackbar('SDK initialized (capture OFF)', color: Colors.blue);
       break;
 
     case SdkConfig.sdkCapture:
       _showStatus('Initializing SDK (screen capture ON)...');
-      TracewayClient.initializeForTest(
+      await TracewayClient.initializeForTest(
         _connectionString,
         const TracewayOptions(
           screenCapture: true,
@@ -467,23 +495,16 @@ Future<List<BenchmarkMetric>> runScenario({
           fps: 15,
           maxBufferFrames: 150,
           capturePixelRatio: 0.75,
-          maxPendingExceptions: 10,
         ),
-        reportSender: _reportSender,
+        overrides: _overrides(),
       );
       _showSnackbar('SDK initialized (capture ON)', color: Colors.orange);
       break;
 
     case SdkConfig.sdkCaptureDisk:
       storeDir = await Directory.systemTemp.createTemp('traceway_bench_');
-      final store = ExceptionStore(
-        maxLocalFiles: 30,
-        maxAgeHours: 48,
-        testDir: storeDir,
-      );
-      await store.init();
       _showStatus('Initializing SDK (capture + disk)...');
-      TracewayClient.initializeForTest(
+      await TracewayClient.initializeForTest(
         _connectionString,
         const TracewayOptions(
           screenCapture: true,
@@ -492,19 +513,13 @@ Future<List<BenchmarkMetric>> runScenario({
           maxBufferFrames: 150,
           capturePixelRatio: 0.75,
           persistToDisk: true,
-          maxPendingExceptions: 10,
         ),
-        reportSender: _reportSender,
-        store: store,
+        overrides: _overrides(stateDirectory: storeDir),
       );
       _showSnackbar('SDK initialized (capture + disk)', color: Colors.orange);
       break;
   }
 
-  if (hasSdk && TracewayClient.instance != null) {
-    TracewayClient.instance!.collectSyncDeviceInfo();
-    await TracewayClient.instance!.collectDeviceInfo();
-  }
 
   // ── Phase 2: Render widget tree ─────────────────────────────────────
   VideoPlayerController? videoController;

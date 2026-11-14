@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'circular_buffer.dart';
 import 'models/session_recording_payload.dart';
+import 'replay/replay_controller.dart';
 import 'traceway_mask_mode.dart';
 
 class CapturedFrame {
@@ -32,7 +33,61 @@ class CapturedFrame {
   });
 }
 
-class ScreenRecorder with WidgetsBindingObserver {
+/// Turns RGBA frames into an MP4 file. The platform implementation uses the
+/// device's hardware H.264 encoder.
+abstract class VideoEncoder {
+  Future<void> setup({
+    required int width,
+    required int height,
+    required int fps,
+    required String filepath,
+    required bool debug,
+  });
+  Future<void> appendFrame(Uint8List rgba);
+  Future<void> finish();
+}
+
+class PlatformVideoEncoder implements VideoEncoder {
+  const PlatformVideoEncoder();
+
+  @override
+  Future<void> setup({
+    required int width,
+    required int height,
+    required int fps,
+    required String filepath,
+    required bool debug,
+  }) async {
+    await FlutterQuickVideoEncoder.setLogLevel(
+      debug ? LogLevel.standard : LogLevel.none,
+    );
+    await FlutterQuickVideoEncoder.setup(
+      width: width,
+      height: height,
+      fps: fps,
+      videoBitrate: 2000000,
+      profileLevel: ProfileLevel.baselineAutoLevel,
+      audioChannels: 0,
+      audioBitrate: 0,
+      sampleRate: 0,
+      filepath: filepath,
+    );
+  }
+
+  @override
+  Future<void> appendFrame(Uint8List rgba) =>
+      FlutterQuickVideoEncoder.appendVideoFrame(rgba);
+
+  @override
+  Future<void> finish() => FlutterQuickVideoEncoder.finish();
+}
+
+class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
+  /// Replaces the platform encoder, for platforms it does not support and
+  /// for tests.
+  @visibleForTesting
+  static VideoEncoder? encoderOverride;
+
   final GlobalKey repaintBoundaryKey;
   final double pixelRatio;
   final int fps;
@@ -79,7 +134,16 @@ class ScreenRecorder with WidgetsBindingObserver {
     _maskRegions.remove(key);
   }
 
+  @override
+  bool get isRunning => _captureTimer != null;
+
+  /// Forgets every buffered frame, e.g. when replay is switched off remotely.
+  @override
+  void clearBuffer() => _buffer.clear();
+
+  @override
   void start() {
+    if (_captureTimer != null) return;
     WidgetsBinding.instance.addObserver(this);
     _captureTimer = Timer.periodic(
       Duration(milliseconds: _captureIntervalMs),
@@ -90,6 +154,7 @@ class ScreenRecorder with WidgetsBindingObserver {
     }
   }
 
+  @override
   void stop() {
     _captureTimer?.cancel();
     _captureTimer = null;
@@ -265,10 +330,21 @@ class ScreenRecorder with WidgetsBindingObserver {
     }
   }
 
+  /// Number of frames currently held; never more than the buffer capacity.
+  int get bufferedFrameCount => _buffer.length;
+
+  /// Encodes the buffered frames to MP4. With [since], only frames captured
+  /// at or after it are included, so a caller can ask for a shorter clip; the
+  /// clip can never be longer than the frame ring buffer.
+  @override
   Future<SessionRecordingPayload?> captureRecording(
-    String exceptionId,
-  ) async {
-    final frames = _buffer.readAll();
+    String exceptionId, {
+    DateTime? since,
+  }) async {
+    var frames = _buffer.readAll();
+    if (since != null) {
+      frames = frames.where((f) => !f.timestamp.isBefore(since)).toList();
+    }
     if (frames.isEmpty) return null;
 
     final previous = _encodingLock;
@@ -295,20 +371,13 @@ class ScreenRecorder with WidgetsBindingObserver {
       final tempDir = await getTemporaryDirectory();
       final outputPath = '${tempDir.path}/traceway_$exceptionId.mp4';
 
-      await FlutterQuickVideoEncoder.setLogLevel(
-        debug ? LogLevel.standard : LogLevel.none,
-      );
-
-      await FlutterQuickVideoEncoder.setup(
+      final encoder = encoderOverride ?? const PlatformVideoEncoder();
+      await encoder.setup(
         width: maxWidth,
         height: maxHeight,
         fps: fps,
-        videoBitrate: 2000000,
-        profileLevel: ProfileLevel.baselineAutoLevel,
-        audioChannels: 0,
-        audioBitrate: 0,
-        sampleRate: 0,
         filepath: outputPath,
+        debug: debug,
       );
 
       // Decode each PNG → RGBA, apply masks, draw touch circle, feed to encoder.
@@ -352,10 +421,10 @@ class ScreenRecorder with WidgetsBindingObserver {
           }
         }
 
-        await FlutterQuickVideoEncoder.appendVideoFrame(output);
+        await encoder.appendFrame(output);
       }
 
-      await FlutterQuickVideoEncoder.finish();
+      await encoder.finish();
 
       final videoFile = File(outputPath);
       final videoBytes = await videoFile.readAsBytes();

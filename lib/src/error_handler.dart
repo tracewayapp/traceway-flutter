@@ -1,7 +1,5 @@
 import 'package:flutter/foundation.dart';
 
-import 'models/exception_stack_trace.dart';
-import 'stack_trace_formatter.dart';
 import 'traceway_client.dart';
 
 class ErrorHandler {
@@ -35,24 +33,10 @@ class ErrorHandler {
   }
 
   void _captureError(Object error, StackTrace? stackTrace) {
-    final client = TracewayClient.instance;
-    if (client == null) return;
-
-    final formatted = formatFlutterError(error, stackTrace);
-
-    Map<String, String>? attributes;
-    if (stackTrace != null) {
-      final buildId = extractBuildId(stackTrace.toString());
-      if (buildId != null) {
-        attributes = {'flutter.build_id': buildId};
-      }
+    try {
+      TracewayClient.instance?.captureException(error, stackTrace);
+    } catch (_) {
+      // Reporting an error must never raise another one.
     }
-
-    client.addException(ExceptionStackTrace(
-      stackTrace: formatted,
-      recordedAt: DateTime.now(),
-      isMessage: false,
-      attributes: attributes,
-    ));
   }
 }

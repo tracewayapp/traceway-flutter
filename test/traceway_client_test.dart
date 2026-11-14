@@ -1,392 +1,518 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:traceway/src/core/settings.dart';
+import 'package:traceway/src/events/traceway_event.dart';
 import 'package:traceway/src/traceway_client.dart';
 import 'package:traceway/src/traceway_options.dart';
-import 'package:traceway/src/models/exception_stack_trace.dart';
 
-ExceptionStackTrace _makeException(String message, {DateTime? recordedAt}) {
-  return ExceptionStackTrace(
-    stackTrace: 'Error: $message',
-    recordedAt: recordedAt ?? DateTime.now(),
-  );
+import 'support.dart';
+
+final _uuid = RegExp(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$');
+
+void breadcrumbs(TracewayClient client) {
+  client.recordLog('loading cart');
+  client.recordNavigationEvent(
+      NavigationEvent(action: 'push', from: '/', to: '/cart'));
+  client.recordAction(category: 'cart', name: 'add', data: {'sku': 'a1'});
+  client.track('checkout_opened', {'items': 2});
+  client.recordNetworkEvent(NetworkEvent(
+    method: 'GET',
+    url: 'https://api.example.com/cart',
+    duration: const Duration(milliseconds: 120),
+    statusCode: 200,
+  ));
 }
 
 void main() {
-  group('TracewayClient', () {
-    test('initializes from connection string', () {
-      final client = TracewayClient.initialize(
-        'testtoken@https://example.com/api/report',
-        const TracewayOptions(debug: true),
+  tearDown(TracewayClient.resetForTest);
+
+  group('ring buffer', () {
+    test('breadcrumbs stay on the device until an exception flushes them',
+        () async {
+      final h = await startHarness();
+      breadcrumbs(h.client);
+      await h.client.flush();
+
+      expect(h.eventNames, ['session.start']);
+      expect(h.spans.spans, isEmpty);
+      expect(h.client.bufferedCount, 5);
+
+      h.client.captureException(StateError('boom'), StackTrace.current);
+      await h.client.flush();
+
+      expect(h.client.bufferedCount, 0);
+      expect(
+        h.eventNames,
+        containsAll([
+          'exception',
+          null,
+          'browser.navigation',
+          'traceway.action',
+          'checkout_opened',
+          'traceway.trigger.fired',
+        ]),
       );
-      expect(client, isNotNull);
-      expect(TracewayClient.instance, client);
-      expect(client.debug, true);
+      expect(h.named(null).single.body, 'loading cart');
+      expect(attr(h.named('browser.navigation').single, 'url.full'), '/cart');
+      expect(attr(h.named('traceway.action').single, 'traceway.action.data'),
+          '{"sku":"a1"}');
+
+      final span = h.spans.spans.single;
+      expect(span.kind.name, 'client');
+      final spanAttrs = span.attributes.toMap();
+      expect(spanAttrs['http.request.method']!.value, 'GET');
+      expect(spanAttrs['url.full']!.value, 'https://api.example.com/cart');
+      expect(spanAttrs['http.response.status_code']!.value, 200);
+      expect(spanAttrs['session.id']!.value, matches(_uuid));
     });
 
-    test('captureMessage creates isMessage exception', () {
-      TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(sampleRate: 1.0),
-      );
+    test('the exception record carries what the server needs', () async {
+      final h = await startHarness(
+          options: const TracewayOptions(remoteConfig: false, version: '1.2.3'));
+      h.client.setAttribute('user.id', 'u-42');
+      h.client.captureException(
+          const FormatException('bad input'), StackTrace.current, {'k': 'v'});
+      await h.client.flush();
 
-      TracewayClient.instance!.captureMessage('test message');
+      final record = h.named('exception').single;
+      expect(record.severityNumber!.severityNumber, 17);
+      expect(attr(record, 'exception.type'), 'FormatException');
+      expect(attr(record, 'exception.message'), contains('bad input'));
+      expect(attr(record, 'exception.stacktrace'),
+          startsWith('FormatException: '));
+      expect(attr(record, 'traceway.exception.id'), matches(_uuid));
+      expect(attr(record, 'session.id'), matches(_uuid));
+      expect(attr(record, 'traceway.session.started_at'), isA<int>());
+      expect(attr(record, 'user.id'), 'u-42');
+      expect(attr(record, 'k'), 'v');
+      expect(attr(record, 'traceway.replay.status'), 'disabled');
+
+      final start = h.named('session.start').single;
+      expect(attr(start, 'session.id'), attr(record, 'session.id'));
     });
 
-    test('captureException creates formatted exception', () {
-      TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(sampleRate: 1.0),
-      );
-
-      TracewayClient.instance!.captureException(
-        Exception('test error'),
-        StackTrace.current,
-      );
+    test('messages are sent at once and do not flush the buffer', () async {
+      final h = await startHarness();
+      h.client.recordLog('kept');
+      h.client.captureMessage('hello');
+      await h.client.flush();
+      final message = h.named('traceway.message').single;
+      expect(message.body, 'hello');
+      expect(message.severityNumber!.severityNumber, 9);
+      expect(h.named(null), isEmpty);
+      expect(h.client.bufferedCount, 1);
     });
 
-    test('sampleRate 0 drops all exceptions', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(sampleRate: 0.0),
-      );
-
-      client.addException(_makeException('test'));
-      expect(client.pendingExceptionCount, 0);
-    });
-
-    test('flush completes without error', () async {
-      TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(),
-      );
-
-      await TracewayClient.instance!.flush(1000);
-    });
-  });
-
-  group('TracewayClient pending cap', () {
-    test('caps pending exceptions at maxPendingExceptions', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(maxPendingExceptions: 5),
-      );
-
-      for (var i = 0; i < 8; i++) {
-        client.addException(_makeException('error $i'));
+    test('repeated identical errors collapse and are counted', () async {
+      final h = await startHarness();
+      for (var i = 0; i < 3; i++) {
+        h.client.captureException(StateError('same'));
       }
-
-      expect(client.pendingExceptionCount, 5);
+      h.client.captureException(StateError('other'));
+      await h.client.flush();
+      final errors = h.named('exception').toList();
+      expect(errors, hasLength(2));
+      expect(attr(errors[1], 'traceway.error.suppressed_count'), 2);
     });
 
-    test('drops oldest exceptions when cap exceeded', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(maxPendingExceptions: 3),
+    test('sampleRate 0 drops errors', () async {
+      final h = await startHarness(
+          options: const TracewayOptions(remoteConfig: false, sampleRate: 0));
+      h.client.captureException(StateError('x'));
+      h.client.captureMessage('y');
+      await h.client.flush();
+      expect(h.named('exception'), isEmpty);
+      expect(h.named('traceway.message'), isEmpty);
+    });
+
+    test('capture flags are ceilings', () async {
+      final h = await startHarness(
+        options: const TracewayOptions(
+          remoteConfig: false,
+          captureLogs: false,
+          captureNetwork: false,
+          captureNavigation: false,
+        ),
       );
-
-      client.addException(_makeException('first'));
-      client.addException(_makeException('second'));
-      client.addException(_makeException('third'));
-      client.addException(_makeException('fourth'));
-      client.addException(_makeException('fifth'));
-
-      final pending = client.pendingExceptions;
-      expect(pending.length, 3);
-      expect(pending[0].stackTrace, 'Error: third');
-      expect(pending[1].stackTrace, 'Error: fourth');
-      expect(pending[2].stackTrace, 'Error: fifth');
+      breadcrumbs(h.client);
+      expect(h.client.bufferedCount, 2); // the action and the tracked event
+      h.client.captureException(StateError('boom'));
+      await h.client.flush();
+      expect(h.named(null), isEmpty);
+      expect(h.named('browser.navigation'), isEmpty);
+      expect(h.spans.spans, isEmpty);
     });
 
-    test('caps at 1 keeps only the latest', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(maxPendingExceptions: 1),
-      );
-
-      client.addException(_makeException('old'));
-      client.addException(_makeException('new'));
-
-      expect(client.pendingExceptionCount, 1);
-      expect(client.pendingExceptions[0].stackTrace, 'Error: new');
+    test('the SDK own requests are not recorded as network telemetry',
+        () async {
+      final h = await startHarness();
+      h.client.recordNetworkEvent(NetworkEvent(
+        method: 'POST',
+        url: 'https://traceway.test/api/otel/v1/logs',
+        duration: Duration.zero,
+        statusCode: 200,
+      ));
+      h.client.recordNetworkEvent(NetworkEvent(
+        method: 'POST',
+        url: 'https://traceway.test/api/recordings',
+        duration: Duration.zero,
+        statusCode: 200,
+      ));
+      expect(h.client.bufferedCount, 0);
     });
 
-    test('does not drop when under cap', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(maxPendingExceptions: 5),
-      );
-
-      client.addException(_makeException('one'));
-      client.addException(_makeException('two'));
-      client.addException(_makeException('three'));
-
-      expect(client.pendingExceptionCount, 3);
-    });
-
-    test('caps after re-queue on sync failure', () async {
-      final client = TracewayClient.initializeForTest(
-        'token@https://example.com/api/report',
-        const TracewayOptions(maxPendingExceptions: 3, debounceMs: 0),
-        reportSender: (_, __, ___) async => false,
-      );
-
-      client.addException(_makeException('a'));
-      client.addException(_makeException('b'));
-      client.addException(_makeException('c'));
-      expect(client.pendingExceptionCount, 3);
-
-      // Flush triggers sync which fails → re-queues 3
-      // Then add 2 more → total 5 → capped to 3
-      await client.flush(1000);
-
-      client.addException(_makeException('d'));
-      client.addException(_makeException('e'));
-
-      expect(client.pendingExceptionCount, 3);
-      final pending = client.pendingExceptions;
-      expect(pending[0].stackTrace, 'Error: c');
-      expect(pending[1].stackTrace, 'Error: d');
-      expect(pending[2].stackTrace, 'Error: e');
-    });
-
-    test('caps after re-queue on sync exception', () async {
-      final client = TracewayClient.initializeForTest(
-        'token@https://example.com/api/report',
-        const TracewayOptions(maxPendingExceptions: 2, debounceMs: 0),
-        reportSender: (_, __, ___) async => throw Exception('network error'),
-      );
-
-      client.addException(_makeException('x'));
-      client.addException(_makeException('y'));
-
-      await client.flush(1000);
-
-      // After failed sync, x and y are re-queued
-      client.addException(_makeException('z'));
-
-      expect(client.pendingExceptionCount, 2);
-      final pending = client.pendingExceptions;
-      expect(pending[0].stackTrace, 'Error: y');
-      expect(pending[1].stackTrace, 'Error: z');
-    });
-
-    test('default maxPendingExceptions is 5', () {
-      const options = TracewayOptions();
-      expect(options.maxPendingExceptions, 5);
+    test('baseline-sampled sessions stream their breadcrumbs', () async {
+      final h = await startHarness(
+          options:
+              const TracewayOptions(remoteConfig: false, baselineSampleRate: 1));
+      h.client.recordLog('streamed');
+      await h.client.flush();
+      expect(h.named(null).single.body, 'streamed');
+      expect(h.client.bufferedCount, 0);
     });
   });
 
-  group('TracewayClient sync device info', () {
-    test('collectSyncDeviceInfo sets attributes immediately', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(),
-      );
+  group('session replay', () {
+    const withReplay = TracewayOptions(remoteConfig: false, screenCapture: true);
 
-      client.collectSyncDeviceInfo();
+    test('a clip is uploaded only for an exception, linked by its id',
+        () async {
+      final h = await startHarness(options: withReplay);
+      final source = FakeReplaySource();
+      h.client.replaySource = source;
+      expect(source.running, isTrue);
 
-      final exception = _makeException('startup crash');
-      client.addException(exception);
+      breadcrumbs(h.client);
+      h.client.captureMessage('not an error');
+      await h.client.flush();
+      expect(source.captures, isEmpty);
+      expect(h.requestsTo('/api/recordings'), isEmpty);
 
-      expect(exception.attributes, isNotNull);
-      expect(exception.attributes!['os.name'], isNotEmpty);
-      expect(exception.attributes!['os.version'], isNotEmpty);
-      expect(exception.attributes!['runtime.version'], isNotEmpty);
+      h.client.captureException(StateError('boom'), StackTrace.current);
+      await h.client.flush();
+
+      final record = h.named('exception').single;
+      final exceptionId = attr(record, 'traceway.exception.id');
+      expect(attr(record, 'traceway.replay.status'), 'requested');
+      expect(source.captures.single.exceptionId, exceptionId);
+
+      final request = h.requestsTo('/api/recordings').single;
+      expect(request.headers['Authorization'], 'Bearer test-token');
+      expect(request.headers['Content-Encoding'], 'gzip');
+      final segment =
+          (h.recordingBodies.single['segments'] as List).single as Map;
+      expect(segment['exceptionId'], exceptionId);
+      expect(segment['sessionId'], attr(record, 'session.id'));
+      expect(segment['segmentIndex'], 0);
+      final event = (segment['events'] as List).single as Map;
+      expect(event['type'], 'flutter_video');
+      expect(event['format'], 'mp4');
+      expect(segment['startedAt'], isNotNull);
+      expect(segment['endedAt'], isNotNull);
     });
 
-    test('collectDeviceInfo merges async info into sync info', () async {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(),
-      );
-
-      client.collectSyncDeviceInfo();
-      await client.collectDeviceInfo();
-
-      final exception = _makeException('test');
-      client.addException(exception);
-
-      expect(exception.attributes!['os.name'], isNotEmpty);
-      expect(exception.attributes!['runtime.version'], isNotEmpty);
-    });
-  });
-
-  group('TracewayClient device attributes', () {
-    test('attaches device attributes to exceptions', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(),
-      );
-
-      client.setDeviceAttributes({
-        'os.name': 'ios',
-        'device.model': 'iPhone',
-        'device.ip': '192.168.1.42',
-      });
-
-      final exception = _makeException('test');
-      client.addException(exception);
-
-      expect(exception.attributes, isNotNull);
-      expect(exception.attributes!['os.name'], 'ios');
-      expect(exception.attributes!['device.model'], 'iPhone');
-      expect(exception.attributes!['device.ip'], '192.168.1.42');
+    test('the lookback never exceeds what a trigger or the buffer allows',
+        () async {
+      final h = await startHarness(options: withReplay);
+      final source = FakeReplaySource();
+      h.client.replaySource = source;
+      final before = DateTime.now();
+      h.client.captureException(StateError('boom'));
+      await h.client.flush();
+      final since = source.captures.single.since!;
+      // The default clip asks for 30 s; the recorder's 150-frame ring buffer
+      // is what actually bounds it.
+      expect(before.difference(since).inSeconds,
+          lessThanOrEqualTo(defaultReplayLookbackSeconds.toInt()));
     });
 
-    test('user attributes override device attributes', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(),
-      );
+    test('a second error inside the cooldown gets breadcrumbs but no clip',
+        () async {
+      final h = await startHarness(options: withReplay);
+      final source = FakeReplaySource();
+      h.client.replaySource = source;
+      h.client.captureException(StateError('first'));
+      h.client.recordLog('between');
+      h.client.captureException(StateError('second'));
+      await h.client.flush();
+      expect(source.captures, hasLength(1));
+      expect(h.requestsTo('/api/recordings'), hasLength(1));
+      final second = h.named('exception').last;
+      expect(attr(second, 'traceway.replay.status'), 'cooldown');
+      expect(h.named(null).single.body, 'between');
+    });
 
-      client.setDeviceAttributes({
-        'os.name': 'ios',
-        'device.model': 'iPhone',
-        'custom.tag': 'from-device',
-      });
+    test('without screenCapture nothing is recorded or uploaded', () async {
+      final h = await startHarness();
+      final source = FakeReplaySource();
+      h.client.replaySource = source;
+      expect(source.running, isFalse);
+      h.client.captureException(StateError('boom'));
+      await h.client.flush();
+      expect(source.captures, isEmpty);
+      expect(h.requestsTo('/api/recordings'), isEmpty);
+    });
 
-      final exception = ExceptionStackTrace(
-        stackTrace: 'Error: test',
-        recordedAt: DateTime.now(),
-        attributes: {
-          'custom.tag': 'from-user',
-          'user.id': '123',
+    test('an empty frame buffer uploads nothing', () async {
+      final h = await startHarness(options: withReplay);
+      h.client.replaySource = FakeReplaySource()..empty = true;
+      h.client.captureException(StateError('boom'));
+      await h.client.flush();
+      expect(h.requestsTo('/api/recordings'), isEmpty);
+    });
+
+    test('remote stream settings and stream actions never upload replay',
+        () async {
+      var polls = 0;
+      final h = await startHarness(
+        options: const TracewayOptions(screenCapture: true),
+        handler: (request) async {
+          if (!request.url.path.endsWith('/opamp')) return null;
+          return polls++ == 0
+              ? opampConfig({
+                  'schemaVersion': 1,
+                  'signals': {
+                    'console': {'mode': 'stream'},
+                    'custom': {'mode': 'stream'},
+                  },
+                  'replay': {'mode': 'stream', 'sessionSampleRate': 1},
+                  'triggers': [
+                    {
+                      'id': 'start-replay',
+                      'steps': [
+                        {
+                          'match': {
+                            'key': 'event.name',
+                            'op': 'eq',
+                            'value': 'go'
+                          }
+                        }
+                      ],
+                      'actions': [
+                        {'type': 'startReplay', 'durationSeconds': 60},
+                        {
+                          'type': 'stream',
+                          'durationSeconds': 60,
+                          'replay': true
+                        },
+                        {
+                          'type': 'capture',
+                          'durationSeconds': 60,
+                          'replay': true
+                        },
+                        {
+                          'type': 'flush',
+                          'lookbackSeconds': 600,
+                          'replay': true
+                        },
+                      ],
+                    }
+                  ],
+                }, [1])
+              : null;
         },
       );
-      client.addException(exception);
+      final source = FakeReplaySource();
+      h.client.replaySource = source;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
 
-      expect(exception.attributes!['os.name'], 'ios');
-      expect(exception.attributes!['device.model'], 'iPhone');
-      expect(exception.attributes!['custom.tag'], 'from-user');
-      expect(exception.attributes!['user.id'], '123');
+      expect(h.client.settings.signals['console']!.mode, Mode.stream);
+      expect(h.client.settings.replayMode, Mode.buffer);
+      expect(h.client.replay.mode, Mode.buffer);
+
+      h.client.recordLog('streamed now');
+      h.client.track('go');
+      await h.client.flush();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await h.client.flush();
+
+      expect(h.named(null).map((r) => r.body), contains('streamed now'));
+      expect(h.named('traceway.trigger.fired'), isNotEmpty);
+      expect(source.captures, isEmpty);
+      expect(h.requestsTo('/api/recordings'), isEmpty);
     });
 
-    test('does not overwrite when no device attributes set', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(),
+    test('replay switched off remotely stops the recorder and drops frames',
+        () async {
+      var polls = 0;
+      final h = await startHarness(
+        options: const TracewayOptions(screenCapture: true),
+        handler: (request) async =>
+            request.url.path.endsWith('/opamp') && polls++ == 0
+                ? opampConfig({
+                    'replay': {'mode': 'off'}
+                  }, [2])
+                : null,
       );
-
-      final exception = ExceptionStackTrace(
-        stackTrace: 'Error: test',
-        recordedAt: DateTime.now(),
-        attributes: {'user.id': '456'},
-      );
-      client.addException(exception);
-
-      expect(exception.attributes, {'user.id': '456'});
-    });
-
-    test('works with null user attributes', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(),
-      );
-
-      client.setDeviceAttributes({'os.name': 'android'});
-
-      final exception = _makeException('test');
-      expect(exception.attributes, isNull);
-
-      client.addException(exception);
-
-      expect(exception.attributes, isNotNull);
-      expect(exception.attributes!['os.name'], 'android');
-    });
-
-    test('device attributes persist across multiple exceptions', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(),
-      );
-
-      client.setDeviceAttributes({
-        'os.name': 'ios',
-        'os.version': '17.0',
-      });
-
-      final e1 = _makeException('first');
-      final e2 = _makeException('second');
-      client.addException(e1);
-      client.addException(e2);
-
-      expect(e1.attributes!['os.name'], 'ios');
-      expect(e2.attributes!['os.name'], 'ios');
-      expect(e1.attributes!['os.version'], '17.0');
-      expect(e2.attributes!['os.version'], '17.0');
-    });
-
-    test('attributes included in serialized json', () {
-      final client = TracewayClient.initialize(
-        'token@https://example.com/api/report',
-        const TracewayOptions(),
-      );
-
-      client.setDeviceAttributes({
-        'os.name': 'ios',
-        'device.model': 'iPhone',
-      });
-
-      final exception = _makeException('test');
-      client.addException(exception);
-
-      final json = exception.toJson();
-      final attrs = json['attributes'] as Map<String, dynamic>;
-      expect(attrs['os.name'], 'ios');
-      expect(attrs['device.model'], 'iPhone');
+      final source = FakeReplaySource();
+      h.client.replaySource = source;
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(source.running, isFalse);
+      expect(source.clears, greaterThan(0));
+      h.client.captureException(StateError('boom'));
+      await h.client.flush();
+      expect(source.captures, isEmpty);
+      expect(attr(h.named('exception').single, 'traceway.replay.status'),
+          'disabled');
     });
   });
 
-  group('TracewayClient sync with transport', () {
-    test('successful sync clears pending exceptions', () async {
-      final client = TracewayClient.initializeForTest(
-        'token@https://example.com/api/report',
-        const TracewayOptions(debounceMs: 0),
-        reportSender: (_, __, ___) async => true,
+  group('remote config', () {
+    test('is applied, reported back and cached for the next start', () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_test');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      Future<http.Response?> handler(http.Request request) async =>
+          request.url.path.endsWith('/opamp')
+              ? opampConfig({
+                  'schemaVersion': 1,
+                  'signals': {
+                    'custom': {'mode': 'stream'}
+                  },
+                }, [0xab, 0xcd])
+              : null;
+
+      var h = await startHarness(
+          options: const TracewayOptions(), handler: handler, stateDirectory: dir);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final instanceId = h.client.getInstanceId();
+      expect(instanceId, matches(_uuid));
+      expect(instanceId[14], '7');
+      expect(h.client.settings.signals['custom']!.mode, Mode.stream);
+
+      h.client.track('streamed');
+      await h.client.flush();
+      expect(h.named('streamed'), hasLength(1));
+      expect(attr(h.named('traceway.config.applied').single,
+          'traceway.config.hash'), 'abcd');
+
+      final opamp = h.requestsTo('/opamp');
+      expect(opamp.length, greaterThanOrEqualTo(2));
+      expect(opamp.first.headers['OpAMP-Instance-UID'], instanceId);
+      expect(opamp.first.headers['Authorization'], 'Bearer test-token');
+      final first = utf8.decode(opamp.first.bodyBytes, allowMalformed: true);
+      expect(first, contains('service.instance.id'));
+      expect(first, contains('test-os'));
+      expect(first, contains('io.traceway.sdk.buffer/v1'));
+
+      // The next start applies the cached config before the first poll and
+      // keeps the same instance id.
+      await TracewayClient.resetForTest();
+      h = await startHarness(
+        options: const TracewayOptions(),
+        handler: (request) async => request.url.path.endsWith('/opamp')
+            ? http.Response('', 503)
+            : null,
+        stateDirectory: dir,
       );
-
-      client.addException(_makeException('test'));
-      expect(client.pendingExceptionCount, 1);
-
-      await client.flush(1000);
-
-      expect(client.pendingExceptionCount, 0);
+      expect(h.client.getInstanceId(), instanceId);
+      expect(h.client.settings.signals['custom']!.mode, Mode.stream);
     });
 
-    test('failed sync re-queues exceptions', () async {
-      final client = TracewayClient.initializeForTest(
-        'token@https://example.com/api/report',
-        const TracewayOptions(debounceMs: 0),
-        reportSender: (_, __, ___) async => false,
+    test('an invalid document is rejected and the defaults stay', () async {
+      final h = await startHarness(
+        options: const TracewayOptions(),
+        handler: (request) async => request.url.path.endsWith('/opamp')
+            ? opampConfig({'schemaVersion': 99}, [7])
+            : null,
       );
-
-      client.addException(_makeException('test'));
-      await client.flush(1000);
-
-      expect(client.pendingExceptionCount, 1);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(h.client.settings.signals['custom']!.mode, Mode.buffer);
+      final report = h.requestsTo('/opamp')[1].bodyBytes;
+      expect(utf8.decode(report, allowMalformed: true),
+          contains('unsupported settings schemaVersion 99'));
     });
 
-    test('sync sends device attributes in payload', () async {
-      String? capturedBody;
-      final client = TracewayClient.initializeForTest(
-        'token@https://example.com/api/report',
-        const TracewayOptions(debounceMs: 0),
-        reportSender: (_, __, body) async {
-          capturedBody = body;
-          return true;
+    test('a 403 stops polling and leaves collection on the defaults',
+        () async {
+      final h = await startHarness(
+        options: const TracewayOptions(),
+        handler: (request) async => request.url.path.endsWith('/opamp')
+            ? http.Response('', 403)
+            : null,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await h.client.refreshConfig();
+      expect(h.requestsTo('/opamp'), hasLength(1));
+      h.client.captureException(StateError('still reported'));
+      await h.client.flush();
+      expect(h.named('exception'), hasLength(1));
+    });
+
+    test('the kill switch stops everything but the poll', () async {
+      final h = await startHarness(
+        options: const TracewayOptions(),
+        handler: (request) async => request.url.path.endsWith('/opamp')
+            ? opampConfig({'enabled': false}, [5])
+            : null,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      await h.client.flush();
+      h.logs.clear();
+      h.client.captureException(StateError('x'));
+      h.client.recordLog('y');
+      await h.client.flush();
+      expect(h.logs.records, isEmpty);
+      expect(h.client.bufferedCount, 0);
+    });
+
+    test('a dashboard capture uploads its lookback and then streams',
+        () async {
+      var polls = 0;
+      final h = await startHarness(
+        options: const TracewayOptions(),
+        handler: (request) async {
+          if (!request.url.path.endsWith('/opamp')) return null;
+          polls++;
+          return polls == 2
+              ? opampConfig({
+                  'captures': [
+                    {
+                      'id': 'cap-1',
+                      'until': DateTime.now()
+                          .add(const Duration(minutes: 5))
+                          .toUtc()
+                          .toIso8601String(),
+                      'lookbackSeconds': 600,
+                      'signals': ['*'],
+                    }
+                  ]
+                }, [3])
+              : null;
         },
       );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      h.client.recordLog('before capture');
+      await h.client.flush();
+      expect(h.named(null), isEmpty);
 
-      client.setDeviceAttributes({
-        'os.name': 'ios',
-        'device.model': 'iPhone',
-      });
+      await h.client.refreshConfig();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      h.client.recordLog('during capture');
+      await h.client.flush();
+      expect(h.named(null).map((r) => r.body),
+          ['before capture', 'during capture']);
+      expect(attr(h.named(null).last, 'traceway.capture.ids'), '["cap-1"]');
+    });
+  });
 
-      client.addException(_makeException('test'));
-      await client.flush(1000);
+  group('lifecycle', () {
+    test('initialize returns the running client', () async {
+      final h = await startHarness();
+      final again = TracewayClient.initialize(
+          connectionString, const TracewayOptions(remoteConfig: false));
+      expect(again, same(h.client));
+    });
 
-      expect(capturedBody, isNotNull);
-      expect(capturedBody, contains('os.name'));
-      expect(capturedBody, contains('device.model'));
+    test('shutdown ends the session and allows a fresh start', () async {
+      final h = await startHarness();
+      await h.client.shutdown();
+      expect(h.eventNames, containsAllInOrder(['session.start', 'session.end']));
+      expect(TracewayClient.instance, isNull);
+      h.client.captureException(StateError('after shutdown'));
     });
   });
 }

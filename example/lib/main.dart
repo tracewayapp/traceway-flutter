@@ -8,7 +8,7 @@ import 'package:traceway/traceway.dart';
 // Falls back to local dev server if not set.
 const _dsn = String.fromEnvironment('TRACEWAY_DSN');
 String get _fallbackDsn =>
-    'frontend-dev-token@http://${Platform.isAndroid ? '10.0.2.2' : 'localhost'}:8082/api/report';
+    'flutter-dev-token@http://${Platform.isAndroid ? '10.0.2.2' : 'localhost'}:8082/api/report';
 
 void main() {
   Traceway.run(

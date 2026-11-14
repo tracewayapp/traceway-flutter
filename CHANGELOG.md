@@ -1,3 +1,14 @@
+## 2.0.0-beta.1 — 2026-11-14
+
+Rebuilt on the standard OpenTelemetry SDK for Dart, matching the browser SDK's 2.0 architecture.
+
+- Logs and spans go through `dartastic_opentelemetry` and are exported as OTLP/HTTP.
+- Ring buffer: logs, HTTP requests, navigation and custom events stay on the device (2 MB / 10 minutes) and are uploaded when an exception or a trigger asks for them.
+- Remote config over OpAMP: signal modes, sample rates, triggers and on-demand captures from the dashboard. Init options are ceilings.
+- Screen recording is unchanged in size (150 frames, ~10 seconds) and is uploaded only as the clip of an exception, to `/api/recordings`. It cannot be streamed, locally or by remote config.
+- Sessions, `Traceway.track`, `Traceway.setAttribute`, `refreshConfig`, `shutdown`, `getInstanceId`.
+- **Breaking**: requires a server with OTLP/OpAMP support for Flutter projects; the 1.x `/api/report` protocol is gone. Options `debounceMs`, `retryDelayMs`, `maxPendingExceptions`, `maxLocalFiles`, `localFileMaxAgeHours`, `eventsWindow` and `eventsMaxCount` were removed.
+
 ## 1.0.9 — 2026-06-16
 
 Flutter symbolication for obfuscated builds

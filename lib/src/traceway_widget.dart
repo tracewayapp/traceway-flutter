@@ -36,6 +36,16 @@ class Traceway extends StatefulWidget {
     );
   }
 
+  /// Emits a named product event; see [TracewayClient.track].
+  static void track(String eventName, [Map<String, Object>? attributes]) {
+    TracewayClient.instance?.track(eventName, attributes);
+  }
+
+  /// Sets an attribute attached to every later record, e.g. `user.id`.
+  static void setAttribute(String key, String value) {
+    TracewayClient.instance?.setAttribute(key, value);
+  }
+
   static void run({
     required String connectionString,
     required Widget child,
@@ -54,10 +64,7 @@ class Traceway extends StatefulWidget {
     runZonedGuarded(
       () {
         WidgetsFlutterBinding.ensureInitialized();
-        final client = TracewayClient.initialize(connectionString, options);
-        client.collectSyncDeviceInfo();
-        client.collectDeviceInfo();
-        client.loadPendingFromDisk();
+        TracewayClient.initialize(connectionString, options);
         errorHandler.install();
         runApp(Traceway(child: child));
       },
@@ -86,9 +93,9 @@ class _TracewayState extends State<Traceway> {
         fps: client.options.fps,
         debug: client.debug,
       );
-      client.screenRecorder = _screenRecorder;
+      // The client starts and stops the recorder as the replay mode allows.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _screenRecorder!.start();
+        if (mounted) client.screenRecorder = _screenRecorder;
       });
     }
   }
@@ -104,6 +111,7 @@ class _TracewayState extends State<Traceway> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    TracewayClient.instance?.markActivity();
     _screenRecorder?.setTouchPosition(event.localPosition);
   }
 
@@ -118,17 +126,15 @@ class _TracewayState extends State<Traceway> {
   @override
   Widget build(BuildContext context) {
     final client = TracewayClient.instance;
+    final listener = Listener(
+      onPointerDown: _onPointerDown,
+      onPointerMove: _onPointerMove,
+      onPointerUp: _onPointerUp,
+      child: widget.child,
+    );
     if (client != null && client.options.screenCapture) {
-      return RepaintBoundary(
-        key: _repaintBoundaryKey,
-        child: Listener(
-          onPointerDown: _onPointerDown,
-          onPointerMove: _onPointerMove,
-          onPointerUp: _onPointerUp,
-          child: widget.child,
-        ),
-      );
+      return RepaintBoundary(key: _repaintBoundaryKey, child: listener);
     }
-    return widget.child;
+    return listener;
   }
 }
