@@ -261,6 +261,31 @@ class Capture {
   final bool replay;
 }
 
+/// The aggregates: histograms and counters built on the device and uploaded
+/// as OTLP metrics. Separate from the per-signal settings, which govern the
+/// detailed events: a signal can be off while its numbers are still charted.
+class MetricsSettings {
+  MetricsSettings({
+    this.enabled = true,
+    this.sampleRate = 1,
+    this.flushSeconds = defaultMetricsFlushSeconds,
+  });
+
+  bool enabled;
+
+  /// Share of sessions that record metrics. Each payload states it, so the
+  /// server weights counts by 1/rate.
+  double sampleRate;
+  double flushSeconds;
+
+  MetricsSettings copy() => MetricsSettings(
+      enabled: enabled, sampleRate: sampleRate, flushSeconds: flushSeconds);
+}
+
+const double defaultMetricsFlushSeconds = 300;
+const double minMetricsFlushSeconds = 30;
+const double maxMetricsFlushSeconds = 3600;
+
 class Settings {
   Settings({
     required this.enabled,
@@ -276,7 +301,8 @@ class Settings {
     required this.persist,
     required this.triggers,
     required this.captures,
-  });
+    MetricsSettings? metrics,
+  }) : metrics = metrics ?? MetricsSettings();
 
   /// Kill switch: when false nothing but the OpAMP poll leaves the device.
   bool enabled;
@@ -295,6 +321,7 @@ class Settings {
   bool persist;
   List<Trigger> triggers;
   List<Capture> captures;
+  MetricsSettings metrics;
 
   Settings copy() => Settings(
         enabled: enabled,
@@ -310,6 +337,7 @@ class Settings {
         persist: persist,
         triggers: List.of(triggers),
         captures: List.of(captures),
+        metrics: metrics.copy(),
       );
 }
 
@@ -321,6 +349,7 @@ class Ceilings {
     required this.signals,
     required this.replay,
     required this.sessions,
+    this.metrics = true,
   });
 
   final bool enabled;
@@ -330,6 +359,9 @@ class Ceilings {
   /// encode video.
   final Mode replay;
   final bool sessions;
+
+  /// False when the app or the plan does not allow metrics.
+  final bool metrics;
 }
 
 const String defaultExceptionTriggerId = 'default-exception';
@@ -407,6 +439,7 @@ Ceilings ceilingsFrom({
   bool captureNavigation = true,
   bool captureUserActions = true,
   bool sessions = true,
+  bool captureMetrics = true,
 }) {
   Mode allow(bool flag) => flag ? Mode.stream : Mode.off;
   final signals = {for (final name in signalNames) name: Mode.stream};
@@ -419,5 +452,6 @@ Ceilings ceilingsFrom({
     signals: signals,
     replay: allow(screenCapture),
     sessions: sessions,
+    metrics: captureMetrics,
   );
 }

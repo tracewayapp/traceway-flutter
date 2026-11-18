@@ -34,7 +34,7 @@ class ErrorHandler {
 
   void _captureError(Object error, StackTrace? stackTrace) {
     try {
-      TracewayClient.instance?.captureException(error, stackTrace);
+      TracewayClient.instance?.captureUnhandledException(error, stackTrace);
     } catch (_) {
       // Reporting an error must never raise another one.
     }

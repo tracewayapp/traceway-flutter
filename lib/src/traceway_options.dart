@@ -51,6 +51,19 @@ class TracewayOptions {
   /// shown text of a widget inside a `TracewayPrivacyMask` is never sent.
   final bool captureUserActions;
 
+  /// Measure the app's performance on the device and upload it as metrics:
+  /// app start, screen display times, slow and frozen frames, hangs,
+  /// unhandled errors, sessions, users, peak memory and HTTP requests. The
+  /// numbers are histograms and counters, one small payload every few
+  /// minutes, never an event per observation; they fill the Flutter
+  /// Performance dashboard. Remote settings can switch them off or sample
+  /// them (`metrics`), never on when this is false.
+  final bool captureMetrics;
+
+  /// Up to two app-defined dimensions on every metric, e.g. `{'plan': 'pro'}`
+  /// (sent as `custom.plan`). Keys are lowercase letters, digits and `_`.
+  final Map<String, String> metricDimensions;
+
   /// Stream breadcrumbs (logs, network, navigation, taps, app events) and the
   /// screen recording all the time instead of keeping them for errors.
   final bool recordAllSessions;
@@ -110,6 +123,8 @@ class TracewayOptions {
     this.captureNetwork = true,
     this.captureNavigation = true,
     this.captureUserActions = true,
+    this.captureMetrics = true,
+    this.metricDimensions = const {},
     this.recordAllSessions = false,
     this.collection,
     this.sessions = true,

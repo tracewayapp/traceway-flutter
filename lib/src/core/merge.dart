@@ -314,6 +314,20 @@ Settings applyOverlay(Settings base, Json overlay) {
     }
   }
 
+  final metrics = _object(overlay['metrics']);
+  if (metrics != null) {
+    if (metrics['enabled'] is bool) {
+      out.metrics.enabled = metrics['enabled'] as bool;
+    }
+    final sampleRate = _rate(metrics['sampleRate']);
+    if (sampleRate != null) out.metrics.sampleRate = sampleRate;
+    final flush = _positive(metrics['flushSeconds'], maxMetricsFlushSeconds);
+    if (flush != null) {
+      out.metrics.flushSeconds =
+          flush < minMetricsFlushSeconds ? minMetricsFlushSeconds : flush;
+    }
+  }
+
   final buffer = _object(overlay['buffer']);
   if (buffer != null) {
     final maxBytes = _positive(buffer['maxBytes'], _maxBufferBytes);
@@ -370,6 +384,7 @@ Ceilings applyLimits(Ceilings ceilings, Json? overlay) {
     signals: signals,
     replay: replay == null ? ceilings.replay : lowerMode(ceilings.replay, replay),
     sessions: ceilings.sessions,
+    metrics: ceilings.metrics && limits['metrics'] != 'off',
   );
 }
 
@@ -383,5 +398,6 @@ Settings clampToCeilings(Settings settings, Ceilings ceilings) {
   }
   out.replayMode = lowerMode(out.replayMode, ceilings.replay);
   out.sessionsEnabled = out.sessionsEnabled && ceilings.sessions;
+  out.metrics.enabled = out.metrics.enabled && ceilings.metrics;
   return out;
 }

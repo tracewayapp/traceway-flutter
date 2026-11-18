@@ -210,6 +210,7 @@ class _HomeState extends State<_Home> {
   int _frame = 0;
   String _phase = 'starting';
   int _paid = 0;
+  bool _freezeNextBuild = false;
   Timer? _timer;
 
   @override
@@ -297,7 +298,10 @@ class _HomeState extends State<_Home> {
 
     // ---- 3. a recorded journey: navigation, tap, log --------------------
     unawaited(_navigatorKey.currentState!.pushNamed('/users/42'));
-    await _wait(2);
+    await _wait(1);
+    // The page has what it loads: ends its time to full display.
+    Traceway.reportFullyDisplayed();
+    await _wait(1);
     tap(_profileTarget);
     _setPhase('journey_started');
     for (var i = 0; i < _journeyCaptureSeconds + 8; i++) {
@@ -338,12 +342,32 @@ class _HomeState extends State<_Home> {
       await _wait(1);
       Traceway.track('e2e_tick', {'i': i});
     }
+
+    // ---- 7. what the metrics measure -------------------------------------
+    // A frame that takes 800 ms to build is frozen; 2.6 s without the UI
+    // isolate running a timer is a hang.
+    if (mounted) setState(() => _freezeNextBuild = true);
+    await _wait(1);
+    final until = DateTime.now().add(const Duration(milliseconds: 2600));
+    while (DateTime.now().isBefore(until)) {}
+    await _wait(1);
+    Traceway.metric('e2e.checkout', 1234, {'plan': 'pro'});
+    Traceway.count('e2e.cart_add', 3);
     await client.flush(10000);
     _setPhase('done');
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    if (_freezeNextBuild) {
+      _freezeNextBuild = false;
+      final until = DateTime.now().add(const Duration(milliseconds: 800));
+      while (DateTime.now().isBefore(until)) {}
+    }
+    return _scaffold();
+  }
+
+  Widget _scaffold() => Scaffold(
         appBar: AppBar(title: const Text('Traceway e2e')),
         body: Center(
           child: Column(

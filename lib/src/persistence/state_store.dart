@@ -10,6 +10,9 @@ class StateStore {
 
   final Directory? _directory;
   Map<String, dynamic> _values = {};
+
+  /// Whether values outlive this run.
+  bool get persistent => _directory != null;
   Timer? _writeTimer;
 
   File? get _file {

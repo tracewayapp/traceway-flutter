@@ -1,6 +1,8 @@
 ## Unreleased
 
-Captures, recording triggers and taps, at parity with the browser SDK 2.1.
+Captures, recording triggers, taps and client metrics, at parity with the browser SDK 2.1.
+
+- **App performance metrics**, aggregated on the device and uploaded as OTLP metrics (delta exponential histograms and monotonic sums) to `/api/otel/v1/metrics`, like the browser SDK's: cold and hot start, time to initial and full display per screen (`Traceway.reportFullyDisplayed()`), slow and frozen frames, hangs, unhandled errors, sessions, daily users and affected users, peak memory and HTTP requests by host. App-defined metrics with `Traceway.metric` / `Traceway.count`, and dimensions with `metricDimensions` / `Traceway.setMetricDimension`. Remote `metrics` settings (`enabled`, `sampleRate`, `flushSeconds`) and the plan's `limits.metrics` apply; `captureMetrics: false` turns them off. Resources gain `os.major`, `device.form_factor`, `device.class` and `traceway.metrics: aggregated`.
 
 - **Captures stream video.** A capture from the dashboard or a trigger that asks for replay (`capture`, `startReplay`, `stream` with `replay`, or a rule with `replay.mode: stream`) uploads the buffered lookback and then streams the session as consecutive MP4 segments until it ends; logs, requests and taps stream with it. A capture known only from the cached config starts nothing until the server confirms it. Video needs a hardware encoder (Android, iOS, macOS); elsewhere `screenCapture` records nothing.
 - **Recording triggers** (`event` steps of type `click`, `hover`, `navigation` and `log`) run in Flutter, with the browser SDK's sequence engine: overlapping progress, counts and windows, progress and fire counts kept across restarts within a session. Fired triggers that ask for replay report their steps, so the session lists them as recording reasons. The SDK advertises `io.traceway.sdk.sequence-triggers/v1`.

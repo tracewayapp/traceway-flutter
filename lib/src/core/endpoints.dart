@@ -3,6 +3,7 @@ class TracewayEndpoints {
     required this.base,
     required this.logs,
     required this.traces,
+    required this.metrics,
     required this.opamp,
     required this.recordings,
   });
@@ -11,6 +12,7 @@ class TracewayEndpoints {
   final String base;
   final String logs;
   final String traces;
+  final String metrics;
   final String opamp;
   final String recordings;
 
@@ -33,6 +35,7 @@ TracewayEndpoints resolveEndpoints(String apiUrl) {
     base: base,
     logs: '$base/api/otel/v1/logs',
     traces: '$base/api/otel/v1/traces',
+    metrics: '$base/api/otel/v1/metrics',
     opamp: '$base/api/otel/v1/opamp',
     recordings: '$base/api/recordings',
   );

@@ -125,4 +125,11 @@ class ControlState {
   }
 
   double sampleRate(String signal) => _effective.signals[signal]!.sampleRate;
+
+  /// The aggregates setting, or null when metrics are off: the kill switch,
+  /// the app's `captureMetrics`, the plan's limit or a rule.
+  MetricsSettings? get metrics {
+    final metrics = _effective.metrics;
+    return _effective.enabled && metrics.enabled ? metrics : null;
+  }
 }

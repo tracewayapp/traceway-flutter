@@ -27,6 +27,7 @@ Error tracking, session context and screen recording for Flutter apps, built on 
 - **Ring buffer** — logs, HTTP requests, navigation and custom events stay on the device and are uploaded only when something goes wrong
 - **Remote config over OpAMP** — change what is collected from the dashboard, per app version, user or device, without a release; or ship the same settings in the app with `collection:`
 - **Captures on demand** — from the dashboard, or from a recording trigger on the device (a journey of taps, navigations and log lines): the buffered lookback goes up, then logs, requests and video stream until the capture ends
+- **App performance metrics** — cold and hot start, time to initial and full display per screen, slow and frozen frames, hangs, unhandled errors, sessions, users and HTTP requests, aggregated on the device and sent as OTLP metrics; they fill the project's Flutter Performance dashboard
 - **Taps that name the widget** — every tap is recorded with a CSS-like selector (`ElevatedButton#pay`, `IconButton[label="Delete"]`) that click steps of recording triggers match
 - Screen recording — the last ~10 seconds encoded as MP4, uploaded as the clip of an exception, or as consecutive segments while a capture streams (Android, iOS, macOS)
 - Touch/click positions rendered on recordings
@@ -211,6 +212,36 @@ router.routerDelegate.addListener(() => Traceway.recordNavigation(
     router.routerDelegate.currentConfiguration.uri.path));
 ```
 
+## App performance metrics
+
+The SDK measures the app on the device and uploads the numbers as OTLP metrics: histograms and counters (delta temporality, base-2 exponential buckets at the server's scale), one small payload every five minutes and when the app goes to the background. Nothing is sent per observation, and no user, device or session id is a dimension. A new Flutter project starts with the **Flutter Performance** dashboard, which charts them as percentiles over every session.
+
+| Metric | What it measures |
+|--------|------------------|
+| `app.start.duration` (`start_type` `cold` / `hot`) | Cold: from the process start (read from `/proc` on Android and Linux; elsewhere from when the SDK was initialized) to the first frame on screen. Hot: from the return to the foreground to the next frame |
+| `app.screen.ttid` (`screen`) | Time to initial display: from the navigation to the end of the first frame that built the route |
+| `app.screen.ttfd` (`screen`) | Time to full display: from the navigation until the app calls `Traceway.reportFullyDisplayed()` |
+| `app.frames.slow`, `app.frames.frozen` (with `.total`, by `screen`) | From the engine's frame timings: slow when the UI or raster thread took longer than the display's frame budget, frozen at 700 ms or more |
+| `app.hang`, `app.hang.duration` | The UI isolate ran no timer for 2 s or more while the app was in the foreground |
+| `app.crash` | Errors nothing caught (`FlutterError.onError`, `PlatformDispatcher.onError`, the `Traceway.run` zone). They do not end a Flutter app, so the dashboard calls them unhandled errors |
+| `app.session`, `app.user`, `app.user.affected` (`issue`) | Sessions; users counted once a day per installation, and once a day per problem they met (crash, hang, slow start, frozen frames, failed request), so no id leaves the device |
+| `app.memory.peak` | The process's peak RSS, once per session |
+| `app.request.duration`, `app.request.bytes`, `app.request.failed` (`host`) | Every HTTP request the SDK records |
+
+Screens are route names with ids folded (`/orders/8841` → `/orders/:id`). Resource dimensions are the app version, environment, OS and its major version, form factor (`phone`, `tablet`, `desktop`) and a coarse device class from the RAM.
+
+```dart
+// The screen has what it loads: ends its time to full display.
+Traceway.reportFullyDisplayed();
+
+// App-defined metrics, charted like the built-in ones.
+Traceway.metric('checkout.duration', 1234, {'plan': 'pro'});
+Traceway.count('cart.add');
+Traceway.setMetricDimension('experiment', 'b'); // `custom.experiment` on every metric
+```
+
+`captureMetrics: false` turns it all off. A rule's `metrics` section switches metrics off (`enabled`), samples sessions (`sampleRate`; counts are weighted back by the server) or changes the upload interval (`flushSeconds`, 30–3600). An upload that fails is kept and retried once.
+
 ## Options
 
 | Option | Default | Description |
@@ -230,6 +261,8 @@ router.routerDelegate.addListener(() => Traceway.recordNavigation(
 | `captureNetwork` | `true` | Install `HttpOverrides.global` to record every dart:io HTTP call |
 | `captureNavigation` | `true` | Record navigation transitions reported by `Traceway.navigatorObserver` |
 | `captureUserActions` | `true` | Record taps with the selector of the widget, and feed taps and hovers to recording triggers |
+| `captureMetrics` | `true` | Measure app start, screen display times, frames, hangs, unhandled errors, sessions, users and requests, and upload them as metrics |
+| `metricDimensions` | `{}` | Up to two app-defined dimensions on every metric (`custom.<key>`) |
 | `recordAllSessions` | `false` | Stream breadcrumbs and the screen recording all the time instead of keeping them for errors |
 | `collection` | — | Local collection settings, the same document as a remote-config rule (see [Local config](#local-config)) |
 | `sessions` | `true` | Track sessions |

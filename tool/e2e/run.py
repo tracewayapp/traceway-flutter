@@ -21,6 +21,11 @@ at each point:
   6. the app saves its buffer going to the background and is killed; the
      next start resumes the session and its first error brings up what the
      killed run had buffered
+  7. (checked before 6) the app's performance arrives as client metrics:
+     cold start, screen display times, slow and frozen frames, a hang, the
+     unhandled error, session, user, requests and app-defined metrics; the
+     project's default Flutter Performance dashboard exists and its widgets
+     chart them
 
   python3 tool/e2e/run.py --base http://127.0.0.1:8082 --email .. --password .. \\
       [--storage <backend STORAGE_PATH>] -- <app command>
@@ -141,6 +146,89 @@ def stored_segments(storage, project_id, session_id):
         with open(path) as f:
             out[int(os.path.basename(path)[:-5])] = json.load(f)
     return dict(sorted(out.items()))
+
+
+def check_metrics(api, since, check):
+    """Phase 7: the app's performance as client metrics, and the project's default dashboard."""
+    print('\n[7] performance metrics and the Flutter Performance dashboard')
+    time.sleep(12)  # the server writes client metrics every 10 s
+
+    # The server keeps client metrics per minute, stamped at its start:
+    # the range starts on the minute the run began in.
+    metrics_since = since.replace(second=0, microsecond=0)
+
+    def metric(query):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        status, body = api.call('POST', '/api/metrics/query', {
+            'queries': [query], 'from': metrics_since.isoformat(),
+            'to': (now + datetime.timedelta(minutes=2)).isoformat(), 'wholeRange': True})
+        if status != 200:
+            return {'_error': f'{status} {body}'}
+        series = ((body or {}).get('results') or [{}])[0].get('series') or {}
+        return {k: sum(p.get('value') or 0 for p in v) for k, v in series.items() if v}
+
+    def one(name, aggregation, group_by=None):
+        q = {'name': name, 'aggregation': aggregation}
+        if group_by:
+            q['groupBy'] = group_by
+        return metric(q)
+
+    def total(series):
+        # An ungrouped series is keyed `__all__`.
+        return sum(v for k, v in series.items() if k != '_error')
+
+    starts = one('app.start.duration', 'p75', 'start_type')
+    cold = starts.get('cold', 0)
+    check(100 <= cold <= 20000, 'a cold start was measured, process start to first frame', f'{starts}')
+    ttid = one('app.screen.ttid', 'count', 'screen')
+    check({'/', '/e2e-detail', '/users/:id'} <= set(ttid), 'time to initial display per screen, ids normalized',
+          f'{ttid}')
+    ttfd = one('app.screen.ttfd', 'p75', 'screen')
+    check(800 <= ttfd.get('/users/:id', 0) <= 3000, 'time to full display of the user page (reported after ~1 s)',
+          f'{ttfd}')
+    frames = total(one('app.frames.slow.total', 'sum'))
+    frozen = total(one('app.frames.frozen', 'sum'))
+    check(frames >= 100 and frozen >= 1, 'frames counted, the 800 ms frame among the frozen ones',
+          f'{frames:.0f} frames, {frozen:.0f} frozen')
+    hangs = total(one('app.hang', 'sum'))
+    hang_ms = total(one('app.hang.duration', 'p75'))
+    check(hangs >= 1 and 2000 <= hang_ms <= 4000, 'the 2.6 s block is a hang', f'{hangs:.0f} hangs, p75 {hang_ms:.0f} ms')
+    crashes = total(one('app.crash', 'sum'))
+    check(crashes >= 1, 'the uncaught error counts as an unhandled error', f'{crashes:.0f}')
+    sessions_n = total(one('app.session', 'sum'))
+    users = total(one('app.user', 'sum'))
+    check(sessions_n == 1 and users == 1, 'one session and one user', f'{sessions_n:.0f} sessions, {users:.0f} users')
+    affected = one('app.user.affected', 'sum', 'issue')
+    check({'crash', 'hang', 'frozen_frames'} <= set(affected), 'the user is counted as affected by each problem',
+          f'{affected}')
+    hosts = one('app.request.duration', 'count', 'host')
+    check(any(h.startswith('127.0.0.1') for h in hosts), 'request durations by host', f'{hosts}')
+    checkout = total(one('e2e.checkout', 'p75'))
+    cart = total(one('e2e.cart_add', 'sum'))
+    check(1100 <= checkout <= 1350 and cart == 3, 'app-defined metrics arrive', f'p75 {checkout:.0f}, count {cart:.0f}')
+
+    status, listing = api.call('GET', '/api/dashboards')
+    boards = (listing or {}).get('dashboards') or [] if isinstance(listing, dict) else []
+    flutter_board = [b for b in boards if b.get('templateKey') == 'flutter-performance']
+    check(len(flutter_board) == 1, 'the project came with the Flutter Performance dashboard',
+          f'{[b.get("name") for b in boards]}')
+    if flutter_board:
+        status, board = api.call('GET', f"/api/dashboards/{flutter_board[0]['id']}")
+        widgets = (board or {}).get('widgets') or [] if isinstance(board, dict) else []
+        # No session ended (its peak memory is observed then) and a local
+        # address has no country.
+        expected_empty = {'Peak Memory per Session', 'App Start by Country'}
+        empty = []
+        for w in widgets:
+            config = json.loads(w['config']) if isinstance(w['config'], str) else w['config']
+            values = [total(metric({k: v for k, v in src.items() if k in ('name', 'aggregation', 'groupBy')}))
+                      for src in config.get('sources', [])]
+            if not any(values):
+                empty.append(w['title'])
+        print(f'        {len(widgets)} widgets, without data: {empty}')
+        check(widgets and set(empty) <= expected_empty, 'every widget of the dashboard charts what the app sent',
+              f'empty: {sorted(set(empty) - expected_empty)}')
+
 
 
 def main():
@@ -412,6 +500,9 @@ def main():
         check(len(names.get('e2e_paid', [])) == 1, 'the rule streamed app events', f"{len(names.get('e2e_paid', []))}")
         check(len(names.get('e2e_tick', [])) >= 3, 'tracked events stream without an error')
         check(len(issues) == 1, 'still one issue')
+
+        # ---- 7. metrics and the default dashboard --------------------------
+        check_metrics(api, since, check)
 
         # ---- 6. killed in the background, restarted ------------------------
         print('\n[6] the buffer outlives a kill in the background')

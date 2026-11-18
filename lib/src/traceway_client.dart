@@ -22,6 +22,9 @@ import 'device_info_collector.dart';
 import 'events/traceway_event.dart';
 import 'interaction/tap_target.dart';
 import 'interaction/widget_selector.dart';
+import 'metrics/app_vitals.dart';
+import 'metrics/metrics_recorder.dart';
+import 'metrics/route.dart';
 import 'opamp/client.dart';
 import 'opamp/messages.dart';
 import 'otel/events.dart';
@@ -57,6 +60,7 @@ class TracewayTestOverrides {
     this.random,
     this.opampMinPollIntervalMs,
     this.videoSupported = true,
+    this.appVitals = false,
   });
 
   final LogRecordExporter? logExporter;
@@ -71,6 +75,10 @@ class TracewayTestOverrides {
 
   /// Whether the platform can encode video; tests attach a fake source.
   final bool videoSupported;
+
+  /// Whether the frame, start and hang instrumentation runs. Metrics the
+  /// app reports and requests, sessions and errors are recorded either way.
+  final bool appVitals;
 }
 
 class TracewayClient with WidgetsBindingObserver implements RouterHooks {
@@ -115,6 +123,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         captureNavigation: _options.captureNavigation,
         captureUserActions: _options.captureUserActions,
         sessions: _options.sessions,
+        captureMetrics: _options.captureMetrics,
       ),
     );
     final settings = _control.settings;
@@ -139,6 +148,25 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       nextSegmentIndex: () => _sessions?.nextSegmentIndex() ?? 0,
       segmentMs: (ringMs * 0.8).round().clamp(200, 10000),
     );
+    _metrics = MetricsRecorder(
+      control: _control,
+      sessionId: () => _sessions?.currentId,
+      installationId: () => bytesToUuid(_instanceUid),
+      resource: () => _resourceAttributes,
+      send: _sendMetrics,
+      store: () => _store,
+      scopeName: tracewaySdkName,
+      scopeVersion: tracewaySdkVersion,
+      dimensions: _options.metricDimensions,
+      deferUntilStart: true,
+    );
+    _vitals = AppVitals(_metrics, currentScreen: () => _metricsScreen);
+    if (_options.captureMetrics && (_overrides?.appVitals ?? true)) {
+      _vitals.watchColdStart(
+        sdkStartMs: _sdkStartMs,
+        processStartMs: AppVitals.readProcessStartMs(),
+      );
+    }
     _control.onChange(_onSettingsChanged);
   }
 
@@ -156,6 +184,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   late final RecordingsTransport _recordings;
   late final ReplayController _replay;
   late final bool _videoSupported;
+  late final MetricsRecorder _metrics;
+  late final AppVitals _vitals;
+
+  /// When the app initialized the SDK: the start of a cold start where the
+  /// process start is not known.
+  final int _sdkStartMs = DateTime.now().millisecondsSinceEpoch;
 
   final Map<String, String> _globalAttributes = {};
   final Map<String, String> _resourceAttributes = {};
@@ -392,6 +426,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       )..start();
     }
     _started = true;
+    if (_options.captureMetrics) {
+      _metrics.start();
+      if (_overrides?.appVitals ?? true) _vitals.start();
+    }
     _restoreLocalCaptures();
     _onSettingsChanged(_control.settings);
     final opamp = _opamp;
@@ -438,6 +476,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (environment != null && environment.isNotEmpty) {
       attrs['deployment.environment.name'] = environment;
     }
+    // The numbers of the SDK's performance events arrive as metrics: the
+    // server must not count an uploaded event a second time.
+    if (_options.captureMetrics) attrs['traceway.metrics'] = 'aggregated';
   }
 
   String get _serviceName {
@@ -567,6 +608,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     );
   }
 
+  /// An error nothing in the app caught: reported like [captureException]
+  /// and counted as an unhandled error (`app.crash`).
+  void captureUnhandledException(Object error, [StackTrace? stackTrace]) {
+    if (_options.captureMetrics) _metrics.crash();
+    captureException(error, stackTrace);
+  }
+
   void captureMessage(String message, [Map<String, String>? attributes]) {
     _emit(
       eventName: eventMessage,
@@ -658,6 +706,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final arrived = event.action != 'remove';
     final to = arrived ? event.to : null;
     if (to != null && to.isNotEmpty) _currentScreen = to;
+    if (_options.captureMetrics && arrived) {
+      _vitals.navigated(
+        to == null || to.isEmpty ? null : normalizePath(to),
+        event.action,
+        event.timestamp,
+      );
+    }
     _emit(
       eventName: eventNavigation,
       severity: Severity.INFO,
@@ -676,6 +731,99 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   /// The path of the route on top, as the last navigation reported it.
   String? get currentScreen => _currentScreen;
+
+  /// The current screen as a metrics dimension: `/orders/8841` is
+  /// `/orders/:id`, so every order is one series.
+  String? get _metricsScreen {
+    final screen = _currentScreen;
+    return screen == null || screen.isEmpty ? null : normalizePath(screen);
+  }
+
+  // ---------------------------------------------------------------- metrics
+
+  /// The screen on top shows everything it loads: ends its time to full
+  /// display (`app.screen.ttfd`), measured from the navigation to it.
+  void reportFullyDisplayed() {
+    if (_options.captureMetrics) _vitals.fullyDisplayed();
+  }
+
+  /// Observes [value] of an app-defined distribution, e.g.
+  /// `checkout.duration`. Names are lowercase letters, digits, `_` and `.`,
+  /// and may not start with `app.`, `browser.`, `traceway.` or `custom.`; at
+  /// most two dimensions are kept.
+  void recordMetric(String name, double value, [Map<String, Object>? dims]) {
+    if (_options.captureMetrics) _metrics.metric(name, value, dims);
+  }
+
+  /// Adds [n] to an app-defined counter; see [recordMetric] for names.
+  void recordCount(String name, [double n = 1, Map<String, Object>? dims]) {
+    if (_options.captureMetrics) _metrics.count(name, n, dims);
+  }
+
+  /// Sets an app-defined dimension on every metric from now on (sent as
+  /// `custom.<key>`); null removes it. At most two keys.
+  void setMetricDimension(String key, String? value) =>
+      _metrics.setDimension(key, value);
+
+  Future<int> _sendMetrics(List<int> body) async {
+    final response = await _http
+        .post(
+          Uri.parse(_endpoints.metrics),
+          headers: {
+            'Content-Type': 'application/x-protobuf',
+            'Authorization': 'Bearer $_token',
+          },
+          body: body,
+        )
+        .timeout(const Duration(seconds: 10));
+    return response.statusCode;
+  }
+
+  static int _maxRss() {
+    try {
+      return ProcessInfo.maxRss;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  static const String _memoryKey = 'metricsMemory';
+
+  /// The process may be killed in the background: what the session used so
+  /// far is kept, and observed when the session is known to have ended.
+  void _rememberMemoryPeak() {
+    final session = _sessions?.currentId;
+    if (!_options.captureMetrics || session == null) return;
+    var bytes = _maxRss();
+    final record = _store.get(_memoryKey);
+    if (record is Map && record['s'] == session && record['b'] is int) {
+      bytes = max(bytes, record['b'] as int);
+    }
+    if (bytes > 0) _store.set(_memoryKey, {'s': session, 'b': bytes});
+  }
+
+  void _recordMemoryPeak(String session) {
+    if (!_options.captureMetrics) return;
+    var bytes = _maxRss();
+    final record = _store.get(_memoryKey);
+    if (record is Map && record['s'] == session && record['b'] is int) {
+      bytes = max(bytes, record['b'] as int);
+    }
+    _store.set(_memoryKey, null);
+    _metrics.memoryPeak(session, bytes);
+  }
+
+  /// A session that ended while the app was not running.
+  void _settleMemoryPeak(String current) {
+    final record = _store.get(_memoryKey);
+    if (!_options.captureMetrics || record is! Map) return;
+    final session = record['s'];
+    final bytes = record['b'];
+    if (session is String && session != current && bytes is int) {
+      _store.set(_memoryKey, null);
+      _metrics.memoryPeak(session, bytes);
+    }
+  }
 
   /// Records a tap at [position] (global logical pixels): a
   /// `browser.user_action.click` record naming the widget, and a click for
@@ -810,6 +958,15 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     } catch (e) {
       _log('network span failed: $e');
     }
+    if (_options.captureMetrics) {
+      final status = event.statusCode;
+      _metrics.request(
+        event.url,
+        event.duration.inMicroseconds / 1000,
+        failed: event.error != null || status == null || status >= 400,
+        responseBytes: event.responseBytes,
+      );
+    }
   }
 
   /// Notes user activity so the session's inactivity timeout restarts.
@@ -833,6 +990,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       await _spanSink?.forceFlush();
       await _replay.drain();
       await _logSink?.forceFlush();
+      await _metrics.flush();
       await _outbox?.drain();
       await _persistBuffer();
       _saveTriggerProgress(now: true);
@@ -851,7 +1009,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (session != null) {
       _emitSessionEnd(session, DateTime.now().millisecondsSinceEpoch);
     }
+    // The session may go on after a restart: its memory is observed when it
+    // ends.
+    _rememberMemoryPeak();
+    _vitals.stop();
     await _flush();
+    _metrics.stop();
     _shutdown = true;
     sessions?.stop();
     _opamp?.stop();
@@ -948,6 +1111,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
     _restoreTriggerProgress();
     _replay.onSessionStart();
+    if (_options.captureMetrics) {
+      _settleMemoryPeak(session.id);
+      _metrics.sessionStarted(session.id, resumed: resumed);
+    }
     _emit(
       eventName: resumed ? eventSessionUpdate : eventSessionStart,
       severity: Severity.INFO,
@@ -960,6 +1127,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   void _onSessionEnd(SessionInfo session, int endedAtMs) {
     _replay.onSessionEnd(session.id);
+    _recordMemoryPeak(session.id);
     _emitSessionEnd(session, endedAtMs);
   }
 
@@ -1450,6 +1618,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (!_sequenceKinds.contains('hover')) _hovered = const {};
     _observeScreenForSequences();
     _applyReplay();
+    _metrics.configure();
   }
 
   /// Triggers that arrive after the app reached its current screen still see
@@ -1550,6 +1719,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_shutdown) return;
+    if (_options.captureMetrics) _vitals.lifecycleChanged(state);
     if (state == AppLifecycleState.resumed) {
       _sessions?.markActivity();
       unawaited(_opamp?.poll());
@@ -1557,6 +1727,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       _replay.onPaused();
+      if (_options.captureMetrics && _started) {
+        _rememberMemoryPeak();
+        // Stored before it is sent: the process may not live to see the
+        // answer.
+        unawaited(_metrics.flush(final_: true));
+      }
       _saveTriggerProgress(now: true);
       unawaited(_persistBuffer());
       unawaited(_logSink?.forceFlush());

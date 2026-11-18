@@ -63,6 +63,27 @@ class Traceway extends StatefulWidget {
     ));
   }
 
+  /// The screen on top shows everything it loads (data fetched, images
+  /// decoded): ends its time to full display, charted next to the time to
+  /// its first frame.
+  static void reportFullyDisplayed() =>
+      TracewayClient.instance?.reportFullyDisplayed();
+
+  /// Observes [value] of an app-defined metric, e.g.
+  /// `Traceway.metric('checkout.duration', ms, {'plan': 'pro'})`. Charted as
+  /// percentiles; see [TracewayClient.recordMetric] for the naming rules.
+  static void metric(String name, double value, [Map<String, Object>? dims]) =>
+      TracewayClient.instance?.recordMetric(name, value, dims);
+
+  /// Adds [n] to an app-defined counter, e.g. `Traceway.count('cart.add')`.
+  static void count(String name, [double n = 1, Map<String, Object>? dims]) =>
+      TracewayClient.instance?.recordCount(name, n, dims);
+
+  /// Sets a dimension on every metric from now on, e.g. an experiment arm;
+  /// null removes it. At most two.
+  static void setMetricDimension(String key, String? value) =>
+      TracewayClient.instance?.setMetricDimension(key, value);
+
   static void run({
     required String connectionString,
     required Widget child,

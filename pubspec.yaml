@@ -22,6 +22,7 @@ dependencies:
   flutter_quick_video_encoder: ^1.7.2
   device_info_plus: ^13.1.0
   args: ^2.4.0
+  fixnum: ^1.1.0
 
 dev_dependencies:
   flutter_test:

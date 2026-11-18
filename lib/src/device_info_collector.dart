@@ -14,12 +14,21 @@ class DeviceInfoCollector {
     info['device.locale'] = Platform.localeName;
     info['runtime.version'] = Platform.version;
 
+    if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
+      info['device.form_factor'] = 'desktop';
+    }
     try {
       final view = ui.PlatformDispatcher.instance.views.first;
       final size = view.physicalSize;
       info['screen.resolution'] =
           '${size.width.toInt()}x${size.height.toInt()}';
       info['screen.density'] = view.devicePixelRatio.toStringAsFixed(1);
+      if ((Platform.isAndroid || Platform.isIOS) && view.devicePixelRatio > 0) {
+        final shortest = (size.width < size.height ? size.width : size.height) /
+            view.devicePixelRatio;
+        // Material's breakpoint between a phone and a tablet.
+        info['device.form_factor'] = shortest >= 600 ? 'tablet' : 'phone';
+      }
     } catch (_) {}
 
     return info;
@@ -40,6 +49,8 @@ class DeviceInfoCollector {
         info['device.manufacturer'] = 'Apple';
         info['device.modelId'] = ios.utsname.machine;
         info['device.isPhysical'] = ios.isPhysicalDevice.toString();
+        _addMajor(info, ios.systemVersion);
+        _addClass(info, ios.physicalRamSize);
       } else if (Platform.isAndroid) {
         final android = await deviceInfo.androidInfo;
         info['device.model'] = android.model;
@@ -49,6 +60,8 @@ class DeviceInfoCollector {
             'Android ${android.version.release} (SDK ${android.version.sdkInt})';
         info['device.modelId'] = android.device;
         info['device.isPhysical'] = android.isPhysicalDevice.toString();
+        _addMajor(info, android.version.release);
+        _addClass(info, android.physicalRamSize);
       }
     } catch (_) {}
 
@@ -66,5 +79,18 @@ class DeviceInfoCollector {
     } catch (_) {}
 
     return info;
+  }
+
+  static void _addMajor(Map<String, String> info, String version) {
+    final major = RegExp(r'^\d+').stringMatch(version.trim());
+    if (major != null) info['os.major'] = major;
+  }
+
+  /// A coarse device class for the metrics dimension, from the RAM the
+  /// system reports (in MB, a little under the nominal size).
+  static void _addClass(Map<String, String> info, int ramMb) {
+    if (ramMb <= 0) return;
+    final gb = ramMb / 1024;
+    info['device.class'] = gb < 3 ? 'low' : (gb < 6 ? 'mid' : 'high');
   }
 }
