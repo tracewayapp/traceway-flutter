@@ -2,8 +2,11 @@ class TracewayOptions {
   /// Share of exceptions and messages that are reported (0.0 - 1.0).
   final double sampleRate;
 
-  /// Keep a short screen recording on the device and upload it as a clip
-  /// when an exception is captured. Never streamed.
+  /// Record the screen. By default the last frames stay on the device and
+  /// leave only as the clip of an exception; a capture or trigger that asks
+  /// for replay, or a rule, streams the session as video segments while it
+  /// lasts. Needs a video encoder: Android, iOS and macOS. Elsewhere nothing
+  /// is recorded.
   final bool screenCapture;
   final bool debug;
 
@@ -43,6 +46,40 @@ class TracewayOptions {
   /// The observer must still be wired into the app's navigator.
   final bool captureNavigation;
 
+  /// Record taps (`browser.user_action.click`) with a selector naming the
+  /// widget, and let recording triggers match taps and mouse hovers. The
+  /// shown text of a widget inside a `TracewayPrivacyMask` is never sent.
+  final bool captureUserActions;
+
+  /// Stream breadcrumbs (logs, network, navigation, taps, app events) and the
+  /// screen recording all the time instead of keeping them for errors.
+  final bool recordAllSessions;
+
+  /// Collection settings that apply without the server: the same document a
+  /// remote-config rule holds (`signals`, `replay`, `buffer`, `triggers`,
+  /// ...), laid over the built-in defaults. With [remoteConfig] the server's
+  /// rules are laid over these; with it off they are the whole policy. The
+  /// `capture*` options and [screenCapture] stay the ceiling either way.
+  ///
+  /// ```dart
+  /// collection: {
+  ///   'signals': {'network': {'mode': 'stream'}},
+  ///   'triggers': [
+  ///     {
+  ///       'id': 'checkout-journey',
+  ///       'steps': [
+  ///         {'match': {'event': {'type': 'navigation', 'value': '/cart'}}},
+  ///         {'match': {'event': {'type': 'click', 'value': '#pay'}}, 'withinSeconds': 60},
+  ///       ],
+  ///       'actions': [
+  ///         {'type': 'capture', 'durationSeconds': 120, 'lookbackSeconds': 30, 'replay': true},
+  ///       ],
+  ///     },
+  ///   ],
+  /// }
+  /// ```
+  final Map<String, Object?>? collection;
+
   /// Track sessions (`session.start` / `session.end`).
   final bool sessions;
 
@@ -72,6 +109,9 @@ class TracewayOptions {
     this.captureLogs = true,
     this.captureNetwork = true,
     this.captureNavigation = true,
+    this.captureUserActions = true,
+    this.recordAllSessions = false,
+    this.collection,
     this.sessions = true,
     this.baselineSampleRate = 0,
     this.remoteConfig = true,

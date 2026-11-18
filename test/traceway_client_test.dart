@@ -1,10 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dartastic_opentelemetry/proto/opentelemetry_proto_dart.dart'
+    as proto;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:traceway/src/core/settings.dart';
 import 'package:traceway/src/events/traceway_event.dart';
+import 'package:traceway/src/persistence/buffer_persistence.dart';
 import 'package:traceway/src/traceway_client.dart';
 import 'package:traceway/src/traceway_options.dart';
 
@@ -165,6 +168,117 @@ void main() {
       expect(h.client.bufferedCount, 0);
     });
 
+    test('the buffer survives a restart within the session', () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_buffer');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      var h = await startHarness(stateDirectory: dir);
+      final session = h.client.currentSessionId;
+      h.client.recordLog('before the restart');
+      h.client.recordNetworkEvent(NetworkEvent(
+        method: 'GET',
+        url: 'https://api.example.com/cart',
+        duration: const Duration(milliseconds: 80),
+        statusCode: 200,
+      ));
+      await h.client.flush();
+      expect(h.named(null), isEmpty);
+      expect(File('${dir.path}/buffer.json').existsSync(), isTrue);
+
+      await TracewayClient.resetForTest();
+      h = await startHarness(stateDirectory: dir);
+      expect(h.client.currentSessionId, session);
+      expect(File('${dir.path}/buffer.json').existsSync(), isFalse);
+      h.client.captureException(StateError('after the restart'));
+      await h.client.flush();
+
+      final logs = [
+        for (final request in h.requestsTo('/api/otel/v1/logs'))
+          proto.ExportLogsServiceRequest.fromBuffer(request.bodyBytes),
+      ];
+      final bodies = [
+        for (final request in logs)
+          for (final resourceLogs in request.resourceLogs)
+            for (final scope in resourceLogs.scopeLogs)
+              for (final record in scope.logRecords) record.body.stringValue,
+      ];
+      expect(bodies, ['before the restart']);
+      final resource = logs.single.resourceLogs.single.resource.attributes
+          .map((a) => a.key);
+      expect(resource, contains('service.instance.id'));
+      final spans = [
+        for (final request in h.requestsTo('/api/otel/v1/traces'))
+          proto.ExportTraceServiceRequest.fromBuffer(request.bodyBytes),
+      ];
+      expect(spans.single.resourceSpans.single.scopeSpans.single.spans.single.name,
+          'GET');
+      // Uploaded once: the next flush sends nothing restored again.
+      h.client.captureException(StateError('again'));
+      await h.client.flush();
+      expect(h.requestsTo('/api/otel/v1/logs'), hasLength(1));
+    });
+
+    test('restored records keep the version they were recorded with',
+        () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_buffer');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      Future<Harness> run(String version) => startHarness(
+          stateDirectory: dir,
+          options: TracewayOptions(remoteConfig: false, version: version));
+      var h = await run('1.0.0');
+      h.client.recordLog('from 1.0.0');
+      await TracewayClient.resetForTest();
+      h = await run('2.0.0');
+      h.client.recordLog('from 2.0.0');
+      await TracewayClient.resetForTest();
+      h = await run('3.0.0');
+      h.client.captureException(StateError('in 3.0.0'));
+      await h.client.flush();
+      final request = proto.ExportLogsServiceRequest.fromBuffer(
+          h.requestsTo('/api/otel/v1/logs').single.bodyBytes);
+      final byVersion = {
+        for (final resourceLogs in request.resourceLogs)
+          resourceLogs.resource.attributes
+                  .firstWhere((a) => a.key == 'service.version')
+                  .value
+                  .stringValue:
+              [
+            for (final scope in resourceLogs.scopeLogs)
+              for (final record in scope.logRecords) record.body.stringValue
+          ],
+      };
+      expect(byVersion, {
+        '1.0.0': ['from 1.0.0'],
+        '2.0.0': ['from 2.0.0'],
+      });
+    });
+
+    test('a restored buffer belongs to its session only', () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_buffer');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final store = BufferPersistence(dir);
+      final h = await startHarness();
+      h.client.recordLog('kept');
+      await store.save('session-a', h.client.bufferSnapshot);
+      final other = BufferPersistence(dir);
+      await other.load('session-b', maxAgeMs: 600000, maxBytes: 1 << 20);
+      expect(other.restored, isEmpty);
+      expect(File('${dir.path}/buffer.json').existsSync(), isFalse);
+    });
+
+    test('buffer.persist false keeps nothing on disk', () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_buffer');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final h = await startHarness(
+        stateDirectory: dir,
+        options: const TracewayOptions(remoteConfig: false, collection: {
+          'buffer': {'persist': false}
+        }),
+      );
+      h.client.recordLog('memory only');
+      await h.client.flush();
+      expect(File('${dir.path}/buffer.json').existsSync(), isFalse);
+    });
+
     test('baseline-sampled sessions stream their breadcrumbs', () async {
       final h = await startHarness(
           options:
@@ -198,7 +312,7 @@ void main() {
       final record = h.named('exception').single;
       final exceptionId = attr(record, 'traceway.exception.id');
       expect(attr(record, 'traceway.replay.status'), 'requested');
-      expect(source.captures.single.exceptionId, exceptionId);
+      expect(source.captures.single.clipId, exceptionId);
 
       final request = h.requestsTo('/api/recordings').single;
       expect(request.headers['Authorization'], 'Bearer test-token');
@@ -213,6 +327,47 @@ void main() {
       expect(event['format'], 'mp4');
       expect(segment['startedAt'], isNotNull);
       expect(segment['endedAt'], isNotNull);
+    });
+
+    test('an emit action next to the clip does not mislabel its status',
+        () async {
+      final h = await startHarness(
+        options: const TracewayOptions(
+          remoteConfig: false,
+          screenCapture: true,
+          collection: {
+            'triggers': [
+              {
+                'id': 'default-exception',
+                'actions': [
+                  {
+                    'type': 'flush',
+                    'lookbackSeconds': 30,
+                    'signals': [],
+                    'replay': true
+                  },
+                  {'type': 'emit', 'eventName': 'clip_requested'},
+                ],
+                'steps': [
+                  {
+                    'match': {
+                      'key': 'event.name',
+                      'op': 'eq',
+                      'value': 'exception'
+                    }
+                  }
+                ],
+              }
+            ],
+          },
+        ),
+      );
+      h.client.replaySource = FakeReplaySource();
+      h.client.captureException(StateError('boom'));
+      await h.client.flush();
+      expect(attr(h.named('exception').single, 'traceway.replay.status'),
+          'requested');
+      expect(h.requestsTo('/api/recordings'), hasLength(1));
     });
 
     test('the lookback never exceeds what a trigger or the buffer allows',
@@ -265,7 +420,7 @@ void main() {
       expect(h.requestsTo('/api/recordings'), isEmpty);
     });
 
-    test('remote stream settings and stream actions never upload replay',
+    test('a trigger that asks for replay streams it, then goes back to buffering',
         () async {
       var polls = 0;
       final h = await startHarness(
@@ -275,14 +430,10 @@ void main() {
           return polls++ == 0
               ? opampConfig({
                   'schemaVersion': 1,
-                  'signals': {
-                    'console': {'mode': 'stream'},
-                    'custom': {'mode': 'stream'},
-                  },
-                  'replay': {'mode': 'stream', 'sessionSampleRate': 1},
                   'triggers': [
                     {
                       'id': 'start-replay',
+                      'name': 'Watch checkout',
                       'steps': [
                         {
                           'match': {
@@ -293,22 +444,7 @@ void main() {
                         }
                       ],
                       'actions': [
-                        {'type': 'startReplay', 'durationSeconds': 60},
-                        {
-                          'type': 'stream',
-                          'durationSeconds': 60,
-                          'replay': true
-                        },
-                        {
-                          'type': 'capture',
-                          'durationSeconds': 60,
-                          'replay': true
-                        },
-                        {
-                          'type': 'flush',
-                          'lookbackSeconds': 600,
-                          'replay': true
-                        },
+                        {'type': 'startReplay', 'durationSeconds': 1},
                       ],
                     }
                   ],
@@ -319,21 +455,79 @@ void main() {
       final source = FakeReplaySource();
       h.client.replaySource = source;
       await Future<void>.delayed(const Duration(milliseconds: 100));
-
-      expect(h.client.settings.signals['console']!.mode, Mode.stream);
-      expect(h.client.settings.replayMode, Mode.buffer);
       expect(h.client.replay.mode, Mode.buffer);
 
-      h.client.recordLog('streamed now');
       h.client.track('go');
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(h.client.replay.mode, Mode.stream);
+      final fired = h.named('traceway.trigger.fired');
       await h.client.flush();
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+      final firedRecord = h.named('traceway.trigger.fired').single;
+      expect(fired, isNotNull);
+      expect(attr(firedRecord, 'traceway.trigger.replay'), 'true');
+      expect(jsonDecode(attr(firedRecord, 'traceway.trigger.steps') as String),
+          isA<List>());
+
+      // The startReplay window ends: what was recorded leaves as the last
+      // segment of the session and recording goes back to buffering.
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(h.client.replay.mode, Mode.buffer);
+      await h.client.flush();
+      final segments = [
+        for (final body in h.recordingBodies) ...body['segments'] as List
+      ];
+      expect(segments, isNotEmpty);
+      for (final segment in segments.cast<Map>()) {
+        expect(segment['sessionId'], isNotNull);
+        expect(segment.containsKey('exceptionId'), isFalse);
+      }
+    });
+
+    test('a dashboard capture with replay uploads its video lookback, then streams',
+        () async {
+      var polls = 0;
+      final until = DateTime.now().add(const Duration(minutes: 5));
+      final h = await startHarness(
+        options: const TracewayOptions(screenCapture: true),
+        handler: (request) async {
+          if (!request.url.path.endsWith('/opamp')) return null;
+          polls++;
+          return polls == 2
+              ? opampConfig({
+                  'captures': [
+                    {
+                      'id': 'cap-video',
+                      'until': until.toUtc().toIso8601String(),
+                      'lookbackSeconds': 60,
+                      'signals': ['*'],
+                      'replay': true,
+                    }
+                  ]
+                }, [9])
+              : null;
+        },
+      );
+      final source = FakeReplaySource();
+      h.client.replaySource = source;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      h.client.recordLog('before capture');
+      expect(h.client.replay.mode, Mode.buffer);
+
+      await h.client.refreshConfig();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(h.client.replay.mode, Mode.stream);
+      h.client.recordLog('during capture');
       await h.client.flush();
 
-      expect(h.named(null).map((r) => r.body), contains('streamed now'));
-      expect(h.named('traceway.trigger.fired'), isNotEmpty);
-      expect(source.captures, isEmpty);
-      expect(h.requestsTo('/api/recordings'), isEmpty);
+      expect(h.named(null).map((r) => r.body),
+          ['before capture', 'during capture']);
+      expect(h.named('traceway.capture.started').map(
+          (r) => attr(r, 'traceway.capture.id')), ['cap-video']);
+      final lookback = (h.recordingBodies.first['segments'] as List).single as Map;
+      expect(lookback['sessionId'], isNotNull);
+      expect(lookback['segmentIndex'], 0);
+      expect(source.captures.first.until!.difference(source.captures.first.since!).inSeconds,
+          60);
     });
 
     test('replay switched off remotely stops the recorder and drops frames',

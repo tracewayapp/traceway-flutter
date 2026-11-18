@@ -25,12 +25,14 @@ Error tracking, session context and screen recording for Flutter apps, built on 
 - Full Dart stack traces, with symbolication for obfuscated builds
 - **OpenTelemetry inside** — logs and spans go through the standard OTel SDK (`dartastic_opentelemetry`) and leave as OTLP/HTTP
 - **Ring buffer** — logs, HTTP requests, navigation and custom events stay on the device and are uploaded only when something goes wrong
-- **Remote config over OpAMP** — change what is collected from the dashboard, per app version, user or device, without a release
-- Screen recording — the last ~10 seconds encoded as MP4, uploaded only as the clip of an exception
+- **Remote config over OpAMP** — change what is collected from the dashboard, per app version, user or device, without a release; or ship the same settings in the app with `collection:`
+- **Captures on demand** — from the dashboard, or from a recording trigger on the device (a journey of taps, navigations and log lines): the buffered lookback goes up, then logs, requests and video stream until the capture ends
+- **Taps that name the widget** — every tap is recorded with a CSS-like selector (`ElevatedButton#pay`, `IconButton[label="Delete"]`) that click steps of recording triggers match
+- Screen recording — the last ~10 seconds encoded as MP4, uploaded as the clip of an exception, or as consecutive segments while a capture streams (Android, iOS, macOS)
 - Touch/click positions rendered on recordings
 - Privacy masking — blur or blank sensitive UI regions in recordings
 - Sessions, with the breadcrumb timeline of each one
-- Telemetry that failed to send is kept on disk and retried
+- Telemetry that failed to send is kept on disk and retried; the ring buffer is saved when the app goes to the background, so a session that goes on after the system killed the app still has its breadcrumbs (`buffer.persist`)
 - Simple one-line setup
 
 ## Installation
@@ -101,27 +103,120 @@ Every record is an OpenTelemetry log record or span and belongs to a *signal*. E
 | `messages` | `captureMessage` | stream |
 | `console` | `print` / `debugPrint` | buffer |
 | `network` | HTTP requests (client spans) | buffer |
-| `navigation` | `Traceway.navigatorObserver` | buffer |
+| `navigation` | `Traceway.navigatorObserver`, `Traceway.recordNavigation` | buffer |
+| `userActions` | taps (`browser.user_action.click`) | buffer |
 | `custom` | `Traceway.recordAction`, `Traceway.track` | buffer |
-| replay | screen recording | buffer — never streamed |
+| replay | screen recording | buffer |
 
 The built-in trigger fires on every exception: it uploads the buffered breadcrumbs of the last 10 minutes and the screen-recording clip. An app that never throws sends only its session start and end. Clips are rationed to one per 5 seconds and 20 per session; breadcrumbs are still sent for the exceptions in between.
+
+`recordAllSessions: true` streams every breadcrumb signal and the screen recording instead. The signal names, modes, triggers and limits are the browser SDK's, so one rule can target both.
 
 ## Remote config
 
 The SDK polls the server over [OpAMP](https://opentelemetry.io/docs/specs/opamp/) (plain HTTP, every 5 minutes by default) and applies the collection settings you define under **Project → Data Collection** in the dashboard: signal modes and sample rates, buffer sizes, extra triggers (for example "flush when `checkout_failed` happens twice in a minute") and on-demand captures of one user or device.
 
-- The options you pass to `Traceway.run` are **ceilings**. Remote settings can lower what is collected but never raise it: with `captureNetwork: false` no rule can turn network capture on.
-- **The screen recording cannot be streamed remotely.** A rule that sets replay to `stream`, or an action that asks for replay, is treated as `buffer`: video leaves the device only as the clip of an exception, and never more than the frame buffer holds (`maxBufferFrames`, ~10 seconds).
+- The options you pass to `Traceway.run` are **ceilings**. Remote settings can lower what is collected but never raise it: with `captureNetwork: false` no rule can turn network capture on, and without `screenCapture: true` nothing is recorded.
 - The last applied settings are cached, so they are in effect from the first frame of the next start.
 - Set `remoteConfig: false` to never poll.
+
+### Local config
+
+`collection:` takes the same settings document a rule holds and lays it over the built-in defaults, so an app can define its own policy and triggers without the server. With `remoteConfig: true` the server's rules apply on top of it; with `remoteConfig: false` it is the whole policy.
+
+```dart
+Traceway.run(
+  connectionString: '...',
+  options: const TracewayOptions(
+    screenCapture: true,
+    remoteConfig: false,
+    collection: {
+      'signals': {'network': {'mode': 'stream'}},
+      'buffer': {'maxAgeSeconds': 300},
+      'triggers': [
+        {
+          'id': 'checkout-failed-twice',
+          'steps': [
+            {'match': {'key': 'event.name', 'op': 'eq', 'value': 'checkout_failed'}, 'count': 2, 'periodSeconds': 60},
+          ],
+          'actions': [
+            {'type': 'capture', 'durationSeconds': 300, 'lookbackSeconds': 120, 'replay': true},
+          ],
+        },
+      ],
+    },
+  ),
+  child: const MyApp(),
+);
+```
+
+An invalid document is ignored with a console warning, and the defaults apply.
+
+## Captures
+
+A capture uploads what the device holds from its lookback window and then streams the selected signals, and the screen recording when it asks for replay, until it ends. Records sent under a capture carry its id (`traceway.capture.ids`), so the dashboard shows when it is collecting.
+
+- **From the dashboard**: the Capture button on a session or issue targets one installation (`service.instance.id`), user (`user.id`) or session. The device starts it at its next poll; cancelling it stops the streaming at the poll after that. Each capture's lookback is uploaded once per installation.
+- **From a trigger** (`{"type": "capture", ...}` action): started on the device the moment the trigger fires. It survives app restarts until it ends; firing again only extends it.
+
+While a capture streams replay, the recording leaves as consecutive MP4 segments of about 8 seconds that start where the previous one ended. An exception during a streaming capture still gets a clip of its own. Video needs a hardware encoder: Android, iOS and macOS. On other platforms `screenCapture` records nothing and captures bring logs and requests only.
+
+### Recording triggers: journeys of taps, navigations and logs
+
+The dashboard's *recording trigger* steps work in Flutter. A step is one of:
+
+| Step | Matches |
+|------|---------|
+| `{"event": {"type": "click", "value": "<selector>"}}` | a tap on a widget the selector matches, or inside one |
+| `{"event": {"type": "hover", "value": "<selector>"}}` | the mouse entering a matching widget (desktop and web; never touch) |
+| `{"event": {"type": "navigation", "value": "/users/{id}"}}` | arriving at a route; `{id}` is one non-empty segment |
+| `{"event": {"type": "log", "value": "Profile loaded", "mode": "contains"}}` | a `print` / `debugPrint` line or a `captureMessage` (`exact` by default) |
+
+Steps match in order, each within its `withinSeconds` of the previous one; progress survives an app restart within the session. When a trigger that asks for replay fires, the session lists it as a recording reason with its sequence.
+
+#### Naming widgets
+
+Flutter has no DOM, so click and hover selectors run over the element tree under the pointer. The syntax is the CSS subset the dashboard validates:
+
+| Selector | Matches a widget that |
+|----------|-----------------------|
+| `ElevatedButton` | is of that type (generic arguments ignored) |
+| `#checkout` | has `Key('checkout')` (a `ValueKey<String>`), or is `Semantics(identifier: 'checkout')` |
+| `.button` | is a `Semantics` with that role: `button`, `link`, `header`, `image`, `textField`, `slider`, `checkbox`, `toggle`, `selected` |
+| `[key="42"]` | has a `ValueKey` whose value reads `42` |
+| `[identifier="..."]` | has that `Semantics.identifier` |
+| `[label="Delete"]` | has that semantics label or tooltip (an `IconButton`'s tooltip, an `Icon`'s semantic label) |
+| `[text="Pay"]` | shows that text: a `Text`'s own, or the text of the `Text` widgets under it; never the content of an input field |
+| `[type="_Private"]` | is of a type that cannot be written as a tag |
+
+Attribute values take `=`, `^=`, `$=`, `*=`, `~=` and `|=`. Combinators are descendant (space), child (`>`), adjacent (`+`) and general (`~`) sibling, in the element tree, where a widget such as `ElevatedButton` sits several elements above the `Text` it shows, so prefer the descendant combinator. A tap matches when the widget under the finger or any widget around it does, the way a browser click matches its target or an ancestor.
+
+You rarely write one by hand: every tap is recorded as `browser.user_action.click` with the selector of the control that handled it (`browser.css_selector`), shown on the session timeline. It prefers an id (`ElevatedButton#pay`, or `CheckoutButton#checkout` for your own widget with a key), then a key, the shown text, the label, and the type alone. Keys and `Semantics(identifier:)` (the ones integration tests and Appium/Maestro use) are the most stable choice. The text of a widget inside `TracewayPrivacyMask` is never sent.
+
+Widget type names are minified in `--obfuscate` builds and in Flutter web release builds: there, match by key, identifier, role, label or text, and recorded selectors leave the type out.
+
+#### Naming routes
+
+A navigation step matches the path the observer reports for the route on top:
+
+- its name (`RouteSettings.name`): named routes, `onGenerateRoute`, and routers that name their pages,
+- else `/` and the page widget's type, e.g. `/CheckoutPage` for `MaterialPageRoute(builder: (_) => const CheckoutPage())`,
+- else `/` and the route's type, e.g. `/DialogRoute`.
+
+A router that does not report to a `NavigatorObserver` can report its location itself:
+
+```dart
+final router = GoRouter(routes: [...]);
+router.routerDelegate.addListener(() => Traceway.recordNavigation(
+    router.routerDelegate.currentConfiguration.uri.path));
+```
 
 ## Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `sampleRate` | `1.0` | Share of exceptions and messages that are reported (0.0 - 1.0) |
-| `screenCapture` | `false` | Keep the last ~10 seconds of screen and upload it with an exception |
+| `screenCapture` | `false` | Record the screen: the last ~10 seconds go up with an exception, and captures can stream it (Android, iOS, macOS) |
 | `debug` | `false` | Print debug info to console |
 | `version` | `''` | App version, sent as `service.version` |
 | `serviceName` | `flutter-app` | Sent as `service.name` |
@@ -134,6 +229,9 @@ The SDK polls the server over [OpAMP](https://opentelemetry.io/docs/specs/opamp/
 | `captureLogs` | `true` | Capture every `print` / `debugPrint` |
 | `captureNetwork` | `true` | Install `HttpOverrides.global` to record every dart:io HTTP call |
 | `captureNavigation` | `true` | Record navigation transitions reported by `Traceway.navigatorObserver` |
+| `captureUserActions` | `true` | Record taps with the selector of the widget, and feed taps and hovers to recording triggers |
+| `recordAllSessions` | `false` | Stream breadcrumbs and the screen recording all the time instead of keeping them for errors |
+| `collection` | — | Local collection settings, the same document as a remote-config rule (see [Local config](#local-config)) |
 | `sessions` | `true` | Track sessions |
 | `baselineSampleRate` | `0` | Share of sessions whose breadcrumbs are sent continuously, not only around errors |
 | `remoteConfig` | `true` | Poll the server for collection settings over OpAMP |
@@ -148,7 +246,7 @@ When `screenCapture: true`, the SDK:
 3. On an exception, encodes the buffered frames to MP4
 4. Uploads the clip to the recordings endpoint, linked to the exception by its id
 
-Nothing is encoded or uploaded unless an exception is captured, and a clip can never be longer than the frame buffer. Touch and click positions are drawn directly onto the recorded frames (invisible to the user) so you can see exactly what the user was doing before the crash.
+Nothing is encoded or uploaded unless an exception is captured or a capture streams replay, and a clip can never be longer than the frame buffer. While a capture streams, the session is uploaded as consecutive segments, each shorter than the frame buffer. Touch and click positions are drawn directly onto the recorded frames (invisible to the user) so you can see exactly what the user was doing before the crash.
 
 ## Logs & Actions
 
@@ -157,6 +255,7 @@ Breadcrumbs are OpenTelemetry records held in the ring buffer and shown on the s
 - **Logs** — every `print` / `debugPrint` line, captured via a Zone print override. `dart:developer.log` is **not** captured.
 - **Network** — every dart:io HTTP request as a client span (method, URL, status, duration, byte counts) via `HttpOverrides.global`. Catches `package:http`, Dio, Firebase, anything on dart:io. The SDK's own requests are not recorded. On Flutter web use `TracewayHttpClient` (see below).
 - **Navigation** — push / pop / replace / remove from any `Navigator`, by attaching `Traceway.navigatorObserver` to your app.
+- **Taps** — every tap inside the `Traceway` widget, with the selector, type, id, shown text and label of the widget, and the screen (`browser.user_action.click`, with the OpenTelemetry `app.widget.*` and `app.screen.*` attributes).
 - **Custom** — anything you call `Traceway.recordAction(...)` or `Traceway.track(...)` with.
 
 ### Wire up navigation capture
@@ -242,6 +341,7 @@ This replaces the region with a solid color (black by default) in the recording.
 | iOS | Yes | Yes |
 | Android | Yes | Yes |
 | macOS | Yes | Yes |
+| Linux, Windows | Yes | No (no video encoder) |
 | Web | No | No |
 
 For Flutter web, use the JS SDK instead — see [Flutter Web](#flutter-web) below.

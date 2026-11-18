@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
 import 'package:flutter/foundation.dart';
@@ -12,16 +13,20 @@ import 'connection_string.dart';
 import 'core/control_state.dart';
 import 'core/endpoints.dart';
 import 'core/ids.dart';
+import 'core/matcher.dart';
 import 'core/merge.dart';
 import 'core/ring_buffer.dart';
 import 'core/settings.dart';
 import 'core/trigger_engine.dart';
 import 'device_info_collector.dart';
 import 'events/traceway_event.dart';
+import 'interaction/tap_target.dart';
+import 'interaction/widget_selector.dart';
 import 'opamp/client.dart';
 import 'opamp/messages.dart';
 import 'otel/events.dart';
 import 'otel/router.dart';
+import 'persistence/buffer_persistence.dart';
 import 'persistence/outbox.dart';
 import 'persistence/state_store.dart';
 import 'replay/recordings_transport.dart';
@@ -51,6 +56,7 @@ class TracewayTestOverrides {
     this.deviceAttributes = const {},
     this.random,
     this.opampMinPollIntervalMs,
+    this.videoSupported = true,
   });
 
   final LogRecordExporter? logExporter;
@@ -62,6 +68,9 @@ class TracewayTestOverrides {
   final Map<String, String> deviceAttributes;
   final double Function()? random;
   final int? opampMinPollIntervalMs;
+
+  /// Whether the platform can encode video; tests attach a fake source.
+  final bool videoSupported;
 }
 
 class TracewayClient with WidgetsBindingObserver implements RouterHooks {
@@ -75,18 +84,36 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _endpoints = resolveEndpoints(parsed.apiUrl);
     _globalAttributes.addAll(_options.attributes);
 
-    final defaults =
-        defaultSettings(baselineSampleRate: _options.baselineSampleRate);
+    var defaults = defaultSettings(
+      baselineSampleRate: _options.baselineSampleRate,
+      recordAllSessions: _options.recordAllSessions,
+    );
     final errorRate = _options.sampleRate.clamp(0.0, 1.0).toDouble();
     defaults.signals['errors']!.sampleRate = errorRate;
     defaults.signals['messages']!.sampleRate = errorRate;
+    final collection = _options.collection;
+    if (collection != null) {
+      try {
+        defaults = applyOverlay(
+            defaults, parseSettingsDocument(jsonEncode(collection)));
+      } catch (e) {
+        debugPrint('Traceway: ignoring TracewayOptions.collection: $e');
+      }
+    }
+    _videoSupported =
+        _overrides?.videoSupported ?? ScreenRecorder.isVideoSupported;
+    if (_options.screenCapture && !_videoSupported) {
+      _log('screen capture needs a video encoder, which this platform '
+          'does not have: replay is off');
+    }
     _control = ControlState(
       defaults,
       ceilingsFrom(
-        screenCapture: _options.screenCapture,
+        screenCapture: _options.screenCapture && _videoSupported,
         captureLogs: _options.captureLogs,
         captureNetwork: _options.captureNetwork,
         captureNavigation: _options.captureNavigation,
+        captureUserActions: _options.captureUserActions,
         sessions: _options.sessions,
       ),
     );
@@ -103,13 +130,15 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       token: _token,
       httpClient: _http,
     );
+    // A streamed segment must leave before the frame ring buffer wraps.
+    final ringMs =
+        max(1, _options.maxBufferFrames) * 1000 ~/ _options.fps.clamp(1, 59);
     _replay = ReplayController(
       transport: _recordings,
       sessionId: () => _sessions?.currentId,
       nextSegmentIndex: () => _sessions?.nextSegmentIndex() ?? 0,
+      segmentMs: (ringMs * 0.8).round().clamp(200, 10000),
     );
-    _replay.apply(_control.replayMode,
-        maxAgeMs: (settings.bufferMaxAgeSeconds * 1000).round());
     _control.onChange(_onSettingsChanged);
   }
 
@@ -126,12 +155,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   late final http.Client _http;
   late final RecordingsTransport _recordings;
   late final ReplayController _replay;
+  late final bool _videoSupported;
 
   final Map<String, String> _globalAttributes = {};
   final Map<String, String> _resourceAttributes = {};
   final List<void Function()> _pending = [];
   final Completer<void> _readyCompleter = Completer<void>();
-  final Map<String, int> _localCaptures = {};
   final List<int> _errorTimes = [];
   String? _lastErrorKey;
   int _lastErrorMs = 0;
@@ -139,6 +168,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   StateStore _store = StateStore(null);
   Outbox? _outbox;
+  BufferPersistence? _persisted;
   SessionManager? _sessions;
   TelemetryRouter? _router;
   LogRecordProcessor? _logSink;
@@ -153,10 +183,35 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   bool _ready = false;
   bool _shutdown = false;
   bool _ownsOTel = false;
-  bool _replayFlushedForCurrentRecord = false;
+  /// Clips flushed so far; an exception compares it before and after its
+  /// triggers run (an `emit` action re-enters observe on the way).
+  int _replayFlushes = 0;
+
+  /// Set once the SDK has started: settings changes apply from then on.
+  bool _started = false;
+
+  /// Captures known only from the cached config keep streaming, but start
+  /// nothing new until the server has answered: they may have been
+  /// cancelled while the app was away.
+  bool _capturesConfirmed = false;
+  Timer? _overrideTimer;
+  int _savedProgressVersion = -1;
+
+  /// The path of the route on top, as the last navigation reported it.
+  String? _currentScreen;
+
+  /// Event types (`click`, `hover`, `navigation`) the triggers name.
+  Set<String> _sequenceKinds = const {};
+  bool _screenObservedForSequences = false;
+  Set<Element> _hovered = const {};
+  Object? _hoverLeaf;
 
   bool get debug => _options.debug;
   TracewayOptions get options => _options;
+
+  /// Whether the screen is recorded: screen capture is on and this platform
+  /// can encode video.
+  bool get recordsScreen => _options.screenCapture && _videoSupported;
 
   /// Completes when the SDK has finished starting and queued records have
   /// been emitted.
@@ -167,7 +222,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   Settings get settings => _control.settings;
 
   @visibleForTesting
+  ControlState get control => _control;
+
+  @visibleForTesting
   int get bufferedCount => _buffer.length;
+
+  @visibleForTesting
+  List<BufferEntry<TelemetryItem>> get bufferSnapshot => _buffer.snapshot();
+
+  /// The current session, or null when sessions are off.
+  String? get currentSessionId => _sessions?.currentId;
 
   @visibleForTesting
   ReplayController get replay => _replay;
@@ -244,6 +308,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final stateDir = await _stateDirectory();
     _store = StateStore(stateDir);
     await _store.load();
+    _replay.budget.store = _store;
 
     final storedUid = _store.get('instanceUid');
     final uid = storedUid is String ? uuidToBytes(storedUid) : null;
@@ -280,6 +345,22 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       )..start();
     }
 
+    if (stateDir != null) {
+      final persisted = BufferPersistence(stateDir);
+      _persisted = persisted;
+      final settings = _control.settings;
+      if (settings.persist) {
+        await persisted.load(
+          _sessions?.currentId,
+          maxAgeMs: (settings.bufferMaxAgeSeconds * 1000).round(),
+          maxBytes: settings.bufferMaxBytes,
+        );
+        persisted.retain(_control.canExport);
+      } else {
+        await persisted.clear();
+      }
+    }
+
     try {
       WidgetsBinding.instance.addObserver(this);
     } catch (_) {}
@@ -296,6 +377,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         customCapabilities: const [
           'io.traceway.sdk.buffer/v1',
           'io.traceway.sdk.capture/v1',
+          'io.traceway.sdk.sequence-triggers/v1',
         ],
         describe: _describe,
         onRemoteConfig: _applyRemoteConfig,
@@ -308,6 +390,15 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         httpClient: _http,
         minPollIntervalMs: _overrides?.opampMinPollIntervalMs ?? 30000,
       )..start();
+    }
+    _started = true;
+    _restoreLocalCaptures();
+    _onSettingsChanged(_control.settings);
+    final opamp = _opamp;
+    if (opamp == null) {
+      _confirmCaptures();
+    } else {
+      unawaited(opamp.poll().whenComplete(_confirmCaptures));
     }
     _outbox?.schedule(const Duration(seconds: 2));
     _log('started, instance ${bytesToUuid(_instanceUid)}');
@@ -562,18 +653,123 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   void recordNavigationEvent(NavigationEvent event) {
     _sessions?.markActivity();
+    // A removal takes a route out of the stack without the user arriving
+    // anywhere: it is on the timeline, but not a navigation triggers match.
+    final arrived = event.action != 'remove';
+    final to = arrived ? event.to : null;
+    if (to != null && to.isNotEmpty) _currentScreen = to;
     _emit(
       eventName: eventNavigation,
       severity: Severity.INFO,
       time: event.timestamp,
       attributes: {
-        'url.full': event.to ?? '',
+        'url.full': to ?? '',
         'navigation.action': event.action,
+        // The session timeline labels a navigation by this.
+        'browser.navigation.type': event.action,
         if (event.from != null) 'navigation.from': event.from!,
-        if (event.to != null) 'navigation.to': event.to!,
+        if (to != null) 'navigation.to': to,
+        if (to != null && to.isNotEmpty) 'app.screen.name': to,
       },
     );
   }
+
+  /// The path of the route on top, as the last navigation reported it.
+  String? get currentScreen => _currentScreen;
+
+  /// Records a tap at [position] (global logical pixels): a
+  /// `browser.user_action.click` record naming the widget, and a click for
+  /// recording triggers. The `Traceway` widget calls this for every tap.
+  void recordTap(Offset position, {int? viewId}) {
+    if (_shutdown || !_options.captureUserActions) return;
+    _sessions?.markActivity();
+    final wantsTriggers = _ready && _sequenceKinds.contains('click');
+    if (!wantsTriggers && _control.modeFor('userActions') == Mode.off) return;
+    final ElementPath? path;
+    try {
+      path = elementPathAt(position, viewId: viewId);
+    } catch (e) {
+      _log('tap lookup failed: $e');
+      return;
+    }
+    if (path == null) return;
+    final target = describeTap(path);
+    if (target != null) {
+      _emit(
+        eventName: eventClick,
+        severity: Severity.INFO,
+        attributes: {
+          'browser.css_selector': target.selector,
+          'browser.tag_name': target.tag,
+          'app.widget.name': target.tag,
+          if (target.id != null) 'app.widget.id': target.id!,
+          if (target.text != null) 'app.widget.text': target.text!,
+          if (target.label != null) 'app.widget.label': target.label!,
+          'app.screen.coordinate.x': position.dx.round(),
+          'app.screen.coordinate.y': position.dy.round(),
+          if (_currentScreen != null) 'app.screen.name': _currentScreen!,
+        },
+      );
+    }
+    if (wantsTriggers) {
+      _observePointer('click', (selector) {
+        final parsed = WidgetSelector.parse(selector);
+        return parsed != null && parsed.matches(path!);
+      });
+    }
+  }
+
+  /// Feeds a mouse hover to recording triggers: a hover step matches when
+  /// the pointer enters a matching widget, not while it moves inside it.
+  /// Only runs while a trigger names a hover.
+  void recordHover(Offset position, {int? viewId}) {
+    if (_shutdown || !_ready || !_options.captureUserActions) return;
+    if (!_sequenceKinds.contains('hover')) return;
+    final ElementPath? path;
+    try {
+      // Hit testing is cheap; walking the element tree is done only when
+      // the mouse is over something else than before.
+      final leaf = hitLeaf(position, viewId: viewId);
+      if (leaf == null || identical(leaf, _hoverLeaf)) return;
+      _hoverLeaf = leaf;
+      path = elementPathAt(position, viewId: viewId);
+    } catch (_) {
+      return;
+    }
+    if (path == null) return;
+    final previous = _hovered;
+    _hovered = path.elements.toSet();
+    _observePointer('hover', (selector) {
+      final parsed = WidgetSelector.parse(selector);
+      if (parsed == null) return false;
+      final index = parsed.firstMatchWhere(
+          path!, (element) => !previous.contains(element));
+      return index != null;
+    });
+  }
+
+  void _observePointer(String type, bool Function(String selector) test) {
+    if (!_control.enabled || _sessions?.currentId == null) return;
+    _runFired(_triggers.observe(ObservedEvent(
+      timeMs: DateTime.now().millisecondsSinceEpoch,
+      lookup: _pageLookup({keyPointerAction: type, keyTargetMatches: test}),
+      sequence: type,
+    )));
+  }
+
+  /// The fields of an event the app reports itself, next to what every
+  /// record can be matched on.
+  FieldLookup _pageLookup(Map<String, Object?> fields) => (key) {
+        if (fields.containsKey(key)) return fields[key];
+        if (key.startsWith('global.')) {
+          return _globalAttributes[key.substring('global.'.length)];
+        }
+        if (key.startsWith('resource.')) {
+          return _resourceAttributes[key.substring('resource.'.length)];
+        }
+        if (key == attrSessionId) return _sessions?.currentId;
+        return null;
+      };
 
   void recordNetworkEvent(NetworkEvent event) {
     if (_endpoints.isOwn(event.url)) return;
@@ -638,6 +834,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       await _replay.drain();
       await _logSink?.forceFlush();
       await _outbox?.drain();
+      await _persistBuffer();
+      _saveTriggerProgress(now: true);
       await _store.flush();
     } catch (e) {
       _log('flush failed: $e');
@@ -660,6 +858,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _replay.stop();
     _outbox?.dispose();
     _refreshTimer?.cancel();
+    _overrideTimer?.cancel();
+    _progressTimer?.cancel();
     try {
       WidgetsBinding.instance.removeObserver(this);
     } catch (_) {}
@@ -724,29 +924,44 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       eventName: eventSessionEnd,
       severity: Severity.INFO,
       time: DateTime.fromMillisecondsSinceEpoch(endedAtMs),
-      attributes: {
-        attrSessionId: session.id,
-        attrSessionStartedAt: session.startedAtMs,
-      },
+      attributes: _sessionAttributes(session),
     );
   }
 
+  /// What every session event carries: the session and how much of its
+  /// diagnostic budget replay used, shown on the session page.
+  Map<String, Object> _sessionAttributes(SessionInfo session) => {
+        attrSessionId: session.id,
+        attrSessionStartedAt: session.startedAtMs,
+        ..._replay.budget.snapshot(session.id),
+        'traceway.replay.failed_segments': _recordings.failedSegments,
+        'traceway.context.evicted': _buffer.evictedCount,
+      };
+
   void _onSessionStart(SessionInfo session, bool resumed) {
-    if (!resumed) _triggers.resetSession();
+    // What an earlier session left behind is not this one's context.
+    if (!resumed) _persisted?.restored.clear();
+    _triggers.resetSession();
+    final limits = _store.get('triggerLimits');
+    if (limits is Map && limits['sessionId'] == session.id) {
+      _triggers.restoreSessionLimits(limits['limits']);
+    }
+    _restoreTriggerProgress();
+    _replay.onSessionStart();
     _emit(
       eventName: resumed ? eventSessionUpdate : eventSessionStart,
       severity: Severity.INFO,
       time: resumed ? null : DateTime.fromMillisecondsSinceEpoch(session.startedAtMs),
-      attributes: {
-        attrSessionId: session.id,
-        attrSessionStartedAt: session.startedAtMs,
-      },
+      attributes: _sessionAttributes(session),
     );
+    _applyReplay();
     _scheduleRefresh();
   }
 
-  void _onSessionEnd(SessionInfo session, int endedAtMs) =>
-      _emitSessionEnd(session, endedAtMs);
+  void _onSessionEnd(SessionInfo session, int endedAtMs) {
+    _replay.onSessionEnd(session.id);
+    _emitSessionEnd(session, endedAtMs);
+  }
 
   // ----------------------------------------------------------- RouterHooks
 
@@ -805,12 +1020,15 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void observe(ObservedRecord observed) {
     if (observed.signal == signalControl) return;
     if (!_control.enabled) return;
+    if (observed.signal == 'navigation' && _sequenceKinds.contains('navigation')) {
+      _screenObservedForSequences = true;
+    }
     final fired = _triggers.observe(
         ObservedEvent(timeMs: observed.timeMs, lookup: observed.lookup));
     final item = observed.item;
     final isError = observed.signal == 'errors' && item is LogItem;
 
-    var replayRequested = false;
+    var flushRequested = false;
     var replayAvailable = false;
     if (isError) {
       replayAvailable = _control.replayMode != Mode.off;
@@ -818,8 +1036,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       for (final trigger in _control.settings.triggers) {
         if (trigger.id == defaultExceptionTriggerId) defaultTrigger = trigger;
       }
-      replayRequested = fired.any((f) =>
-          f.trigger.actions.any((a) => a.type == 'flush' && a.replay));
+      final replayRequested = fired.any((f) => f.trigger.actions
+          .any((a) => a.replay || a.type == 'startReplay'));
+      flushRequested = fired.any((f) => f.trigger.actions.any(
+          (a) => a.replay && (a.type == 'flush' || a.type == 'capture')));
       final skipped = _triggers.skipped[defaultExceptionTriggerId];
       final status = _control.replayMode == Mode.off
           ? 'disabled'
@@ -832,23 +1052,31 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       item.record.addAttribute(OTel.attributeString(attrReplayStatus, status));
       // A clip skipped for cooldown or the per-session limit still gets its
       // breadcrumbs: only the video is rationed.
+      final contextActions = [
+        for (final action in defaultTrigger?.actions ?? const <TriggerAction>[])
+          if (action.type == 'flush' && !action.replay) action,
+      ];
       if (skipped == 'cooldown' || skipped == 'session_clip_limit') {
-        for (final action in defaultTrigger?.actions ?? const <TriggerAction>[]) {
-          if (action.type == 'flush' && !action.replay) _runAction(action);
+        for (final action in contextActions) {
+          _runAction(action);
         }
       }
+      var lookback = 0.0;
+      for (final action in contextActions) {
+        lookback = max(lookback, action.lookbackSeconds ?? 0);
+      }
+      item.record.addAttribute(OTel.attributeDouble(
+          'traceway.context.lookback_seconds', lookback));
       item.record.addAttribute(
           OTel.attributeInt('traceway.context.evicted', _buffer.evictedCount));
     }
 
-    _replayFlushedForCurrentRecord = false;
-    for (final trigger in fired) {
-      _runTrigger(trigger);
-    }
+    final flushesBefore = _replayFlushes;
+    _runFired(fired);
     if (isError &&
         replayAvailable &&
-        replayRequested &&
-        !_replayFlushedForCurrentRecord) {
+        flushRequested &&
+        _replayFlushes == flushesBefore) {
       item.record.addAttribute(
           OTel.attributeString(attrReplayStatus, 'buffer_unavailable'));
     }
@@ -860,12 +1088,66 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   // --------------------------------------------------------------- triggers
 
+  void _runFired(List<FiredTrigger> fired) {
+    for (final trigger in fired) {
+      _runTrigger(trigger);
+    }
+    if (fired.isNotEmpty) {
+      _store.set('triggerLimits', {
+        'sessionId': _sessions?.currentId,
+        'limits': _triggers.snapshotSessionLimits(),
+      });
+    }
+    _saveTriggerProgress();
+  }
+
+  String _savedProgress = '';
+  Timer? _progressTimer;
+  int _lastProgressSaveMs = 0;
+
+  /// Keeps sequences under way across an app restart within the session.
+  /// At most every two seconds: a step that counts frequent records changes
+  /// progress on each of them.
+  void _saveTriggerProgress({bool now = false}) {
+    if (_triggers.progressVersion == _savedProgressVersion) return;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (!now && nowMs - _lastProgressSaveMs < 2000) {
+      _progressTimer ??= Timer(const Duration(seconds: 2), () {
+        _progressTimer = null;
+        _saveTriggerProgress(now: true);
+      });
+      return;
+    }
+    _progressTimer?.cancel();
+    _progressTimer = null;
+    _lastProgressSaveMs = nowMs;
+    _savedProgressVersion = _triggers.progressVersion;
+    final progress = _triggers.snapshotProgress();
+    final encoded = jsonEncode([_sessions?.currentId, progress]);
+    if (encoded == _savedProgress) return;
+    _savedProgress = encoded;
+    _store.set('triggerProgress', {
+      'sessionId': _sessions?.currentId,
+      'progress': progress,
+    });
+  }
+
+  void _restoreTriggerProgress() {
+    final saved = _store.get('triggerProgress');
+    final session = _sessions?.currentId;
+    if (saved is Map && session != null && saved['sessionId'] == session) {
+      _triggers.restoreProgress(saved['progress']);
+    }
+  }
+
   void _runTrigger(FiredTrigger fired) {
     final raw = fired.cause.lookup('attributes.$attrExceptionId');
     final exceptionId = raw is String ? raw : null;
     for (final action in fired.trigger.actions) {
       _runAction(action, exceptionId: exceptionId, triggerId: fired.trigger.id);
     }
+    final wantsReplay = fired.trigger.actions
+        .any((a) => a.replay || a.type == 'startReplay');
     _emit(
       eventName: eventTriggerFired,
       severity: Severity.INFO,
@@ -873,6 +1155,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         'traceway.trigger.id': fired.trigger.id,
         if (fired.trigger.name != null)
           'traceway.trigger.name': fired.trigger.name!,
+        // The server lists the sessions a recording trigger asked replay
+        // for, with the sequence that did.
+        if (wantsReplay && _control.replayMode != Mode.off) ...{
+          'traceway.trigger.replay': 'true',
+          'traceway.trigger.steps': jsonEncode(fired.trigger.stepsJson()),
+        },
       },
     );
   }
@@ -891,19 +1179,27 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     switch (action.type) {
       case 'flush':
         final lookbackMs = ((action.lookbackSeconds ?? 0) * 1000).round();
-        _router?.flushBuffered(
-            now - lookbackMs, _selectorSet(action.signals), now);
+        final signals = _selectorSet(action.signals);
+        _router?.flushBuffered(now - lookbackMs, signals, now);
+        _flushRestored(now - lookbackMs, signals, now);
         if (action.replay && _replay.flush(lookbackMs, exceptionId)) {
-          _replayFlushedForCurrentRecord = true;
+          _replayFlushes++;
         }
+        // The file must not hold records that just left, or a crash before
+        // the next save would send them again after a restart.
+        if (_persisted != null) unawaited(_persistBuffer());
       case 'stream':
-        _control.addOverride(StreamOverride(
-          signals: action.signals ?? const ['*'],
+        _streamFor(
+          action.signals ?? const ['*'],
+          replay: action.replay,
           untilMs: now + ((action.durationSeconds ?? 0) * 1000).round(),
-        ));
+        );
       case 'startReplay':
-        // The screen recording is never streamed; see ReplayController.
-        break;
+        _streamFor(
+          const [],
+          replay: true,
+          untilMs: now + ((action.durationSeconds ?? 0) * 1000).round(),
+        );
       case 'emit':
         _emit(
           eventName: action.eventName,
@@ -912,6 +1208,103 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         );
       case 'capture':
         _startLocalCapture(action, exceptionId, triggerId ?? 'local');
+    }
+  }
+
+  /// Uploads what the last run left in the buffer for this session, within
+  /// the window, through the outbox so a failed upload is retried.
+  void _flushRestored(int sinceMs, Set<String>? signals, int untilMs) {
+    final persisted = _persisted;
+    final outbox = _outbox;
+    if (persisted == null || outbox == null) return;
+    final bodies = persisted.take(sinceMs, signals, untilMs, _control.canExport);
+    if (bodies.isEmpty) return;
+    bodies.forEach(outbox.add);
+    unawaited(outbox.drain());
+  }
+
+  Future<void> _persistBuffer() async {
+    final persisted = _persisted;
+    if (persisted == null || !_control.settings.persist || _shutdown) return;
+    await persisted.save(_sessions?.currentId, _buffer.snapshot());
+  }
+
+  void _streamFor(
+    List<String> signals, {
+    required bool replay,
+    required int untilMs,
+    bool capture = false,
+    String? owner,
+  }) {
+    final override = StreamOverride(
+      signals: signals,
+      replay: replay,
+      untilMs: untilMs,
+      includeOff: capture,
+    );
+    if (owner != null) {
+      _control.setOverrides(owner, [override]);
+    } else {
+      _control.addOverride(override);
+    }
+    _applyReplay();
+    _scheduleOverrideExpiry();
+  }
+
+  /// Re-applies replay when the next override ends, so a streaming capture
+  /// returns to buffering on time.
+  void _scheduleOverrideExpiry() {
+    _overrideTimer?.cancel();
+    _overrideTimer = null;
+    final expiry = _control.nextOverrideExpiryMs;
+    if (expiry == null || _shutdown) return;
+    final delay = expiry - DateTime.now().millisecondsSinceEpoch;
+    _overrideTimer = Timer(Duration(milliseconds: max(0, delay) + 1), () {
+      _overrideTimer = null;
+      _applyReplay();
+      _scheduleOverrideExpiry();
+    });
+  }
+
+  void _applyReplay() {
+    final session = _sessions?.currentId;
+    final settings = _control.settings;
+    _replay.apply(
+      _control.replayMode,
+      maxAgeMs: (settings.bufferMaxAgeSeconds * 1000).round(),
+      sessionSampled: session != null &&
+          unitHash(session) < settings.replaySessionSampleRate,
+    );
+  }
+
+  List<Map<String, dynamic>> _readLocalCaptures() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final stored = _store.get('localCaptures');
+    return [
+      if (stored is List)
+        for (final c in stored)
+          if (c is Map &&
+              c['id'] is String &&
+              c['triggerId'] is String &&
+              c['untilMs'] is int &&
+              (c['untilMs'] as int) > now)
+            c.cast<String, dynamic>(),
+    ];
+  }
+
+  /// Local captures outlive the app run that started them, like the
+  /// browser SDK's outlive a page: a restart keeps streaming until they end.
+  void _restoreLocalCaptures() {
+    for (final capture in _readLocalCaptures()) {
+      final signals = capture['signals'];
+      _control.setOverrides('local:${capture['triggerId']}', [
+        StreamOverride(
+          signals: signals is List ? signals.whereType<String>().toList() : const ['*'],
+          untilMs: capture['untilMs'] as int,
+          replay: capture['replay'] == true,
+          includeOff: true,
+        ),
+      ]);
     }
   }
 
@@ -924,12 +1317,24 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     String triggerId,
   ) {
     final now = DateTime.now().millisecondsSinceEpoch;
-    var untilMs = now + ((action.durationSeconds ?? 0) * 1000).round();
+    final untilMs = now + ((action.durationSeconds ?? 0) * 1000).round();
     final signals = action.signals ?? const ['*'];
-    final running = _localCaptures[triggerId];
-    if (running != null && running > now) {
-      if (running > untilMs) untilMs = running;
+    final captures = _readLocalCaptures();
+    Map<String, dynamic>? running;
+    for (final c in captures) {
+      if (c['triggerId'] == triggerId) running = c;
+    }
+    if (running != null) {
+      running['untilMs'] = max(running['untilMs'] as int, untilMs);
     } else {
+      final id = '$triggerId:$now';
+      captures.add({
+        'id': id,
+        'triggerId': triggerId,
+        'untilMs': untilMs,
+        'signals': signals,
+        'replay': action.replay,
+      });
       _runAction(
         TriggerAction(
           type: 'flush',
@@ -943,7 +1348,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         eventName: eventCaptureStarted,
         severity: Severity.INFO,
         attributes: {
-          'traceway.capture.id': '$triggerId:$now',
+          'traceway.capture.id': id,
           'traceway.capture.source': 'trigger',
           'traceway.trigger.id': triggerId,
           'traceway.capture.until':
@@ -953,57 +1358,124 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         },
       );
     }
-    _localCaptures[triggerId] = untilMs;
-    _control.setOverrides('local:$triggerId', [
-      StreamOverride(signals: signals, untilMs: untilMs, includeOff: true),
-    ]);
+    _store.set('localCaptures', captures);
+    _streamFor(
+      signals,
+      replay: action.replay,
+      untilMs: (running?['untilMs'] as int?) ?? untilMs,
+      capture: true,
+      owner: 'local:$triggerId',
+    );
   }
 
-  /// Captures requested from the dashboard: each uploads its lookback once
-  /// per installation and then streams until it ends.
+  void _confirmCaptures() {
+    if (_capturesConfirmed || _shutdown) return;
+    _capturesConfirmed = true;
+    _runCaptures(_control.settings);
+    _applyReplay();
+  }
+
+  /// Starts the dashboard's captures aimed at this app. The lookback flush
+  /// runs once per capture, remembered across app starts; streaming lasts
+  /// until the capture's end.
   void _runCaptures(Settings settings) {
+    if (!_started) return;
     final now = DateTime.now();
     final nowMs = now.millisecondsSinceEpoch;
+    _control.setOverrides('remote-captures', [
+      for (final capture in settings.captures)
+        if (capture.until.isAfter(now))
+          StreamOverride(
+            signals: capture.signals ?? const ['*'],
+            replay: capture.replay,
+            untilMs: capture.until.millisecondsSinceEpoch,
+            includeOff: true,
+          ),
+    ]);
+    _scheduleOverrideExpiry();
+    if (!_capturesConfirmed) return;
     final stored = _store.get('captures');
-    final done = <String>{if (stored is List) ...stored.whereType<String>()};
-    final overrides = <StreamOverride>[];
+    final done = <Map<String, Object>>[
+      if (stored is List)
+        for (final c in stored)
+          if (c is Map &&
+              c['id'] is String &&
+              c['untilMs'] is int &&
+              (c['untilMs'] as int) > nowMs)
+            {'id': c['id'] as String, 'untilMs': c['untilMs'] as int},
+    ];
+    var changed = done.length != (stored is List ? stored.length : 0);
     for (final capture in settings.captures) {
       if (!capture.until.isAfter(now)) continue;
-      final signals = capture.signals ?? const ['*'];
-      if (done.add(capture.id)) {
-        _router?.flushBuffered(
-          nowMs - ((capture.lookbackSeconds ?? 600) * 1000).round(),
-          _selectorSet(signals),
-          nowMs,
-        );
-        _emit(
-          eventName: eventCaptureStarted,
-          severity: Severity.INFO,
-          attributes: {
-            'traceway.capture.id': capture.id,
-            'traceway.capture.source': 'remote',
-          },
-        );
+      if (done.any((c) => c['id'] == capture.id)) continue;
+      final lookbackSeconds = capture.lookbackSeconds ?? 600;
+      if (lookbackSeconds > 0) {
+        _runAction(TriggerAction(
+          type: 'flush',
+          lookbackSeconds: lookbackSeconds,
+          signals: capture.signals ?? const ['*'],
+          replay: capture.replay,
+        ));
       }
-      overrides.add(StreamOverride(
-        signals: signals,
-        untilMs: capture.until.millisecondsSinceEpoch,
-        includeOff: true,
-      ));
+      _emit(
+        eventName: eventCaptureStarted,
+        severity: Severity.INFO,
+        attributes: {
+          'traceway.capture.id': capture.id,
+          'traceway.capture.source': 'remote',
+        },
+      );
+      done.add({
+        'id': capture.id,
+        'untilMs': capture.until.millisecondsSinceEpoch,
+      });
+      changed = true;
     }
-    final active = settings.captures.map((c) => c.id).toSet();
-    done.retainWhere(active.contains);
-    _store.set('captures', done.toList());
-    _control.setOverrides('remote-captures', overrides);
+    if (changed) _store.set('captures', done);
   }
 
   void _onSettingsChanged(Settings settings) {
-    _triggers.setTriggers(settings.triggers);
+    _runCaptures(settings);
     _buffer.retain((entry) => _control.canExport(entry.signal));
+    _persisted?.retain(_control.canExport);
+    if (!settings.persist) unawaited(_persisted?.clear());
     final maxAgeMs = (settings.bufferMaxAgeSeconds * 1000).round();
     _buffer.configure(maxBytes: settings.bufferMaxBytes, maxAgeMs: maxAgeMs);
-    _replay.apply(_control.replayMode, maxAgeMs: maxAgeMs);
-    _runCaptures(settings);
+    _triggers.setTriggers(settings.triggers);
+    _restoreTriggerProgress();
+    _sequenceKinds = {
+      for (final trigger in _triggers.triggers)
+        for (final step in trigger.steps) ...eventKinds(step.match),
+    };
+    if (!_sequenceKinds.contains('hover')) _hovered = const {};
+    _observeScreenForSequences();
+    _applyReplay();
+  }
+
+  /// Triggers that arrive after the app reached its current screen still see
+  /// that screen once, as the browser SDK lets them see the page it loaded.
+  void _observeScreenForSequences() {
+    final screen = _currentScreen;
+    // Before the SDK is ready the screen's own navigation record is still
+    // queued, and the triggers see it when it is emitted.
+    if (!_ready ||
+        _screenObservedForSequences ||
+        screen == null ||
+        !_sequenceKinds.contains('navigation') ||
+        !_control.enabled ||
+        _sessions?.currentId == null ||
+        !_options.captureNavigation) {
+      return;
+    }
+    _screenObservedForSequences = true;
+    _runFired(_triggers.observe(ObservedEvent(
+      timeMs: DateTime.now().millisecondsSinceEpoch,
+      lookup: _pageLookup({
+        'event.name': eventNavigation,
+        'signal': 'navigation',
+        'attributes.url.full': screen,
+      }),
+    )));
   }
 
   // ------------------------------------------------------------------ OpAMP
@@ -1084,6 +1556,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       unawaited(_outbox?.drain());
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
+      _replay.onPaused();
+      _saveTriggerProgress(now: true);
+      unawaited(_persistBuffer());
       unawaited(_logSink?.forceFlush());
       unawaited(_spanSink?.forceFlush());
       unawaited(_store.flush());

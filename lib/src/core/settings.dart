@@ -24,7 +24,8 @@ Mode? modeFromString(Object? value) {
 Mode lowerMode(Mode a, Mode b) => a.index <= b.index ? a : b;
 
 /// Signal names are shared with the browser SDK so one settings schema serves
-/// both. `webVitals` and `resourceTiming` have no Flutter source.
+/// both. `webVitals`, `resourceTiming`, `longTasks` and `routeTiming` have no
+/// Flutter source; they are known only so documents naming them apply.
 const List<String> signalNames = [
   'errors',
   'messages',
@@ -34,6 +35,8 @@ const List<String> signalNames = [
   'userActions',
   'webVitals',
   'resourceTiming',
+  'longTasks',
+  'routeTiming',
   'custom',
 ];
 
@@ -81,6 +84,31 @@ class Condition extends Matcher {
       };
 }
 
+/// A step of a recorded journey: a tap (`click`), a mouse entering a widget
+/// (`hover`), a route the app arrived at (`navigation`) or a log line (`log`).
+/// Click and hover values are selectors over the widget tree, see
+/// `WidgetSelector`; navigation values are paths with optional `{param}`
+/// segments.
+class EventMatcher extends Matcher {
+  const EventMatcher(this.type, this.value, {this.mode});
+
+  /// `click`, `hover`, `navigation` or `log`.
+  final String type;
+  final String value;
+
+  /// `exact` (default) or `contains`, for `log`.
+  final String? mode;
+
+  @override
+  Object toJson() => {
+        'event': {
+          'type': type,
+          'value': value,
+          if (mode != null) 'mode': mode,
+        },
+      };
+}
+
 class AllMatcher extends Matcher {
   const AllMatcher(this.items);
   final List<Matcher> items;
@@ -124,6 +152,17 @@ class TriggerAction {
   final bool replay;
   final String? eventName;
   final Map<String, String>? attributes;
+
+  Object toJson() => {
+        'type': type,
+        if (lookbackSeconds != null) 'lookbackSeconds': lookbackSeconds,
+        if (durationSeconds != null) 'durationSeconds': durationSeconds,
+        if (signals != null) 'signals': signals,
+        if (replay) 'replay': true,
+        if (eventName != null) 'eventName': eventName,
+        if (attributes != null && attributes!.isNotEmpty)
+          'attributes': attributes,
+      };
 }
 
 class TriggerStep {
@@ -174,8 +213,14 @@ class Trigger {
   final List<TriggerStep> steps;
   final List<TriggerAction> actions;
 
-  String get stepsSignature =>
-      jsonEncode(steps.map((s) => s.toJson()).toList());
+  /// Changes whenever the steps or actions do, so progress made under an
+  /// older version of a trigger is not carried over.
+  String get signature => jsonEncode([
+        steps.map((s) => s.toJson()).toList(),
+        actions.map((a) => a.toJson()).toList(),
+      ]);
+
+  List<Object> stepsJson() => steps.map((s) => s.toJson()).toList();
 
   Trigger copyWith({
     String? name,
@@ -224,6 +269,7 @@ class Settings {
     required this.baselineSampleRate,
     required this.replayMode,
     required this.replaySessionSampleRate,
+    this.maskAllInputs = true,
     required this.bufferMaxBytes,
     required this.bufferMaxAgeSeconds,
     required this.replayMaxBytes,
@@ -239,6 +285,10 @@ class Settings {
   double baselineSampleRate;
   Mode replayMode;
   double replaySessionSampleRate;
+
+  /// Read for schema parity with the browser SDK. Flutter masks with
+  /// `TracewayPrivacyMask` instead of input fields.
+  bool maskAllInputs;
   int bufferMaxBytes;
   double bufferMaxAgeSeconds;
   int replayMaxBytes;
@@ -253,6 +303,7 @@ class Settings {
         baselineSampleRate: baselineSampleRate,
         replayMode: replayMode,
         replaySessionSampleRate: replaySessionSampleRate,
+        maskAllInputs: maskAllInputs,
         bufferMaxBytes: bufferMaxBytes,
         bufferMaxAgeSeconds: bufferMaxAgeSeconds,
         replayMaxBytes: replayMaxBytes,
@@ -275,8 +326,8 @@ class Ceilings {
   final bool enabled;
   final Map<String, Mode> signals;
 
-  /// Never above [Mode.buffer] in the Flutter SDK: the screen recording is a
-  /// short on-device ring buffer that is only uploaded as an error clip.
+  /// [Mode.off] when screen capture is not allowed or the platform cannot
+  /// encode video.
   final Mode replay;
   final bool sessions;
 }
@@ -308,26 +359,36 @@ Trigger defaultExceptionTrigger() => const Trigger(
       ],
     );
 
-Settings defaultSettings({double baselineSampleRate = 0}) {
+/// The built-in collection policy, the same as the browser SDK's: errors and
+/// messages stream, breadcrumbs and replay stay on the device until an error
+/// or a capture asks for them. [recordAllSessions] streams breadcrumbs and
+/// replay instead.
+Settings defaultSettings({
+  double baselineSampleRate = 0,
+  bool recordAllSessions = false,
+}) {
   SignalSettings s(Mode mode, {String? minSeverity}) =>
       SignalSettings(mode: mode, minSeverity: minSeverity);
+  final breadcrumbs = recordAllSessions ? Mode.stream : Mode.buffer;
   return Settings(
     enabled: true,
     signals: {
       'errors': s(Mode.stream),
       'messages': s(Mode.stream),
-      'network': s(Mode.buffer),
-      'console': s(Mode.buffer, minSeverity: 'info'),
-      'navigation': s(Mode.buffer),
-      'userActions': s(Mode.buffer),
-      'webVitals': s(Mode.stream),
+      'network': s(breadcrumbs),
+      'console': s(breadcrumbs, minSeverity: 'info'),
+      'navigation': s(breadcrumbs),
+      'userActions': s(breadcrumbs),
+      'webVitals': s(Mode.buffer),
       'resourceTiming': s(Mode.off),
-      'custom': s(Mode.buffer),
+      'longTasks': s(Mode.off),
+      'routeTiming': s(Mode.off),
+      'custom': s(breadcrumbs),
     },
     sessionsEnabled: true,
     baselineSampleRate:
         baselineSampleRate.isFinite ? baselineSampleRate.clamp(0, 1) : 0,
-    replayMode: Mode.buffer,
+    replayMode: recordAllSessions ? Mode.stream : Mode.buffer,
     replaySessionSampleRate: 1,
     bufferMaxBytes: 2 * 1024 * 1024,
     bufferMaxAgeSeconds: 600,
@@ -344,6 +405,7 @@ Ceilings ceilingsFrom({
   bool captureLogs = true,
   bool captureNetwork = true,
   bool captureNavigation = true,
+  bool captureUserActions = true,
   bool sessions = true,
 }) {
   Mode allow(bool flag) => flag ? Mode.stream : Mode.off;
@@ -351,10 +413,11 @@ Ceilings ceilingsFrom({
   signals['console'] = allow(captureLogs);
   signals['network'] = allow(captureNetwork);
   signals['navigation'] = allow(captureNavigation);
+  signals['userActions'] = allow(captureUserActions);
   return Ceilings(
     enabled: enabled,
     signals: signals,
-    replay: screenCapture ? Mode.buffer : Mode.off,
+    replay: allow(screenCapture),
     sessions: sessions,
   );
 }

@@ -1,6 +1,7 @@
 /// One encoded screen-recording clip, as produced by the screen recorder.
 class SessionRecordingPayload {
-  final String exceptionId;
+  /// Names the clip while it is encoded; not sent.
+  final String clipId;
 
   /// A single `flutter_video` event carrying the base64 MP4.
   final List<Map<String, dynamic>> events;
@@ -12,7 +13,7 @@ class SessionRecordingPayload {
   final DateTime? endedAt;
 
   const SessionRecordingPayload({
-    required this.exceptionId,
+    required this.clipId,
     this.events = const [],
     this.startedAt,
     this.endedAt,

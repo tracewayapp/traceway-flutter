@@ -1,14 +1,19 @@
 // A scripted run of the SDK against a real Traceway server, used to verify
-// the whole pipeline end to end. It needs no taps: it leaves breadcrumbs,
-// waits, throws, and then keeps emitting events while remote config changes.
+// the whole pipeline end to end. It taps its own buttons (real pointer events
+// through the engine's hit testing), navigates, throws, follows a recorded
+// journey and keeps emitting events while the harness changes remote config
+// and starts and cancels a capture.
 //
 //   flutter run -t lib/e2e_main.dart --dart-define=TRACEWAY_DSN=token@http://host:8082
 //
-// Progress is printed as `E2E_PHASE <name>` lines.
+// Progress is printed as `E2E_PHASE <name>` lines; tool/e2e/run.py follows
+// them and checks the server at each point.
 import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 // ignore: implementation_imports
@@ -16,16 +21,18 @@ import 'package:traceway/src/screen_recorder.dart';
 import 'package:traceway/traceway.dart';
 
 const _dsn = String.fromEnvironment('TRACEWAY_DSN');
-const _quietSeconds = int.fromEnvironment('E2E_QUIET_SECONDS', defaultValue: 25);
-const _tickCount = int.fromEnvironment('E2E_TICKS', defaultValue: 24);
+const _quietSeconds = int.fromEnvironment('E2E_QUIET_SECONDS', defaultValue: 20);
+
+/// How long the recording trigger's capture streams.
+const _journeyCaptureSeconds = 30;
 
 String get _base => _dsn
     .substring(_dsn.indexOf('@') + 1)
     .replaceFirst(RegExp(r'/api/report$'), '');
 
 /// The hardware encoder plugin has no desktop Linux build, so there the
-/// clip is encoded by the `ffmpeg` binary instead. Frames, masks and upload
-/// are the SDK's own.
+/// clip is encoded by the `ffmpeg` binary instead. Frames, masks, segments
+/// and upload are the SDK's own.
 class FfmpegVideoEncoder implements VideoEncoder {
   Process? _process;
 
@@ -81,12 +88,57 @@ void main() {
       serviceName: 'traceway-flutter-e2e',
       environment: 'e2e',
       attributes: {'user.id': 'e2e-user'},
+      // A recording trigger defined in the app itself; remote rules come on
+      // top of it.
+      collection: {
+        'triggers': [
+          {
+            'id': 'e2e-open-profile',
+            'name': 'Open profile',
+            'cooldownSeconds': 0,
+            'maxPerSession': 1,
+            'steps': [
+              {
+                'match': {
+                  'event': {'type': 'navigation', 'value': '/users/{id}'}
+                }
+              },
+              {
+                'match': {
+                  'event': {'type': 'click', 'value': '#open-profile'}
+                },
+                'withinSeconds': 30,
+              },
+              {
+                'match': {
+                  'event': {
+                    'type': 'log',
+                    'value': 'Profile loaded',
+                    'mode': 'contains'
+                  }
+                },
+                'withinSeconds': 10,
+              },
+            ],
+            'actions': [
+              {
+                'type': 'capture',
+                'durationSeconds': _journeyCaptureSeconds,
+                'lookbackSeconds': 30,
+                'replay': true,
+              }
+            ],
+          }
+        ],
+      },
     ),
     child: const E2eApp(),
   );
 }
 
 final _navigatorKey = GlobalKey<NavigatorState>();
+final _payTarget = GlobalKey();
+final _profileTarget = GlobalKey();
 
 class E2eApp extends StatelessWidget {
   const E2eApp({super.key});
@@ -95,7 +147,34 @@ class E2eApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
         navigatorKey: _navigatorKey,
         navigatorObservers: [Traceway.navigatorObserver],
-        home: const _Home(),
+        onGenerateRoute: (settings) => MaterialPageRoute<void>(
+          settings: settings,
+          builder: (_) => switch (settings.name) {
+            '/' => const _Home(),
+            final String name when name.startsWith('/users/') =>
+              const _UserPage(),
+            _ => const Scaffold(body: Center(child: Text('detail'))),
+          },
+        ),
+      );
+}
+
+class _UserPage extends StatelessWidget {
+  const _UserPage();
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('User 42')),
+        body: Center(
+          child: KeyedSubtree(
+            key: _profileTarget,
+            child: ElevatedButton(
+              key: const Key('open-profile'),
+              onPressed: () => debugPrint('e2e Profile loaded for 42'),
+              child: const Text('Open profile'),
+            ),
+          ),
+        ),
       );
 }
 
@@ -106,9 +185,31 @@ class _Home extends StatefulWidget {
   State<_Home> createState() => _HomeState();
 }
 
+var _pointer = 100;
+
+/// A tap the way the engine delivers one: through hit testing and the
+/// gesture arena, with the SDK's listener seeing it like any app widget.
+void tap(GlobalKey target) {
+  final box = target.currentContext!.findRenderObject()! as RenderBox;
+  final position = box.localToGlobal(box.size.center(Offset.zero));
+  final viewId = View.of(target.currentContext!).viewId;
+  final pointer = _pointer++;
+  GestureBinding.instance.handlePointerEvent(PointerDownEvent(
+      pointer: pointer,
+      position: position,
+      kind: PointerDeviceKind.touch,
+      viewId: viewId));
+  GestureBinding.instance.handlePointerEvent(PointerUpEvent(
+      pointer: pointer,
+      position: position,
+      kind: PointerDeviceKind.touch,
+      viewId: viewId));
+}
+
 class _HomeState extends State<_Home> {
   int _frame = 0;
   String _phase = 'starting';
+  int _paid = 0;
   Timer? _timer;
 
   @override
@@ -124,7 +225,7 @@ class _HomeState extends State<_Home> {
         WidgetsBinding.instance
             .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       }
-      setState(() => _frame++);
+      if (mounted) setState(() => _frame++);
     });
     unawaited(_script());
   }
@@ -140,11 +241,35 @@ class _HomeState extends State<_Home> {
     if (mounted) setState(() => _phase = phase);
   }
 
+  Future<void> _wait(int seconds) =>
+      Future<void>.delayed(Duration(seconds: seconds));
+
   Future<void> _script() async {
     final client = TracewayClient.instance!;
-    await Future<void>.delayed(const Duration(seconds: 3));
+    await _wait(3);
     _setPhase('start instance=${client.getInstanceId()}');
+    switch (Platform.environment['E2E_SCENARIO']) {
+      case 'restart-a':
+        // Leave breadcrumbs, let the SDK save its buffer the way it does when
+        // the app goes to the background, then wait to be killed.
+        debugPrint('e2e before the kill');
+        tap(_payTarget);
+        WidgetsBinding.instance
+            .handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        await _wait(2);
+        _setPhase('saved session=${client.currentSessionId}');
+        await Completer<void>().future;
+      case 'restart-b':
+        _setPhase('resumed session=${client.currentSessionId}');
+        unawaited(
+            Future<void>.microtask(() => throw StateError('e2e after restart')));
+        await _wait(4);
+        await client.flush(15000);
+        _setPhase('done');
+        return;
+    }
 
+    // ---- 1. breadcrumbs, all kept on the device -------------------------
     debugPrint('e2e breadcrumb log');
     Traceway.recordAction(category: 'e2e', name: 'tap', data: {'step': 1});
     Traceway.track('e2e_event', {'n': 1});
@@ -154,33 +279,64 @@ class _HomeState extends State<_Home> {
     } catch (e) {
       debugPrint('e2e http failed: $e');
     }
-    unawaited(_navigatorKey.currentState!.push(MaterialPageRoute<void>(
-      settings: const RouteSettings(name: '/e2e-detail'),
-      builder: (_) => const Scaffold(body: Center(child: Text('detail'))),
-    )));
-    await Future<void>.delayed(const Duration(seconds: 1));
+    unawaited(_navigatorKey.currentState!.pushNamed('/e2e-detail'));
+    await _wait(1);
     _navigatorKey.currentState!.pop();
+    await _wait(1);
+    tap(_payTarget);
     await client.flush(5000);
     _setPhase('breadcrumbs_done');
+    await _wait(_quietSeconds);
 
-    // Nothing above may have reached the server: it is all in the ring
-    // buffer. The harness checks that during this pause.
-    await Future<void>.delayed(const Duration(seconds: _quietSeconds));
-
+    // ---- 2. an exception -------------------------------------------------
     _setPhase('exception');
     unawaited(Future<void>.microtask(() => throw StateError('e2e boom')));
-    await Future<void>.delayed(const Duration(seconds: 12));
+    await _wait(10);
     await client.flush(15000);
     _setPhase('exception_sent');
 
-    // Remote config: the harness changes the project's rules now. Poll often
-    // so the test does not wait for a heartbeat, and keep emitting events
-    // that only leave the device if the new settings stream them.
-    for (var i = 0; i < _tickCount; i++) {
-      await Future<void>.delayed(const Duration(seconds: 5));
+    // ---- 3. a recorded journey: navigation, tap, log --------------------
+    unawaited(_navigatorKey.currentState!.pushNamed('/users/42'));
+    await _wait(2);
+    tap(_profileTarget);
+    _setPhase('journey_started');
+    for (var i = 0; i < _journeyCaptureSeconds + 8; i++) {
+      await _wait(1);
+      debugPrint('e2e journey tick $i');
+    }
+    _navigatorKey.currentState!.pop();
+    await _wait(2);
+    debugPrint('e2e after journey');
+    await client.flush(15000);
+    _setPhase('journey_done');
+
+    // ---- 4. a capture from the dashboard --------------------------------
+    // These lines are buffered; the capture's lookback brings them up.
+    for (var i = 0; i < 3; i++) {
+      debugPrint('e2e pre-capture tick $i');
+      await _wait(1);
+    }
+    _setPhase('await_capture');
+    for (var i = 0; i < 60; i++) {
       await client.refreshConfig();
+      debugPrint('e2e remote tick $i');
+      await _wait(1);
+    }
+    await client.flush(15000);
+    _setPhase('capture_done');
+
+    // ---- 5. a remote rule built from the selector the server recorded ---
+    for (var i = 0; i < 40; i++) {
+      await client.refreshConfig();
+      // ignore: invalid_use_of_visible_for_testing_member
+      final ready = client.settings.triggers.any((t) => t.id == 'e2e-remote-pay');
+      if (ready) break;
+      await _wait(1);
+    }
+    tap(_payTarget);
+    for (var i = 0; i < 6; i++) {
+      await _wait(1);
       Traceway.track('e2e_tick', {'i': i});
-      debugPrint('e2e tick $i');
     }
     await client.flush(10000);
     _setPhase('done');
@@ -196,6 +352,15 @@ class _HomeState extends State<_Home> {
               Text('frame $_frame', style: const TextStyle(fontSize: 40)),
               const SizedBox(height: 16),
               Text(_phase),
+              const SizedBox(height: 16),
+              KeyedSubtree(
+                key: _payTarget,
+                child: ElevatedButton(
+                  key: const Key('pay'),
+                  onPressed: () => setState(() => _paid++),
+                  child: Text(_paid == 0 ? 'Pay now' : 'Paid $_paid'),
+                ),
+              ),
               const SizedBox(height: 16),
               const TracewayPrivacyMask(child: Text('secret 4242 4242')),
               const SizedBox(height: 16),

@@ -99,7 +99,9 @@ Future<Harness> startHarness({
 class FakeReplaySource implements ReplaySource {
   bool running = false;
   int clears = 0;
-  final List<({String exceptionId, DateTime? since})> captures = [];
+  final List<({String clipId, DateTime? since, DateTime? until})> captures = [];
+
+  /// No frames at all: every clip comes back empty.
   bool empty = false;
 
   @override
@@ -115,15 +117,20 @@ class FakeReplaySource implements ReplaySource {
   void clearBuffer() => clears++;
 
   @override
+  bool hasFrames({DateTime? since, DateTime? until}) =>
+      !empty && (since == null || until == null || since.isBefore(until));
+
+  @override
   Future<SessionRecordingPayload?> captureRecording(
-    String exceptionId, {
+    String clipId, {
     DateTime? since,
+    DateTime? until,
   }) async {
-    captures.add((exceptionId: exceptionId, since: since));
+    captures.add((clipId: clipId, since: since, until: until));
     if (empty) return null;
-    final now = DateTime.now();
+    final end = until ?? DateTime.now();
     return SessionRecordingPayload(
-      exceptionId: exceptionId,
+      clipId: clipId,
       events: [
         {
           'type': 'flutter_video',
@@ -133,8 +140,8 @@ class FakeReplaySource implements ReplaySource {
           'durationSeconds': 10.0,
         }
       ],
-      startedAt: now.subtract(const Duration(seconds: 10)),
-      endedAt: now,
+      startedAt: since ?? end.subtract(const Duration(seconds: 10)),
+      endedAt: end,
     );
   }
 }

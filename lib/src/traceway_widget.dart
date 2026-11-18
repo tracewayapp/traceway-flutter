@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 import 'error_handler.dart';
 import 'events/log_capture.dart';
 import 'events/network_capture.dart';
+import 'events/traceway_event.dart';
 import 'events/traceway_navigator_observer.dart';
 import 'screen_recorder.dart';
 import 'traceway_client.dart';
@@ -44,6 +46,21 @@ class Traceway extends StatefulWidget {
   /// Sets an attribute attached to every later record, e.g. `user.id`.
   static void setAttribute(String key, String value) {
     TracewayClient.instance?.setAttribute(key, value);
+  }
+
+  /// Records that the app arrived at [path], for routers that do not report
+  /// to a [NavigatorObserver] (e.g. a `go_router` listener:
+  /// `router.routerDelegate.addListener(() => Traceway.recordNavigation(
+  /// router.routerDelegate.currentConfiguration.uri.path))`). Navigation
+  /// steps of recording triggers match [path].
+  static void recordNavigation(String path, {String? from, String action = 'push'}) {
+    final client = TracewayClient.instance;
+    if (client == null || !client.options.captureNavigation) return;
+    client.recordNavigationEvent(NavigationEvent(
+      action: action,
+      from: from ?? client.currentScreen,
+      to: path,
+    ));
   }
 
   static void run({
@@ -85,12 +102,12 @@ class _TracewayState extends State<Traceway> {
   void initState() {
     super.initState();
     final client = TracewayClient.instance;
-    if (client != null && client.options.screenCapture) {
+    if (client != null && client.recordsScreen) {
       _screenRecorder = ScreenRecorder(
         repaintBoundaryKey: _repaintBoundaryKey,
-        maxFrames: client.options.maxBufferFrames,
+        maxFrames: client.options.maxBufferFrames.clamp(1, 100000),
         pixelRatio: client.options.capturePixelRatio,
-        fps: client.options.fps,
+        fps: client.options.fps.clamp(1, 59),
         debug: client.debug,
       );
       // The client starts and stops the recorder as the replay mode allows.
@@ -110,18 +127,55 @@ class _TracewayState extends State<Traceway> {
     super.dispose();
   }
 
+  /// Pointers that went down and may still become a tap.
+  final Map<int, PointerDownEvent> _downs = {};
+
   void _onPointerDown(PointerDownEvent event) {
     TracewayClient.instance?.markActivity();
     _screenRecorder?.setTouchPosition(event.localPosition);
+    final primary = event.kind != PointerDeviceKind.mouse ||
+        event.buttons & kPrimaryButton != 0;
+    if (primary) _downs[event.pointer] = event;
   }
 
   void _onPointerMove(PointerMoveEvent event) {
     _screenRecorder?.setTouchPosition(event.localPosition);
+    final down = _downs[event.pointer];
+    if (down != null &&
+        (event.position - down.position).distance > _slop(down.kind)) {
+      _downs.remove(event.pointer);
+    }
   }
 
+  /// A pointer that comes up where it went down is a tap: it is recorded
+  /// before the app's own tap handlers run, so the tap comes first in the
+  /// session, before whatever it causes.
   void _onPointerUp(PointerUpEvent event) {
     _screenRecorder?.clearTouchPosition();
+    final down = _downs.remove(event.pointer);
+    if (down == null) return;
+    if ((event.position - down.position).distance > _slop(down.kind)) return;
+    try {
+      TracewayClient.instance?.recordTap(down.position, viewId: down.viewId);
+    } catch (_) {
+      // Recording a tap must never break the tap.
+    }
   }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    _downs.remove(event.pointer);
+    _screenRecorder?.clearTouchPosition();
+  }
+
+  void _onPointerHover(PointerHoverEvent event) {
+    if (event.kind != PointerDeviceKind.mouse) return;
+    try {
+      TracewayClient.instance?.recordHover(event.position, viewId: event.viewId);
+    } catch (_) {}
+  }
+
+  static double _slop(PointerDeviceKind kind) =>
+      kind == PointerDeviceKind.mouse ? kPrecisePointerHitSlop * 4 : kTouchSlop;
 
   @override
   Widget build(BuildContext context) {
@@ -130,9 +184,11 @@ class _TracewayState extends State<Traceway> {
       onPointerDown: _onPointerDown,
       onPointerMove: _onPointerMove,
       onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
+      onPointerHover: _onPointerHover,
       child: widget.child,
     );
-    if (client != null && client.options.screenCapture) {
+    if (client != null && client.recordsScreen) {
       return RepaintBoundary(key: _repaintBoundaryKey, child: listener);
     }
     return listener;

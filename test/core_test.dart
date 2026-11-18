@@ -249,7 +249,7 @@ void main() {
       expect(control.replayMode, Mode.off);
     });
 
-    test('replay never streams, whatever the server or an override asks', () {
+    test('replay streams for a rule or an override that asks for it', () {
       var now = 0;
       final control = ControlState(
         defaultSettings(),
@@ -257,13 +257,26 @@ void main() {
         now: () => now,
       );
       expect(control.replayMode, Mode.buffer);
-      control.applyRemote(parseSettingsDocument(
-          '{"replay":{"mode":"stream","sessionSampleRate":1}}'));
-      expect(control.settings.replayMode, Mode.buffer);
-      expect(control.replayMode, Mode.buffer);
       control.addOverride(StreamOverride(signals: ['*'], untilMs: 1000));
       expect(control.replayMode, Mode.buffer);
+      control.addOverride(
+          StreamOverride(signals: const [], untilMs: 2000, replay: true));
+      expect(control.replayMode, Mode.stream);
+      expect(control.nextOverrideExpiryMs, 1000);
+      now = 2001;
+      expect(control.replayMode, Mode.buffer);
+      expect(control.nextOverrideExpiryMs, isNull);
+      control.applyRemote(parseSettingsDocument(
+          '{"replay":{"mode":"stream","sessionSampleRate":1}}'));
+      expect(control.replayMode, Mode.stream);
       control.applyRemote(parseSettingsDocument('{"replay":{"mode":"off"}}'));
+      expect(control.replayMode, Mode.off);
+    });
+
+    test('an override cannot stream replay past the ceiling', () {
+      final control = ControlState(defaultSettings(), ceilingsFrom());
+      control.addOverride(StreamOverride(
+          signals: const [], untilMs: 1 << 50, replay: true));
       expect(control.replayMode, Mode.off);
     });
 

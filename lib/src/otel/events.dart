@@ -2,6 +2,9 @@ const String eventException = 'exception';
 const String eventMessage = 'traceway.message';
 const String eventAction = 'traceway.action';
 const String eventNavigation = 'browser.navigation';
+
+/// A tap, under the browser SDK's name so the dashboard shows it the same.
+const String eventClick = 'browser.user_action.click';
 const String eventSessionStart = 'session.start';
 const String eventSessionEnd = 'session.end';
 const String eventSessionUpdate = 'traceway.session.update';
@@ -43,7 +46,7 @@ String classifyLog(String? eventName) {
       return 'console';
     case eventNavigation:
       return 'navigation';
-    case 'browser.user_action.click':
+    case eventClick:
       return 'userActions';
     case 'browser.web_vital':
       return 'webVitals';

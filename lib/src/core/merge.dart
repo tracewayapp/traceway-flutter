@@ -68,9 +68,30 @@ Json parseSettingsDocument(Object body) {
 
 bool _scalar(Object? value) => value is String || value is num || value is bool;
 
+const _eventTypes = ['click', 'hover', 'navigation', 'log'];
+final RegExp _unsupportedSelectorChars = RegExp(r'[:,\\]');
+
 Matcher? parseMatcher(Object? value, [int depth = 0]) {
   final object = _object(value);
   if (object == null || depth > _maxMatcherDepth) return null;
+  final event = _object(object['event']);
+  if (event != null) {
+    final type = event['type'];
+    final text = event['value'];
+    final mode = event['mode'];
+    if (!_eventTypes.contains(type) ||
+        text is! String ||
+        text.trim().isEmpty ||
+        text.length > 256) {
+      return null;
+    }
+    if (mode != null && mode != 'exact' && mode != 'contains') return null;
+    if ((type == 'click' || type == 'hover') &&
+        _unsupportedSelectorChars.hasMatch(text)) {
+      return null;
+    }
+    return EventMatcher(type as String, text, mode: mode as String?);
+  }
   if (object['all'] is List || object['any'] is List) {
     final isAll = object['all'] is List;
     final items = <Matcher>[];
@@ -288,6 +309,9 @@ Settings applyOverlay(Settings base, Json overlay) {
     if (mode != null) out.replayMode = mode;
     final sampleRate = _rate(replay['sessionSampleRate']);
     if (sampleRate != null) out.replaySessionSampleRate = sampleRate;
+    if (replay['maskAllInputs'] is bool) {
+      out.maskAllInputs = replay['maskAllInputs'] as bool;
+    }
   }
 
   final buffer = _object(overlay['buffer']);

@@ -151,7 +151,83 @@ bool _evaluate(Condition condition, FieldLookup lookup) {
   return false;
 }
 
+/// Lookup keys of the tap and hover events the app feeds to triggers: the
+/// action and a function that tests a selector against the widget under the
+/// pointer.
+const String keyPointerAction = 'browser.action';
+const String keyTargetMatches = 'browser.target.matches';
+
+final RegExp _routeParameter = RegExp(r'^\{[A-Za-z_][A-Za-z0-9_]*\}$');
+final Uri _pathBase = Uri.parse('https://traceway.invalid/');
+
+String _decoded(String segment) {
+  try {
+    return Uri.decodeComponent(segment);
+  } catch (_) {
+    return segment;
+  }
+}
+
+/// The path part of a navigation target such as `/users/42?tab=1`, as the
+/// browser SDK reads `location.pathname`.
+String? pathOf(Object? url) {
+  if (url == null || url == '') return null;
+  try {
+    return _pathBase.resolve(url.toString()).path;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// `/users/{id}` matches exactly one non-empty segment in that place; other
+/// segments compare as written or percent-decoded, case-sensitively.
+bool matchesRoute(String pattern, String path) {
+  final expected = pattern.split('/');
+  final actual = path.split('/');
+  if (expected.length != actual.length) return false;
+  for (var i = 0; i < expected.length; i++) {
+    final part = expected[i];
+    if (_routeParameter.hasMatch(part)) {
+      if (actual[i].isEmpty) return false;
+    } else if (part != actual[i] && part != _decoded(actual[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool _matchesEvent(EventMatcher matcher, FieldLookup lookup) {
+  switch (matcher.type) {
+    case 'click':
+    case 'hover':
+      final test = lookup(keyTargetMatches);
+      return lookup(keyPointerAction) == matcher.type &&
+          test is bool Function(String) &&
+          test(matcher.value);
+    case 'log':
+      final name = lookup('event.name');
+      final signal = lookup('signal');
+      if (name != 'browser.console' &&
+          name != 'traceway.message' &&
+          signal != 'console' &&
+          signal != 'messages') {
+        return false;
+      }
+      var body = lookup('body')?.toString() ?? '';
+      if (body.length > _maxMatchText) body = body.substring(0, _maxMatchText);
+      return matcher.mode == 'contains'
+          ? body.contains(matcher.value)
+          : body == matcher.value;
+    case 'navigation':
+      if (lookup('event.name') != 'browser.navigation') return false;
+      final path = pathOf(lookup('attributes.url.full'));
+      return path != null && matchesRoute(matcher.value, path);
+  }
+  return false;
+}
+
 bool matches(Matcher matcher, FieldLookup lookup) => switch (matcher) {
+      EventMatcher e => _matchesEvent(e, lookup),
       Condition c => _evaluate(c, lookup),
       AllMatcher m => m.items.every((i) => matches(i, lookup)),
       AnyMatcher m => m.items.any((i) => matches(i, lookup)),

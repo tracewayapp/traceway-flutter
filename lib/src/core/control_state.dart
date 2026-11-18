@@ -5,6 +5,7 @@ class StreamOverride {
   StreamOverride({
     required this.signals,
     required this.untilMs,
+    this.replay = false,
     this.includeOff = false,
   });
 
@@ -13,16 +14,17 @@ class StreamOverride {
   final List<String> signals;
   final int untilMs;
 
+  /// Streams the screen recording too, as segments, while it lasts.
+  final bool replay;
+
   /// A capture: `"*"` also brings back the signals rules switched off.
   final bool includeOff;
 }
 
-/// The effective collection settings at any moment: built-in defaults, then
-/// the remote overlay, clamped to the app's ceilings, then any temporary
-/// "stream for a while" overrides from triggers and captures.
-///
-/// Stream overrides never apply to replay: the screen recording stays a
-/// bounded on-device buffer and only leaves as an error clip.
+/// The effective collection settings at any moment: built-in defaults (with
+/// the app's local collection settings), then the remote overlay, clamped to
+/// the app's ceilings, then any temporary "stream for a while" overrides from
+/// triggers and captures.
 class ControlState {
   ControlState(this._defaults, this._appCeilings, {int Function()? now})
       : _now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
@@ -71,6 +73,13 @@ class ControlState {
     _activeOverrides();
   }
 
+  /// When the next override ends, so the caller can re-apply replay then.
+  int? get nextOverrideExpiryMs {
+    final active = _activeOverrides();
+    if (active.isEmpty) return null;
+    return active.map((o) => o.untilMs).reduce((a, b) => a < b ? a : b);
+  }
+
   List<StreamOverride> _activeOverrides() {
     final now = _now();
     _overrides.removeWhere((_, list) {
@@ -106,10 +115,13 @@ class ControlState {
         (override.includeOff && _defaults.signals[signal]!.mode != Mode.off);
   }
 
-  /// `off` or `buffer`, never `stream`.
   Mode get replayMode {
     if (!_effective.enabled) return Mode.off;
-    return lowerMode(_effective.replayMode, Mode.buffer);
+    final base = _effective.replayMode;
+    if (base != Mode.stream && _activeOverrides().any((o) => o.replay)) {
+      return lowerMode(Mode.stream, _ceilings.replay);
+    }
+    return base;
   }
 
   double sampleRate(String signal) => _effective.signals[signal]!.sampleRate;

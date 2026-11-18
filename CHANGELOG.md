@@ -1,3 +1,17 @@
+## Unreleased
+
+Captures, recording triggers and taps, at parity with the browser SDK 2.1.
+
+- **Captures stream video.** A capture from the dashboard or a trigger that asks for replay (`capture`, `startReplay`, `stream` with `replay`, or a rule with `replay.mode: stream`) uploads the buffered lookback and then streams the session as consecutive MP4 segments until it ends; logs, requests and taps stream with it. A capture known only from the cached config starts nothing until the server confirms it. Video needs a hardware encoder (Android, iOS, macOS); elsewhere `screenCapture` records nothing.
+- **Recording triggers** (`event` steps of type `click`, `hover`, `navigation` and `log`) run in Flutter, with the browser SDK's sequence engine: overlapping progress, counts and windows, progress and fire counts kept across restarts within a session. Fired triggers that ask for replay report their steps, so the session lists them as recording reasons. The SDK advertises `io.traceway.sdk.sequence-triggers/v1`.
+- **Taps** are recorded as `browser.user_action.click` (signal `userActions`, buffered by default) with a CSS-like selector naming the widget (`ElevatedButton#pay`, `IconButton[label="Delete"]`), plus `app.widget.*` and `app.screen.*` attributes. Selectors match keys, `Semantics` identifiers, roles, labels, shown text and widget types; see the README.
+- **Routes** without a name are reported by their page widget (`/CheckoutPage`); `Traceway.recordNavigation` reports a router's location.
+- **Local config**: `TracewayOptions.collection` takes a settings document, under the remote rules or on its own with `remoteConfig: false`. New options `captureUserActions` and `recordAllSessions`.
+- Local captures from triggers survive app restarts until they end.
+- The ring buffer is saved (OTLP protobuf) when the app goes to the background, on `flush()` and at shutdown, and restored when the same session goes on after a restart; the next trigger or capture uploads it. `buffer.persist: false` keeps it in memory only.
+- Replay uploads are bounded per session (50 MiB, 10,000 segments); sessions report `traceway.collection.*` and `traceway.replay.failed_segments`.
+- Web vital events are buffered by default, as in the browser SDK; `longTasks` and `routeTiming` are known signal names.
+
 ## 2.0.0-beta.1 — 2026-11-14
 
 Rebuilt on the standard OpenTelemetry SDK for Dart, matching the browser SDK's 2.0 architecture.

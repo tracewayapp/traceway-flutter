@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_quick_video_encoder/flutter_quick_video_encoder.dart';
@@ -87,6 +87,14 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   /// for tests.
   @visibleForTesting
   static VideoEncoder? encoderOverride;
+
+  /// Whether clips can be encoded here: the hardware encoder exists on
+  /// Android, iOS and macOS. Elsewhere the SDK records no frames at all.
+  static bool get isVideoSupported {
+    if (encoderOverride != null) return true;
+    if (kIsWeb) return false;
+    return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+  }
 
   final GlobalKey repaintBoundaryKey;
   final double pixelRatio;
@@ -333,18 +341,26 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   /// Number of frames currently held; never more than the buffer capacity.
   int get bufferedFrameCount => _buffer.length;
 
-  /// Encodes the buffered frames to MP4. With [since], only frames captured
-  /// at or after it are included, so a caller can ask for a shorter clip; the
-  /// clip can never be longer than the frame ring buffer.
+  static bool _inWindow(CapturedFrame frame, DateTime? since, DateTime? until) =>
+      (since == null || !frame.timestamp.isBefore(since)) &&
+      (until == null || frame.timestamp.isBefore(until));
+
+  @override
+  bool hasFrames({DateTime? since, DateTime? until}) =>
+      _buffer.readAll().any((f) => _inWindow(f, since, until));
+
+  /// Encodes the buffered frames captured at or after [since] and before
+  /// [until] to MP4. The clip can never be longer than the frame ring buffer.
+  /// The frames are chosen when this is called, before it waits for an
+  /// earlier encode to finish.
   @override
   Future<SessionRecordingPayload?> captureRecording(
-    String exceptionId, {
+    String clipId, {
     DateTime? since,
+    DateTime? until,
   }) async {
-    var frames = _buffer.readAll();
-    if (since != null) {
-      frames = frames.where((f) => !f.timestamp.isBefore(since)).toList();
-    }
+    final frames =
+        _buffer.readAll().where((f) => _inWindow(f, since, until)).toList();
     if (frames.isEmpty) return null;
 
     final previous = _encodingLock;
@@ -369,7 +385,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
       final durationSeconds = frames.length * _captureIntervalMs / 1000.0;
 
       final tempDir = await getTemporaryDirectory();
-      final outputPath = '${tempDir.path}/traceway_$exceptionId.mp4';
+      final outputPath = '${tempDir.path}/traceway_$clipId.mp4';
 
       final encoder = encoderOverride ?? const PlatformVideoEncoder();
       await encoder.setup(
@@ -438,7 +454,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
       }
 
       return SessionRecordingPayload(
-        exceptionId: exceptionId,
+        clipId: clipId,
         events: [
           {
             'type': 'flutter_video',

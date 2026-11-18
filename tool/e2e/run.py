@@ -5,21 +5,36 @@ Starts the scripted example app (example/lib/e2e_main.dart), follows its
 E2E_PHASE lines and asserts through the dashboard API what the server holds
 at each point:
 
-  1. before the exception: breadcrumbs are NOT on the server (ring buffer)
-  2. after it: the issue, its breadcrumbs, the HTTP span, the session and a
-     replay clip no longer than the recorder's frame buffer
-  3. after a remote-config rule (OpAMP): app events stream without an error,
-     and no further replay is uploaded even though the rule asks to stream it
+  1. before the exception: breadcrumbs, taps included, are NOT on the server
+     (ring buffer); the session is
+  2. after it: the issue, its breadcrumbs, the tap with the selector of the
+     widget, the HTTP span, the session and a replay clip no longer than the
+     recorder's frame buffer
+  3. a recording trigger from the app's local settings (navigation
+     /users/{id}, a tap on #open-profile, a log line) starts a capture:
+     the session lists the trigger as a recording reason, logs stream while
+     it runs and not after, and the session gets consecutive video segments
+  4. a capture started from the dashboard API: its lookback comes up, logs
+     and video stream, and cancelling it stops both
+  5. a remote rule whose click step is the selector the server recorded for
+     a tap: the server accepts it and the app matches it on the next tap
+  6. the app saves its buffer going to the background and is killed; the
+     next start resumes the session and its first error brings up what the
+     killed run had buffered
 
-  python3 tool/e2e/run.py --base http://127.0.0.1:8082 --email .. --password .. -- <app command>
+  python3 tool/e2e/run.py --base http://127.0.0.1:8082 --email .. --password .. \\
+      [--storage <backend STORAGE_PATH>] -- <app command>
 
 The app must be built with TRACEWAY_DSN pointing at a Flutter project of that
-account. Needs ffprobe on PATH to inspect the clip.
+account. Needs ffprobe on PATH to inspect the clips. With --storage (a local
+storage backend) every stored segment is checked on its own.
 """
-import argparse, base64, datetime, json, os, subprocess, sys, tempfile, threading, time
-import urllib.error, urllib.request
+import argparse, base64, datetime, glob, json, os, shutil, subprocess, sys, tempfile, threading, time
+import urllib.error, urllib.parse, urllib.request
 
 MAX_CLIP_SECONDS = 10.5  # 150 frames at 15 fps, plus rounding
+JOURNEY_CAPTURE_SECONDS = 30
+DEFAULT_STATE_DIR = os.path.expanduser('~/.local/share/com.example.traceway_example/traceway_v2')
 
 
 class Api:
@@ -52,8 +67,9 @@ class Api:
 
     def page(self, path, since, extra=None):
         now = datetime.datetime.now(datetime.timezone.utc)
+        size = 500 if path == '/api/logs' else 100
         body = {'fromDate': since.isoformat(), 'toDate': (now + datetime.timedelta(minutes=5)).isoformat(),
-                'pagination': {'page': 1, 'pageSize': 100}}
+                'pagination': {'page': 1, 'pageSize': size}}
         body.update(extra or {})
         status, data = self.call('POST', path, body)
         if status != 200:
@@ -69,10 +85,15 @@ class Check:
         print(('  PASS  ' if ok else '  FAIL  ') + what + (f'   [{detail}]' if detail else ''))
         if not ok:
             self.failed += 1
+        return ok
 
 
 def event_name(record):
     return (record.get('logAttributes') or {}).get('event.name') or ''
+
+
+def attrs(record):
+    return record.get('logAttributes') or {}
 
 
 def snapshot(api, since, instance):
@@ -83,8 +104,43 @@ def snapshot(api, since, instance):
         names.setdefault(event_name(r) or '(console)', []).append(r)
     spans = api.page('/api/spans/search', since)
     issues = api.page('/api/exception-stack-traces', since, {'orderBy': 'last_seen'})
-    sessions = api.page('/api/sessions', since)
+    sessions = [s for s in api.page('/api/sessions', since)
+                if (s.get('attributes') or {}).get('service.instance.id') == instance]
     return names, spans, issues, sessions
+
+
+def bodies(names):
+    return [r.get('body') for r in names.get('(console)', [])]
+
+
+def parse_time(value):
+    return datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
+def probe(data_b64):
+    path = os.path.join(tempfile.mkdtemp(prefix='traceway-e2e-'), 'clip.mp4')
+    with open(path, 'wb') as f:
+        f.write(base64.b64decode(data_b64))
+    out = json.loads(subprocess.run(
+        ['ffprobe', '-v', 'error', '-count_frames', '-show_entries',
+         'format=duration:stream=codec_name,width,height,nb_read_frames', '-of', 'json', path],
+        capture_output=True, text=True).stdout or '{}')
+    stream = (out.get('streams') or [{}])[0]
+    return path, stream.get('codec_name'), int(stream.get('nb_read_frames') or 0), \
+        float((out.get('format') or {}).get('duration') or 0), stream
+
+
+def stored_segments(storage, project_id, session_id):
+    """Every segment the server stored for a session, by index."""
+    if not storage:
+        return None
+    out = {}
+    for path in glob.glob(os.path.join(storage, '**', 'sessions', session_id, '*.json'), recursive=True):
+        if project_id not in path:
+            continue
+        with open(path) as f:
+            out[int(os.path.basename(path)[:-5])] = json.load(f)
+    return dict(sorted(out.items()))
 
 
 def main():
@@ -93,6 +149,9 @@ def main():
     ap.add_argument('--email', required=True)
     ap.add_argument('--password', required=True)
     ap.add_argument('--project', default='')
+    ap.add_argument('--storage', default='')
+    ap.add_argument('--state-dir', default=DEFAULT_STATE_DIR,
+                    help='the app\'s SDK state, cleared so each run starts fresh')
     ap.add_argument('app', nargs=argparse.REMAINDER)
     args = ap.parse_args()
     app_cmd = [a for a in args.app if a != '--']
@@ -104,19 +163,32 @@ def main():
     since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=5)
     for rule in (api.call('GET', '/api/sdk-config/rules')[1] or {}).get('data') or []:
         api.call('DELETE', f"/api/sdk-config/rules/{rule['id']}")
+    if args.state_dir and os.path.isdir(args.state_dir):
+        shutil.rmtree(args.state_dir)
 
     phases, lines = {}, []
-    proc = subprocess.Popen(app_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors='replace')
+    proc = None
 
-    def pump():
-        for line in proc.stdout:
-            lines.append(line.rstrip())
-            if 'E2E_PHASE ' in line:
-                name = line.split('E2E_PHASE ', 1)[1].strip()
-                phases[name.split(' ')[0]] = (time.time(), name)
-                print('app: ' + name)
+    def launch(scenario=None):
+        nonlocal proc
+        phases.clear()
+        env = dict(os.environ)
+        if scenario:
+            env['E2E_SCENARIO'] = scenario
+        proc = subprocess.Popen(app_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                errors='replace', env=env)
 
-    threading.Thread(target=pump, daemon=True).start()
+        def pump(stream):
+            for line in stream:
+                lines.append(line.rstrip())
+                if 'E2E_PHASE ' in line:
+                    name = line.split('E2E_PHASE ', 1)[1].strip()
+                    phases[name.split(' ')[0]] = (time.time(), name)
+                    print('app: ' + name)
+
+        threading.Thread(target=pump, args=(proc.stdout,), daemon=True).start()
+
+    launch()
 
     def wait_phase(name, timeout):
         deadline = time.time() + timeout
@@ -126,8 +198,9 @@ def main():
             if proc.poll() is not None:
                 break
             time.sleep(0.2)
-        print('\n'.join(lines[-30:]))
-        proc.kill()
+        print('\n'.join(lines[-40:]))
+        if proc:
+            proc.kill()
         sys.exit(f'app never reached phase {name}')
 
     try:
@@ -135,42 +208,46 @@ def main():
 
         # ---- 1. quiet phase ------------------------------------------------
         wait_phase('breadcrumbs_done', 60)
-        time.sleep(8)
+        time.sleep(6)
         print('\n[1] before the exception: breadcrumbs must still be on the device')
         names, spans, issues, sessions = snapshot(api, since, instance)
         check('exception' not in phases, 'snapshot taken before the exception was thrown')
         check('session.start' in names, 'session.start was sent (control records always stream)')
-        for breadcrumb in ('(console)', 'browser.navigation', 'traceway.action', 'e2e_event'):
+        for breadcrumb in ('(console)', 'browser.navigation', 'traceway.action', 'e2e_event',
+                           'browser.user_action.click'):
             check(breadcrumb not in names, f'no {breadcrumb} record on the server yet')
         check(not spans, 'no HTTP span on the server yet', f'{len(spans)} spans')
         check(not issues, 'no issue yet')
-        session_rows = [s for s in sessions if (s.get('attributes') or {}).get('service.instance.id') == instance]
-        check(len(session_rows) == 1, 'the session exists', f'{len(session_rows)} sessions')
-        check(not any(s.get('hasRecording') for s in session_rows), 'no replay uploaded without an exception')
+        check(len(sessions) == 1, 'the session exists', f'{len(sessions)} sessions')
+        check(not any(s.get('hasRecording') for s in sessions), 'no replay uploaded without an exception')
 
         # ---- 2. the exception ----------------------------------------------
         wait_phase('exception_sent', 120)
         time.sleep(6)  # the server writes recording rows in 2 s batches
-        print('\n[2] after the exception: issue, breadcrumbs, span, session and clip')
+        print('\n[2] after the exception: issue, breadcrumbs, tap, span, session and clip')
         names, spans, issues, sessions = snapshot(api, since, instance)
         check(len(names.get('exception', [])) == 1, 'one exception record')
-        console = [r.get('body') for r in names.get('(console)', [])]
-        check('e2e breadcrumb log' in console, 'print() breadcrumb flushed', f'{len(console)} console records')
-        nav = [(r['logAttributes'].get('navigation.action'), r['logAttributes'].get('url.full'))
-               for r in names.get('browser.navigation', [])]
-        check(('push', '/e2e-detail') in nav, 'navigation breadcrumb flushed', str(nav))
+        check('e2e breadcrumb log' in bodies(names), 'print() breadcrumb flushed')
+        nav = [(attrs(r).get('navigation.action'), attrs(r).get('url.full')) for r in names.get('browser.navigation', [])]
+        check(('push', '/e2e-detail') in nav and ('pop', '/') in nav, 'navigation breadcrumbs flushed', str(nav))
+        clicks = names.get('browser.user_action.click', [])
+        pay = [attrs(r) for r in clicks if attrs(r).get('app.widget.id') == 'pay']
+        check(len(pay) == 1, 'the tap was flushed with the breadcrumbs', f'{len(clicks)} clicks')
+        pay = pay[0] if pay else {}
+        check(pay.get('browser.css_selector') == 'ElevatedButton#pay' and pay.get('browser.tag_name') == 'ElevatedButton',
+              'the tap names the widget', f"{pay.get('browser.css_selector')}")
+        check(pay.get('app.widget.text') == 'Pay now' and pay.get('app.screen.name') == '/',
+              'the tap carries the shown text and the screen')
         actions = names.get('traceway.action', [])
-        check(len(actions) == 1 and actions[0]['logAttributes'].get('traceway.action.name') == 'tap'
-              and actions[0]['logAttributes'].get('traceway.action.data') == '{"step":1}', 'custom action flushed')
+        check(len(actions) == 1 and attrs(actions[0]).get('traceway.action.data') == '{"step":1}', 'custom action flushed')
         check(len(names.get('e2e_event', [])) == 1, 'tracked event flushed')
-        check('traceway.trigger.fired' in names, 'traceway.trigger.fired recorded')
         check(len(spans) == 1 and spans[0]['spanKind'] == 3 and spans[0]['name'] == 'GET',
               'HTTP client span flushed', f'{len(spans)} spans')
         check(not [s for s in spans if '/api/otel/' in json.dumps(s) or '/api/recordings' in json.dumps(s)],
               'the SDK did not record its own requests')
 
         check(len(issues) == 1, 'one issue', f'{len(issues)} issues')
-        record = names['exception'][0]['logAttributes'] if names.get('exception') else {}
+        record = attrs(names['exception'][0]) if names.get('exception') else {}
         exception_id = record.get('traceway.exception.id')
         session_id = record.get('session.id')
         status, detail = api.call('POST', f'/api/exception-stack-traces/by-id/{exception_id}', {})
@@ -180,74 +257,189 @@ def main():
         stack = exc.get('stackTrace', '')
         check(stack.startswith('StateError: Bad state: e2e boom\n') and 'e2e_main.dart' in stack,
               'stack trace has the error line and app frames')
-        attrs = exc.get('attributes') or {}
-        check(attrs.get('os.name') and attrs.get('user.id') == 'e2e-user' and attrs.get('service.instance.id') == instance,
-              'issue carries device, user and instance attributes', f"os.name={attrs.get('os.name')}")
+        issue_attrs = exc.get('attributes') or {}
+        check(issue_attrs.get('os.name') and issue_attrs.get('user.id') == 'e2e-user'
+              and issue_attrs.get('service.instance.id') == instance, 'issue carries device, user and instance attributes')
         check(exc.get('appVersion') == 'e2e-1.0.0', 'issue carries the app version')
-        check(detail.get('sessionId') == session_id and session_id == session_rows[0]['id'], 'issue is linked to the session')
-        check(attrs.get('traceway.replay.status') == 'requested', 'replay status is requested')
-
+        check(detail.get('sessionId') == session_id and sessions and session_id == sessions[0]['id'],
+              'issue is linked to the session')
+        check(issue_attrs.get('traceway.replay.status') == 'requested', 'replay status is requested')
         recording = detail.get('sessionRecording') or {}
         events = recording.get('events') or []
-        check(len(events) == 1 and events[0].get('type') == 'flutter_video' and events[0].get('format') == 'mp4',
-              'the issue has one flutter_video replay clip')
+        check(len(events) == 1 and events[0].get('type') == 'flutter_video', 'the issue has one flutter_video clip')
         if events:
-            clip = os.path.join(tempfile.mkdtemp(prefix='traceway-e2e-'), 'clip.mp4')
-            with open(clip, 'wb') as f:
-                f.write(base64.b64decode(events[0]['data']))
-            probe = json.loads(subprocess.run(
-                ['ffprobe', '-v', 'error', '-count_frames', '-show_entries',
-                 'format=duration:stream=codec_name,width,height,nb_read_frames', '-of', 'json', clip],
-                capture_output=True, text=True).stdout or '{}')
-            stream = (probe.get('streams') or [{}])[0]
-            duration = float((probe.get('format') or {}).get('duration') or 0)
-            frames = int(stream.get('nb_read_frames') or 0)
-            print(f"        clip: {clip}  {stream.get('codec_name')} {stream.get('width')}x{stream.get('height')}"
-                  f"  {frames} frames  {duration:.2f}s  ({os.path.getsize(clip)} bytes)")
-            check(stream.get('codec_name') == 'h264', 'clip is a playable H.264 MP4')
+            clip, codec, frames, duration, stream = probe(events[0]['data'])
+            print(f"        clip: {clip}  {codec} {stream.get('width')}x{stream.get('height')}  {frames} frames  {duration:.2f}s")
+            check(codec == 'h264', 'clip is a playable H.264 MP4')
             check(30 <= frames <= 150, 'clip holds real frames, never more than the 150-frame buffer', f'{frames}')
             check(0 < duration <= MAX_CLIP_SECONDS, f'clip is not longer than {MAX_CLIP_SECONDS:.1f}s', f'{duration:.2f}s')
-            check(events[0].get('durationSeconds', 99) <= MAX_CLIP_SECONDS, 'reported durationSeconds within the cap')
-            started = datetime.datetime.fromisoformat(recording['startedAt'].replace('Z', '+00:00'))
-            ended = datetime.datetime.fromisoformat(recording['endedAt'].replace('Z', '+00:00'))
-            check((ended - started).total_seconds() <= MAX_CLIP_SECONDS, 'startedAt..endedAt within the cap',
-                  f'{(ended - started).total_seconds():.2f}s')
 
-        status, timeline = api.call('GET', f"/api/sessions/{session_id}/timeline?from={urllib.request.quote(since.isoformat())}"
-                                           f"&to={urllib.request.quote((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)).isoformat())}")
+        until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)).isoformat()
+        status, timeline = api.call('GET', f"/api/sessions/{session_id}/timeline?from={urllib.parse.quote(since.isoformat())}"
+                                           f"&to={urllib.parse.quote(until)}")
         text = json.dumps(timeline)
         check(status == 200 and 'e2e breadcrumb log' in text and '/e2e-detail' in text and 'has-organizations' in text,
               'session timeline shows the log, navigation and network breadcrumbs', f'{status}')
-        sessions_now = [s for s in sessions if s['id'] == session_id]
-        check(bool(sessions_now) and sessions_now[0].get('hasRecording'), 'the session reports a recording')
+        check('"selector": "ElevatedButton#pay"' in text, 'session timeline shows the tap with its selector')
 
-        # ---- 3. remote config over OpAMP ------------------------------------
-        print('\n[3] remote config: stream app events; a replay "stream" setting must be ignored')
-        ticks_before = len(names.get('e2e_tick', []))
-        check(ticks_before == 0, 'tracked events are buffered before the rule exists')
-        status, body = api.call('POST', '/api/sdk-config/rules', {
-            'name': 'e2e stream', 'enabled': True, 'conditions': {},
-            'settings': {'signals': {'custom': {'mode': 'stream', 'sampleRate': 1}},
-                         'replay': {'mode': 'stream', 'sessionSampleRate': 1}},
-        })
-        check(status in (200, 201), 'rule created through the dashboard API', f'{status} {body if status >= 300 else ""}')
-        time.sleep(40)
+        # ---- 3. a recording trigger from local settings --------------------
+        wait_phase('journey_started', 60)
+        journey_started = phases['journey_started'][0]
+        time.sleep(12)
+        print('\n[3] recording trigger: navigation /users/{id} -> tap #open-profile -> log')
         names, spans, issues, sessions = snapshot(api, since, instance)
-        applied = names.get('traceway.config.applied', [])
-        check(len(applied) >= 2, 'the app applied the new remote config', f'{len(applied)} config.applied records')
-        ticks = names.get('e2e_tick', [])
-        check(len(ticks) >= 3, 'tracked events now arrive without any exception', f'{len(ticks)} e2e_tick records')
-        check('(console)' not in names or all(r.get('body') != 'e2e tick 3' for r in names['(console)']),
-              'console logs stay buffered (only custom was switched to stream)')
-        status, detail2 = api.call('POST', f'/api/exception-stack-traces/by-id/{exception_id}', {})
-        status, rec = api.call('GET', f"/api/sessions/{session_id}/recording?startedAt={urllib.request.quote(sessions_now[0]['startedAt'])}")
-        rec_events = (rec or {}).get('events') if isinstance(rec, dict) else None
-        check(status == 200 and rec_events is not None and len(rec_events) == 1,
-              'still exactly one replay clip for the session: nothing streamed',
-              f'{status} {len(rec_events) if rec_events is not None else rec}')
+        fired = [attrs(r) for r in names.get('traceway.trigger.fired', [])
+                 if attrs(r).get('traceway.trigger.id') == 'e2e-open-profile']
+        check(len(fired) == 1, 'the trigger fired once', f'{len(fired)}')
+        fired = fired[0] if fired else {}
+        check(fired.get('traceway.trigger.replay') == 'true' and fired.get('traceway.trigger.name') == 'Open profile',
+              'the fired record asks for replay and names the trigger')
+        started = [attrs(r) for r in names.get('traceway.capture.started', [])
+                   if attrs(r).get('traceway.capture.source') == 'trigger']
+        check(len(started) == 1 and started[0].get('traceway.trigger.id') == 'e2e-open-profile',
+              'a capture started on the device')
+        profile = [attrs(r) for r in names.get('browser.user_action.click', [])
+                   if attrs(r).get('app.widget.id') == 'open-profile']
+        check(len(profile) == 1 and profile[0].get('browser.css_selector') == 'ElevatedButton#open-profile'
+              and profile[0].get('app.screen.name') == '/users/42', 'the journey tap was uploaded with the lookback')
+        check(any(b and 'Profile loaded for 42' in b for b in bodies(names)), 'the journey log line was uploaded')
+        ticks = [b for b in bodies(names) if b and b.startswith('e2e journey tick')]
+        check(len(ticks) >= 5, 'logs stream while the capture runs, without an error', f'{len(ticks)} ticks')
+        status, session_detail = api.call('POST', f'/api/sessions/{session_id}', {})
+        reasons = ((session_detail or {}).get('session') or {}).get('recordingReasons') or [] if isinstance(session_detail, dict) else []
+        journey_reason = [r for r in reasons if r.get('triggerId') == 'e2e-open-profile']
+        check(bool(journey_reason) and journey_reason[0].get('sequence') ==
+              'navigation(/users/{id}) \u2192 click(#open-profile) \u2192 log(Profile loaded)',
+              'the session lists the trigger as a recording reason, with its sequence',
+              journey_reason[0].get('sequence') if journey_reason else json.dumps(reasons)[:300])
+
+        wait_phase('journey_done', 120)
+        time.sleep(8)
+        names, spans, issues, sessions = snapshot(api, since, instance)
+        ticks = [b for b in bodies(names) if b and b.startswith('e2e journey tick')]
+        last_streamed = max([int(t.rsplit(' ', 1)[1]) for t in ticks] or [-1])
+        check(JOURNEY_CAPTURE_SECONDS - 6 <= last_streamed <= JOURNEY_CAPTURE_SECONDS + 1,
+              'streaming ended with the capture', f'last streamed tick {last_streamed}')
+        check('e2e after journey' not in bodies(names), 'logs are buffered again after the capture')
+        segments = stored_segments(args.storage, api.project['id'], session_id)
+        status, rec = api.call('GET', f"/api/sessions/{session_id}/recording?startedAt={urllib.parse.quote(sessions[0]['startedAt'])}")
+        videos = (rec or {}).get('events') or [] if isinstance(rec, dict) else []
+        check(len(videos) >= 4, 'the session has the error clip and the streamed segments', f'{len(videos)} videos')
+        total = 0.0
+        for video in videos:
+            _, codec, frames, duration, _ = probe(video['data'])
+            total += duration
+            if codec != 'h264' or frames == 0:
+                check(False, 'every segment is a playable H.264 MP4', f'{codec} {frames}')
+                break
+        else:
+            check(bool(videos), 'every segment is a playable H.264 MP4', f'{total:.1f}s of video')
+        if segments is not None:
+            journey = [s for i, s in segments.items() if i > 0]
+            print(f'        stored segments: {list(segments)}')
+            check(all(not s.get('exceptionId') for s in journey), 'streamed segments are not exception clips')
+            gaps = [(parse_time(b['startedAt']) - parse_time(a['endedAt'])).total_seconds()
+                    for a, b in zip(journey, journey[1:])]
+            check(gaps and all(-0.01 <= g <= 0.5 for g in gaps), 'consecutive segments follow each other',
+                  ', '.join(f'{g:.2f}s' for g in gaps))
+            span = (parse_time(journey[-1]['endedAt']) - parse_time(journey[0]['startedAt'])).total_seconds() if journey else 0
+            check(JOURNEY_CAPTURE_SECONDS - 2 <= span <= JOURNEY_CAPTURE_SECONDS + MAX_CLIP_SECONDS + 3,
+                  'the segments cover the lookback and the capture', f'{span:.1f}s')
+
+        # ---- 4. a capture from the dashboard -------------------------------
+        wait_phase('await_capture', 60)
+        print('\n[4] a capture started from the dashboard, then cancelled')
+        status, capture = api.call('POST', '/api/sdk-config/captures', {
+            'target': {'kind': 'instance', 'value': instance}, 'durationMinutes': 5,
+            'lookbackSeconds': 60, 'replay': True, 'label': 'e2e'})
+        check(status in (200, 201), 'capture created through the dashboard API', f'{status} {capture if status >= 300 else ""}')
+        capture_id = (capture or {}).get('id') if isinstance(capture, dict) else None
+        created = time.time()
+        time.sleep(20)
+        names, spans, issues, sessions = snapshot(api, since, instance)
+        remote = [attrs(r) for r in names.get('traceway.capture.started', [])
+                  if attrs(r).get('traceway.capture.source') == 'remote']
+        check(len(remote) == 1 and remote[0].get('traceway.capture.id') == capture_id, 'the app started the capture',
+              f'{len(remote)}')
+        check(all(f'e2e pre-capture tick {i}' in bodies(names) for i in range(3)) and 'e2e after journey' in bodies(names),
+              'the lookback brought up what was buffered')
+        remote_ticks = [b for b in bodies(names) if b and b.startswith('e2e remote tick')]
+        check(len(remote_ticks) >= 10, 'logs stream during the capture', f'{len(remote_ticks)}')
+        tagged = [r for r in names.get('(console)', []) if capture_id and capture_id in attrs(r).get('traceway.capture.ids', '')]
+        check(len(tagged) >= 10, 'streamed records carry the capture id', f'{len(tagged)}')
+        status, listing = api.call('GET', '/api/sdk-config/captures')
+        mine = [c for c in ((listing or {}).get('data') or []) if c.get('id') == capture_id] if isinstance(listing, dict) else []
+        check(bool(mine) and (mine[0].get('status') or '').lower() == 'collecting', 'the dashboard sees the capture collecting',
+              mine[0].get('status') if mine else listing)
+        status, rec = api.call('GET', f"/api/sessions/{session_id}/recording?startedAt={urllib.parse.quote(sessions[0]['startedAt'])}")
+        videos_during = len((rec or {}).get('events') or []) if isinstance(rec, dict) else 0
+        check(videos_during >= len(videos) + 2, 'video streams during the capture', f'{len(videos)} -> {videos_during}')
+
+        status, _ = api.call('DELETE', f'/api/sdk-config/captures/{capture_id}')
+        check(status in (200, 204), 'capture cancelled', f'{status}')
+        cancelled = time.time()
+        wait_phase('capture_done', 120)
+        time.sleep(8)
+        names, spans, issues, sessions = snapshot(api, since, instance)
+        remote_ticks = sorted(int(b.rsplit(' ', 1)[1]) for b in bodies(names) if b and b.startswith('e2e remote tick'))
+        stopped_at = remote_ticks[-1] if remote_ticks else -1
+        print(f'        capture created at t+0, cancelled at t+{cancelled - created:.0f}s, last streamed tick {stopped_at}')
+        check(0 < stopped_at < 55, 'streaming stopped after the cancel', f'last tick {stopped_at}')
+        status, rec = api.call('GET', f"/api/sessions/{session_id}/recording?startedAt={urllib.parse.quote(sessions[0]['startedAt'])}")
+        videos_after = len((rec or {}).get('events') or []) if isinstance(rec, dict) else 0
+        time.sleep(12)
+        status, rec = api.call('GET', f"/api/sessions/{session_id}/recording?startedAt={urllib.parse.quote(sessions[0]['startedAt'])}")
+        videos_later = len((rec or {}).get('events') or []) if isinstance(rec, dict) else 0
+        check(videos_later == videos_after, 'no more video after the cancel', f'{videos_after} -> {videos_later}')
+
+        # ---- 5. a rule built from the selector the server recorded ---------
+        print('\n[5] a remote rule whose click step is the selector the server recorded')
+        selector = pay.get('browser.css_selector') or 'ElevatedButton#pay'
+        status, body = api.call('POST', '/api/sdk-config/rules', {
+            'name': 'e2e remote click', 'enabled': True, 'conditions': {},
+            'settings': {'signals': {'custom': {'mode': 'stream', 'sampleRate': 1}},
+                         'triggers': [{'id': 'e2e-remote-pay', 'name': 'Pay tapped',
+                                       'steps': [{'match': {'event': {'type': 'click', 'value': selector}}}],
+                                       'actions': [{'type': 'emit', 'eventName': 'e2e_paid'}]}]},
+        })
+        check(status in (200, 201), f'the server accepts the recorded selector {selector!r} in a rule',
+              f'{status} {body if status >= 300 else ""}')
+        wait_phase('done', 120)
+        time.sleep(6)
+        names, spans, issues, sessions = snapshot(api, since, instance)
+        remote_fired = [r for r in names.get('traceway.trigger.fired', []) if attrs(r).get('traceway.trigger.id') == 'e2e-remote-pay']
+        check(len(remote_fired) == 1, 'the app matched the next tap against it', f'{len(remote_fired)}')
+        check(len(names.get('e2e_paid', [])) == 1, 'the rule streamed app events', f"{len(names.get('e2e_paid', []))}")
+        check(len(names.get('e2e_tick', [])) >= 3, 'tracked events stream without an error')
         check(len(issues) == 1, 'still one issue')
-    finally:
+
+        # ---- 6. killed in the background, restarted ------------------------
+        print('\n[6] the buffer outlives a kill in the background')
         proc.kill()
+        proc.wait()
+        launch('restart-a')
+        saved = wait_phase('saved', 90).split('session=')[1]
+        time.sleep(3)
+        proc.kill()
+        proc.wait()
+        names, spans, issues, sessions = snapshot(api, since, instance)
+        check('e2e before the kill' not in bodies(names), 'the killed run sent its breadcrumbs nowhere')
+        check(saved == session_id, 'the restarted app continued the session', saved)
+        launch('restart-b')
+        resumed = wait_phase('resumed', 90).split('session=')[1]
+        check(resumed == saved, 'the next start resumed the same session', resumed)
+        wait_phase('done', 90)
+        time.sleep(6)
+        names, spans, issues, sessions = snapshot(api, since, instance)
+        restored = [r for r in names.get('(console)', []) if r.get('body') == 'e2e before the kill']
+        check(len(restored) == 1 and attrs(restored[0]).get('session.id') == saved,
+              'its error brought up the log the killed run had buffered', f'{len(restored)}')
+        taps = [attrs(r) for r in names.get('browser.user_action.click', []) if attrs(r).get('app.widget.id') == 'pay']
+        check(len(taps) == 3, 'and the tap, with its selector', f'{len(taps)} pay taps')
+        check(len(issues) == 2, 'the second error is its own issue', f'{len(issues)}')
+    finally:
+        if proc:
+            proc.kill()
 
     print(f"\n{'ALL CHECKS PASSED' if not check.failed else str(check.failed) + ' CHECK(S) FAILED'}")
     sys.exit(1 if check.failed else 0)
