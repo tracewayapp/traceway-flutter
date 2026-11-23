@@ -1,3 +1,5 @@
+import 'traceway_telemetry.dart';
+
 class TracewayOptions {
   /// Share of exceptions and messages that are reported (0.0 - 1.0).
   final double sampleRate;
@@ -39,7 +41,8 @@ class TracewayOptions {
   final bool captureLogs;
 
   /// Install [HttpOverrides] so every dart:io HTTP call is recorded as a
-  /// client span. On Flutter web use `TracewayHttpClient` instead.
+  /// client span. Clients that bypass dart:io (`cupertino_http`,
+  /// `cronet_http`) are recorded by wrapping them in `TracewayHttpClient`.
   final bool captureNetwork;
 
   /// Record navigation transitions reported by [TracewayNavigatorObserver].
@@ -107,6 +110,31 @@ class TracewayOptions {
   /// How long finished records wait before they are sent as one batch.
   final int exportDelayMs;
 
+  /// Send logs, spans and metrics to another OpenTelemetry backend (an
+  /// OTLP/HTTP receiver such as an OpenTelemetry Collector) instead of
+  /// Traceway. With a connection string, exceptions, messages, sessions,
+  /// OpAMP and screen recordings stay on Traceway; without one the SDK runs
+  /// standalone and this receives everything. See [TracewayTelemetry].
+  ///
+  /// ```dart
+  /// telemetry: TracewayTelemetry(
+  ///   url: 'https://collector.example.com',
+  ///   headers: {'x-api-key': '...'},
+  /// ),
+  /// ```
+  final TracewayTelemetry? telemetry;
+
+  /// Requests that carry a W3C `traceparent` header naming their client
+  /// span, so the backend's spans join the app's trace in Traceway or any
+  /// OpenTelemetry backend. A [String] matches URLs that start with it, a
+  /// [RegExp] URLs it matches. Empty by default: a header a server does not
+  /// expect can break a strict CORS or signature check.
+  ///
+  /// ```dart
+  /// propagateTraceHeaderUrls: ['https://api.example.com/', RegExp(r'^https://[a-z]+\.example\.com/')],
+  /// ```
+  final List<Pattern> propagateTraceHeaderUrls;
+
   const TracewayOptions({
     this.sampleRate = 1.0,
     this.screenCapture = false,
@@ -131,5 +159,7 @@ class TracewayOptions {
     this.baselineSampleRate = 0,
     this.remoteConfig = true,
     this.exportDelayMs = 1000,
+    this.telemetry,
+    this.propagateTraceHeaderUrls = const [],
   }) : assert(fps >= 1 && fps < 60, 'fps must be >= 1 and < 60');
 }

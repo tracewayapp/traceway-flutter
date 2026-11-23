@@ -34,9 +34,15 @@ class RestoredEntry {
 /// What a restart restores is only uploaded by a trigger or capture, like
 /// the rest of the buffer, and only within the current session.
 class BufferPersistence {
-  BufferPersistence(this.directory);
+  BufferPersistence(this.directory, {this.destination = ''});
 
   final Directory? directory;
+
+  /// Where restored records would be sent. A file saved for other
+  /// destinations is dropped: a changed receiver is never sent what was
+  /// meant for the previous one. Empty for Traceway alone, as files written
+  /// before destinations were recorded were.
+  final String destination;
   final List<RestoredEntry> restored = [];
 
   /// This run's resource, by kind.
@@ -52,13 +58,17 @@ class BufferPersistence {
 
   /// Reads what the last run saved for [sessionId], within [maxAgeMs] and
   /// [maxBytes]; anything else is dropped.
-  Future<void> load(String? sessionId, {required int maxAgeMs, required int maxBytes}) async {
+  Future<void> load(String? sessionId,
+      {required int maxAgeMs, required int maxBytes}) async {
     final file = _file;
     if (file == null || sessionId == null) return;
     try {
       if (!await file.exists()) return;
       final decoded = jsonDecode(await file.readAsString());
-      if (decoded is! Map || decoded['v'] != 1 || decoded['sessionId'] != sessionId) {
+      if (decoded is! Map ||
+          decoded['v'] != 1 ||
+          decoded['sessionId'] != sessionId ||
+          (decoded['d'] ?? '') != destination) {
         return;
       }
       final resources = <Uint8List>[
@@ -76,8 +86,14 @@ class BufferPersistence {
           final r = item['r'];
           if (t is! int || s is! String || b is! String) continue;
           if ((k != 'logs' && k != 'traces') || t < cutoff) continue;
-          entries.add(RestoredEntry(t, s, k as String, base64Decode(b),
-              r is int && r >= 0 && r < resources.length ? resources[r] : null));
+          entries.add(RestoredEntry(
+              t,
+              s,
+              k as String,
+              base64Decode(b),
+              r is int && r >= 0 && r < resources.length
+                  ? resources[r]
+                  : null));
         }
       }
       // The newest records win when the saved buffer is larger than the
@@ -121,7 +137,8 @@ class BufferPersistence {
     });
   }
 
-  String? _serialize(String sessionId, List<BufferEntry<TelemetryItem>> entries) {
+  String? _serialize(
+      String sessionId, List<BufferEntry<TelemetryItem>> entries) {
     if (entries.isEmpty && restored.isEmpty) return null;
     final resources = <String>[];
     int resourceIndex(Uint8List? bytes) {
@@ -156,6 +173,7 @@ class BufferPersistence {
     }
     return jsonEncode({
       'v': 1,
+      if (destination.isNotEmpty) 'd': destination,
       'sessionId': sessionId,
       'resources': resources,
       'entries': out,
@@ -166,7 +184,8 @@ class BufferPersistence {
     try {
       switch (item) {
         case LogItem(:final record):
-          final request = OtlpLogRecordTransformer.transformLogRecords([record]);
+          final request =
+              OtlpLogRecordTransformer.transformLogRecords([record]);
           if (request.resourceLogs.isEmpty) return null;
           final resourceLogs = request.resourceLogs.first;
           _resources['logs'] ??= resourceLogs.resource.writeToBuffer();
@@ -242,7 +261,8 @@ class BufferPersistence {
     return out;
   }
 
-  static Map<String, List<RestoredEntry>> _byResource(List<RestoredEntry> entries) {
+  static Map<String, List<RestoredEntry>> _byResource(
+      List<RestoredEntry> entries) {
     final out = <String, List<RestoredEntry>>{};
     for (final entry in entries) {
       final key = entry.resource == null ? '' : base64Encode(entry.resource!);

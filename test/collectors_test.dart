@@ -60,11 +60,10 @@ void main() {
     expect(attr(nav[1], 'url.full'), '/');
   });
 
-  test('navigator observer is silent when navigation capture is off',
-      () async {
+  test('navigator observer is silent when navigation capture is off', () async {
     final h = await startHarness(
-        options:
-            const TracewayOptions(remoteConfig: false, captureNavigation: false));
+        options: const TracewayOptions(
+            remoteConfig: false, captureNavigation: false));
     TracewayNavigatorObserver().didPush(_route('/cart'), null);
     await flushWithError(h);
     expect(h.named('browser.navigation'), isEmpty);
@@ -91,8 +90,7 @@ void main() {
     expect(spans[0].endTime!.isBefore(spans[0].startTime), isFalse);
   });
 
-  test('HttpOverrides records dart:io requests, including failures',
-      () async {
+  test('HttpOverrides records dart:io requests, including failures', () async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) {
       request.response
@@ -128,6 +126,165 @@ void main() {
     expect(byUrl['/boom']!['http.response.status_code']!.value, 500);
     expect(byUrl['/boom']!['error.type']!.value, '500');
     expect(byUrl['/refused']!.containsKey('error.type'), isTrue);
-    expect(byUrl['/refused']!.containsKey('http.response.status_code'), isFalse);
+    expect(
+        byUrl['/refused']!.containsKey('http.response.status_code'), isFalse);
+  });
+
+  group('trace context propagation', () {
+    String hex(Object id) => (id as dynamic).hexString as String;
+
+    test('TracewayHttpClient sends traceparent to selected URLs only',
+        () async {
+      final h = await startHarness(
+        options: TracewayOptions(
+          remoteConfig: false,
+          propagateTraceHeaderUrls: [
+            'https://api.example.com/',
+            RegExp(r'^https://[a-z]+\.internal\.test/'),
+          ],
+        ),
+      );
+      final seen = <String, String?>{};
+      final client = TracewayHttpClient(MockClient((request) async {
+        seen[request.url.toString()] = request.headers['traceparent'];
+        return http.Response('ok', 200);
+      }));
+      await client.get(Uri.parse('https://api.example.com/cart'));
+      await client.get(Uri.parse('https://billing.internal.test/pay'));
+      await client.get(Uri.parse('https://cdn.other.test/logo.png'));
+      await client.get(Uri.parse('https://traceway.test/api/otel/v1/logs'));
+      await flushWithError(h);
+
+      final header = RegExp(r'^00-([0-9a-f]{32})-([0-9a-f]{16})-01$');
+      expect(seen['https://api.example.com/cart'], matches(header));
+      expect(seen['https://billing.internal.test/pay'], matches(header));
+      expect(seen['https://cdn.other.test/logo.png'], isNull);
+      expect(seen['https://traceway.test/api/otel/v1/logs'], isNull,
+          reason: 'the SDK\'s own requests never carry it');
+
+      // The recorded span is the one the header names.
+      final spans = {
+        for (final s in h.spans.spans)
+          s.attributes.toMap()['url.full']!.value as String: s,
+      };
+      for (final url in [
+        'https://api.example.com/cart',
+        'https://billing.internal.test/pay'
+      ]) {
+        final match = header.firstMatch(seen[url]!)!;
+        final span = spans[url]!;
+        expect(hex(span.spanContext.traceId), match.group(1));
+        expect(hex(span.spanContext.spanId), match.group(2));
+        expect(
+            span.attributes.toMap()['http.response.status_code']!.value, 200);
+      }
+      expect(spans.keys, contains('https://cdn.other.test/logo.png'));
+      expect(spans, hasLength(3));
+    });
+
+    test('dart:io requests carry it too, failures included', () async {
+      final headers = <String, String?>{};
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) {
+        headers[request.uri.path] = request.headers.value('traceparent');
+        request.response
+          ..statusCode = request.uri.path == '/boom' ? 500 : 200
+          ..close();
+      });
+      addTearDown(() => server.close(force: true));
+      final base = 'http://127.0.0.1:${server.port}';
+      final h = await startHarness(
+        options: TracewayOptions(
+          remoteConfig: false,
+          propagateTraceHeaderUrls: ['$base/'],
+        ),
+      );
+      await HttpOverrides.runWithHttpOverrides(() async {
+        final client = HttpClient();
+        for (final path in ['/fine', '/boom']) {
+          final request = await client.getUrl(Uri.parse('$base$path'));
+          await (await request.close()).drain<void>();
+        }
+        client.close(force: true);
+      }, TracewayHttpOverrides(null));
+      await flushWithError(h);
+
+      for (final path in ['/fine', '/boom']) {
+        final value = headers[path];
+        expect(value, isNotNull, reason: path);
+        final span = h.spans.spans.singleWhere(
+            (s) => s.attributes.toMap()['url.full']!.value == '$base$path');
+        expect(value, contains(hex(span.spanContext.spanId)));
+        expect(value, startsWith('00-${hex(span.spanContext.traceId)}-'));
+      }
+      final boom = h.spans.spans.singleWhere(
+          (s) => s.attributes.toMap()['url.full']!.value == '$base/boom');
+      expect(boom.status.name, 'Error');
+    });
+
+    test('TracewayHttpClient over dart:io records a request once', () async {
+      final headers = <String?>[];
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      server.listen((request) {
+        headers.add(request.headers.value('traceparent'));
+        request.response.close();
+      });
+      addTearDown(() => server.close(force: true));
+      final base = 'http://127.0.0.1:${server.port}';
+      final h = await startHarness(
+        options: TracewayOptions(
+          remoteConfig: false,
+          propagateTraceHeaderUrls: ['$base/'],
+        ),
+      );
+      await HttpOverrides.runWithHttpOverrides(() async {
+        // The default inner client sits on dart:io, which the overrides
+        // also record.
+        final client = TracewayHttpClient();
+        await client.get(Uri.parse('$base/once'));
+        client.close();
+      }, TracewayHttpOverrides(null));
+      await flushWithError(h);
+
+      final span = h.spans.spans.single;
+      expect(span.attributes.toMap()['url.full']!.value, '$base/once');
+      expect(headers.single,
+          '00-${hex(span.spanContext.traceId)}-${hex(span.spanContext.spanId)}-01');
+    });
+
+    test('a traceparent the app set is left alone', () async {
+      final h = await startHarness(
+        options: TracewayOptions(
+          remoteConfig: false,
+          propagateTraceHeaderUrls: ['https://api.example.com/'],
+        ),
+      );
+      const own = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
+      String? sent;
+      final client = TracewayHttpClient(MockClient((request) async {
+        sent = request.headers['traceparent'];
+        return http.Response('ok', 200);
+      }));
+      final request =
+          http.Request('GET', Uri.parse('https://api.example.com/cart'))
+            ..headers['traceparent'] = own;
+      await (await client.send(request)).stream.drain<void>();
+      await flushWithError(h);
+      expect(sent, own);
+      expect(h.spans.spans, hasLength(1));
+    });
+
+    test('nothing is propagated by default', () async {
+      final h = await startHarness();
+      String? sent;
+      final client = TracewayHttpClient(MockClient((request) async {
+        sent = request.headers['traceparent'];
+        return http.Response('ok', 200);
+      }));
+      await client.get(Uri.parse('https://api.example.com/cart'));
+      await flushWithError(h);
+      expect(sent, isNull);
+      expect(h.spans.spans, hasLength(1));
+    });
   });
 }

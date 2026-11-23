@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import '../persistence/state_store.dart';
 
-const String _key = 'metricsPending';
+const String _defaultKey = 'metricsPending';
 const int _maxPayloads = 3;
 const int _maxChars = 96 * 1024;
 const int _maxAgeMs = 24 * 60 * 60 * 1000;
@@ -21,10 +21,12 @@ class PendingPayload {
 /// SDK's: a device that stays offline loses its oldest numbers, it never
 /// builds a backlog.
 class PendingMetrics {
-  PendingMetrics(this._store, {int Function()? now})
-      : _now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
+  PendingMetrics(this._store, {int Function()? now, String scope = ''})
+      : _now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
+        _key = scope.isEmpty ? _defaultKey : '$_defaultKey:$scope';
 
   final StateStore Function() _store;
+  final String _key;
   final int Function() _now;
 
   List<Map<String, dynamic>> _read() {

@@ -22,8 +22,7 @@ class Harness {
   final InMemorySpanExporter spans;
   final List<http.Request> requests;
 
-  List<String?> get eventNames =>
-      logs.records.map((r) => r.eventName).toList();
+  List<String?> get eventNames => logs.records.map((r) => r.eventName).toList();
 
   Iterable<LogRecord> named(String? eventName) =>
       logs.records.where((r) => r.eventName == eventName);
@@ -38,6 +37,12 @@ class Harness {
               as Map<String, dynamic>,
       ];
 }
+
+/// The OTLP body of [request], gunzipped when it was sent compressed.
+List<int> otlpBody(http.Request request) =>
+    request.headers['Content-Encoding'] == 'gzip'
+        ? gzip.decode(request.bodyBytes)
+        : request.bodyBytes;
 
 Object? attr(LogRecord record, String key) =>
     record.attributes?.toMap()[key]?.value;

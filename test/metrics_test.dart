@@ -556,6 +556,27 @@ void main() {
     });
   });
 
+  test('a cold start counts while the app is on screen, focused or not', () {
+    for (final state in [
+      null,
+      AppLifecycleState.resumed,
+      // An unfocused desktop window, iOS before it becomes active.
+      AppLifecycleState.inactive,
+    ]) {
+      expect(AppVitals.coldStartCounts(false, state), isTrue, reason: '$state');
+    }
+    for (final state in [
+      AppLifecycleState.hidden,
+      AppLifecycleState.paused,
+      AppLifecycleState.detached,
+    ]) {
+      expect(AppVitals.coldStartCounts(false, state), isFalse,
+          reason: '$state');
+    }
+    // Left before the first frame, then back.
+    expect(AppVitals.coldStartCounts(true, AppLifecycleState.resumed), isFalse);
+  });
+
   group('AppVitals', () {
     late Recorded r;
     late int nowUs;
@@ -668,7 +689,7 @@ void main() {
       expect(posts.single.headers['content-type'], 'application/x-protobuf');
       expect(posts.single.headers['authorization'], 'Bearer test-token');
       final decoded = Decoded([
-        proto.ExportMetricsServiceRequest.fromBuffer(posts.single.bodyBytes)
+        proto.ExportMetricsServiceRequest.fromBuffer(otlpBody(posts.single))
       ]);
       expect(decoded.sums, {
         'app.session': 1,
@@ -723,7 +744,7 @@ void main() {
       await h.client.flush();
       final decoded = Decoded([
         for (final post in h.requestsTo('/api/otel/v1/metrics'))
-          proto.ExportMetricsServiceRequest.fromBuffer(post.bodyBytes),
+          proto.ExportMetricsServiceRequest.fromBuffer(otlpBody(post)),
       ]);
       final memory = decoded.histograms['app.memory.peak']!;
       expect(memory.count.toInt(), 1);

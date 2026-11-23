@@ -193,7 +193,7 @@ void main() {
 
       final logs = [
         for (final request in h.requestsTo('/api/otel/v1/logs'))
-          proto.ExportLogsServiceRequest.fromBuffer(request.bodyBytes),
+          proto.ExportLogsServiceRequest.fromBuffer(otlpBody(request)),
       ];
       final bodies = [
         for (final request in logs)
@@ -207,7 +207,7 @@ void main() {
       expect(resource, contains('service.instance.id'));
       final spans = [
         for (final request in h.requestsTo('/api/otel/v1/traces'))
-          proto.ExportTraceServiceRequest.fromBuffer(request.bodyBytes),
+          proto.ExportTraceServiceRequest.fromBuffer(otlpBody(request)),
       ];
       expect(spans.single.resourceSpans.single.scopeSpans.single.spans.single.name,
           'GET');
@@ -234,7 +234,7 @@ void main() {
       h.client.captureException(StateError('in 3.0.0'));
       await h.client.flush();
       final request = proto.ExportLogsServiceRequest.fromBuffer(
-          h.requestsTo('/api/otel/v1/logs').single.bodyBytes);
+          otlpBody(h.requestsTo('/api/otel/v1/logs').single));
       final byVersion = {
         for (final resourceLogs in request.resourceLogs)
           resourceLogs.resource.attributes

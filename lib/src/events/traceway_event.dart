@@ -65,6 +65,10 @@ class NetworkEvent extends TracewayEvent {
   final int? responseBytes;
   final String? error;
 
+  /// The W3C `traceparent` sent with the request, from
+  /// [TracewayClient.traceparentFor]: the recorded span is the one it names.
+  final String? traceparent;
+
   NetworkEvent({
     required this.method,
     required this.url,
@@ -73,6 +77,7 @@ class NetworkEvent extends TracewayEvent {
     this.requestBytes,
     this.responseBytes,
     this.error,
+    this.traceparent,
     super.timestamp,
   });
 

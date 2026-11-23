@@ -58,7 +58,7 @@ const int _maxBodyBytes = 60 * 1024;
 const int _maxHosts = 20;
 const int _maxCustomDimensions = 2;
 const int _maxDimensionLength = 64;
-const String _userKey = 'metricsUser';
+const String _defaultUserKey = 'metricsUser';
 const int _dayMs = 86400000;
 
 /// Rejections a second attempt would get too.
@@ -95,11 +95,15 @@ class MetricsRecorder {
     int Function()? now,
     Random? random,
     bool deferUntilStart = false,
-  })  : _now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
+    String storageScope = '',
+  })  : _userKey = storageScope.isEmpty
+            ? _defaultUserKey
+            : '$_defaultUserKey:$storageScope',
+        _now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
         _random = random ?? Random.secure(),
         _ready = !deferUntilStart {
     _aggregator = MetricAggregator(now: _now);
-    _pending = PendingMetrics(store, now: _now);
+    _pending = PendingMetrics(store, now: _now, scope: storageScope);
     _batchRate = control.metrics?.sampleRate ?? 0;
     dimensions?.forEach(setDimension);
   }
@@ -112,6 +116,11 @@ class MetricsRecorder {
   final StateStore Function() store;
   final String scopeName;
   final String scopeVersion;
+
+  /// Where the state kept between runs belongs: payloads waiting for a
+  /// resend and the users counted today are kept per destination, so a
+  /// changed receiver is not sent another's numbers.
+  final String _userKey;
   final int Function() _now;
   final Random _random;
 

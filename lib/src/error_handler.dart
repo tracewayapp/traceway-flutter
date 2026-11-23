@@ -29,6 +29,13 @@ class ErrorHandler {
   }
 
   void handleZoneError(Object error, StackTrace stackTrace) {
+    if (TracewayClient.instance == null) {
+      // The SDK did not start (or was shut down): the app's zone still
+      // guards its errors, and they must not vanish.
+      FlutterError.reportError(
+          FlutterErrorDetails(exception: error, stack: stackTrace));
+      return;
+    }
     _captureError(error, stackTrace);
   }
 

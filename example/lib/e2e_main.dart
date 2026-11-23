@@ -8,6 +8,10 @@
 //
 // Progress is printed as `E2E_PHASE <name>` lines; tool/e2e/run.py follows
 // them and checks the server at each point.
+//
+// With E2E_COLLECTOR=<OTLP/HTTP base URL> in the environment, the scenarios
+// `external` (Traceway plus another OpenTelemetry backend) and `standalone`
+// (no connection string) send their telemetry to that collector.
 import 'dart:async';
 import 'dart:io';
 
@@ -79,9 +83,22 @@ void main() {
     // ignore: invalid_use_of_visible_for_testing_member
     ScreenRecorder.encoderOverride = FfmpegVideoEncoder();
   }
+  final scenario = Platform.environment['E2E_SCENARIO'];
+  final collector = Platform.environment['E2E_COLLECTOR'];
+  final echo = Platform.environment['E2E_ECHO'];
+  final otherBackend = collector != null &&
+      (scenario == 'external' || scenario == 'standalone');
   Traceway.run(
-    connectionString: _dsn,
-    options: const TracewayOptions(
+    connectionString: scenario == 'standalone' ? null : _dsn,
+    options: TracewayOptions(
+      telemetry: otherBackend
+          ? TracewayTelemetry(
+              url: collector,
+              headers: const {'x-e2e-key': 'collector-secret'},
+            )
+          : null,
+      // Requests to the harness's echo server carry the W3C trace context.
+      propagateTraceHeaderUrls: [if (echo != null) '$echo/checkout'],
       screenCapture: true,
       debug: true,
       version: 'e2e-1.0.0',
@@ -91,6 +108,13 @@ void main() {
       // A recording trigger defined in the app itself; remote rules come on
       // top of it.
       collection: {
+        if (otherBackend)
+          'signals': {
+            'console': {'mode': 'stream'},
+            'custom': {'mode': 'stream'},
+            'network': {'mode': 'stream'},
+            'userActions': {'mode': 'stream'},
+          },
         'triggers': [
           {
             'id': 'e2e-open-profile',
@@ -265,6 +289,29 @@ class _HomeState extends State<_Home> {
         unawaited(
             Future<void>.microtask(() => throw StateError('e2e after restart')));
         await _wait(4);
+        await client.flush(15000);
+        _setPhase('done');
+        return;
+      case 'external' || 'standalone':
+        final scenario = Platform.environment['E2E_SCENARIO'];
+        debugPrint('e2e $scenario log');
+        Traceway.track('e2e_${scenario}_event', {'n': 1});
+        try {
+          await http.get(Uri.parse('$_base/api/has-organizations?$scenario'));
+          final echo = Platform.environment['E2E_ECHO'];
+          if (echo != null) {
+            await http.get(Uri.parse('$echo/checkout?$scenario'));
+            await http.get(Uri.parse('$echo/other?$scenario'));
+          }
+        } catch (_) {}
+        tap(_payTarget);
+        Traceway.count('e2e.$scenario', 2);
+        await client.flush(15000);
+        _setPhase('telemetry_sent session=${client.currentSessionId}');
+        await _wait(2);
+        unawaited(Future<void>.microtask(
+            () => throw StateError('e2e $scenario boom')));
+        await _wait(6);
         await client.flush(15000);
         _setPhase('done');
         return;

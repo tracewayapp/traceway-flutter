@@ -53,7 +53,8 @@ class Traceway extends StatefulWidget {
   /// `router.routerDelegate.addListener(() => Traceway.recordNavigation(
   /// router.routerDelegate.currentConfiguration.uri.path))`). Navigation
   /// steps of recording triggers match [path].
-  static void recordNavigation(String path, {String? from, String action = 'push'}) {
+  static void recordNavigation(String path,
+      {String? from, String action = 'push'}) {
     final client = TracewayClient.instance;
     if (client == null || !client.options.captureNavigation) return;
     client.recordNavigationEvent(NavigationEvent(
@@ -84,8 +85,11 @@ class Traceway extends StatefulWidget {
   static void setMetricDimension(String key, String? value) =>
       TracewayClient.instance?.setMetricDimension(key, value);
 
+  /// Starts the SDK and runs [child]. [connectionString]
+  /// (`<token>@<server>`) connects it to Traceway; leave it out to run
+  /// standalone with [TracewayOptions.telemetry] as the only destination.
   static void run({
-    required String connectionString,
+    String? connectionString,
     required Widget child,
     TracewayOptions options = const TracewayOptions(),
   }) {
@@ -102,7 +106,21 @@ class Traceway extends StatefulWidget {
     runZonedGuarded(
       () {
         WidgetsFlutterBinding.ensureInitialized();
-        TracewayClient.initialize(connectionString, options);
+        try {
+          TracewayClient.initialize(connectionString, options);
+        } catch (error, stack) {
+          // A malformed connection string or telemetry destination must not
+          // take the app down with it: report it and run without the SDK.
+          FlutterError.reportError(FlutterErrorDetails(
+            exception: error,
+            stack: stack,
+            library: 'traceway',
+            context: ErrorDescription('while starting the Traceway SDK; '
+                'the app runs without it'),
+          ));
+          runApp(child);
+          return;
+        }
         errorHandler.install();
         runApp(Traceway(child: child));
       },
@@ -191,7 +209,8 @@ class _TracewayState extends State<Traceway> {
   void _onPointerHover(PointerHoverEvent event) {
     if (event.kind != PointerDeviceKind.mouse) return;
     try {
-      TracewayClient.instance?.recordHover(event.position, viewId: event.viewId);
+      TracewayClient.instance
+          ?.recordHover(event.position, viewId: event.viewId);
     } catch (_) {}
   }
 

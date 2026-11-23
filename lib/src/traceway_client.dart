@@ -37,10 +37,10 @@ import 'replay/replay_controller.dart';
 import 'screen_recorder.dart';
 import 'session/session_manager.dart';
 import 'stack_trace_formatter.dart';
+import 'sdk_version.dart';
 import 'traceway_options.dart';
 
-const String tracewaySdkName = 'traceway-flutter';
-const String tracewaySdkVersion = '2.0.0-beta.1';
+export 'sdk_version.dart' show tracewaySdkName, tracewaySdkVersion;
 
 const int _maxPendingBeforeReady = 500;
 const int _maxErrorsPerMinute = 60;
@@ -83,13 +83,19 @@ class TracewayTestOverrides {
 
 class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   TracewayClient._(
-    String connectionString,
+    String? connectionString,
     this._options,
     this._overrides,
-  ) {
-    final parsed = parseConnectionString(connectionString);
-    _token = parsed.token;
-    _endpoints = resolveEndpoints(parsed.apiUrl);
+  ) : _standalone = connectionString == null {
+    if (connectionString != null) {
+      final parsed = parseConnectionString(connectionString);
+      _token = parsed.token;
+      _endpoints = resolveEndpoints(parsed.apiUrl);
+    } else if (_options.telemetry?.coversAllSignals != true) {
+      throw ArgumentError('Without a connection string, TracewayOptions.'
+          'telemetry needs a base url or all three signal endpoints');
+    }
+    _routes = TelemetryRoutes.resolve(_endpoints, _token, _options.telemetry);
     _globalAttributes.addAll(_options.attributes);
 
     var defaults = defaultSettings(
@@ -110,19 +116,21 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
     _videoSupported =
         _overrides?.videoSupported ?? ScreenRecorder.isVideoSupported;
-    if (_options.screenCapture && !_videoSupported) {
+    if (_screenCapture && !_videoSupported) {
       _log('screen capture needs a video encoder, which this platform '
           'does not have: replay is off');
     }
     _control = ControlState(
       defaults,
       ceilingsFrom(
-        screenCapture: _options.screenCapture && _videoSupported,
+        screenCapture: _screenCapture && _videoSupported,
         captureLogs: _options.captureLogs,
         captureNetwork: _options.captureNetwork,
         captureNavigation: _options.captureNavigation,
         captureUserActions: _options.captureUserActions,
-        sessions: _options.sessions,
+        // Standalone, nothing receives the session rows; the session id
+        // still correlates records and samples.
+        sessions: _options.sessions && !_standalone,
         captureMetrics: _options.captureMetrics,
       ),
     );
@@ -135,8 +143,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _triggers.setTriggers(settings.triggers);
     _http = _overrides?.httpClient ?? http.Client();
     _recordings = RecordingsTransport(
-      url: _endpoints.recordings,
-      token: _token,
+      url: _endpoints?.recordings ?? '',
+      token: _token ?? '',
       httpClient: _http,
     );
     // A streamed segment must leave before the frame ring buffer wraps.
@@ -155,6 +163,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       resource: () => _resourceAttributes,
       send: _sendMetrics,
       store: () => _store,
+      storageScope: _routes.metrics.external ? _routes.metrics.key : '',
       scopeName: tracewaySdkName,
       scopeVersion: tracewaySdkVersion,
       dimensions: _options.metricDimensions,
@@ -175,8 +184,14 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   final TracewayOptions _options;
   final TracewayTestOverrides? _overrides;
-  late final String _token;
-  late final TracewayEndpoints _endpoints;
+
+  /// Without a connection string the SDK runs standalone: no OpAMP, no
+  /// replay uploads, no session rows, and every record goes to the
+  /// [TracewayOptions.telemetry] receivers.
+  final bool _standalone;
+  String? _token;
+  TracewayEndpoints? _endpoints;
+  late final TelemetryRoutes _routes;
   late final ControlState _control;
   late final RingBuffer<TelemetryItem> _buffer;
   late final TriggerEngine _triggers;
@@ -202,11 +217,19 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   StateStore _store = StateStore(null);
   Outbox? _outbox;
+
+  /// Traceway's queue when the live one belongs to another receiver: it
+  /// takes the exceptions, messages and control records restored from disk
+  /// when ordinary logs go elsewhere.
+  Outbox? _tracewayOutbox;
+  bool _splitsLogs = false;
   BufferPersistence? _persisted;
   SessionManager? _sessions;
   TelemetryRouter? _router;
   LogRecordProcessor? _logSink;
   SpanProcessor? _spanSink;
+  LogRecordExporter? _logExporter;
+  SpanExporter? _spanExporter;
   OTelLogger? _logger;
   Tracer? _tracer;
   OpampHttpClient? _opamp;
@@ -217,6 +240,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   bool _ready = false;
   bool _shutdown = false;
   bool _ownsOTel = false;
+
   /// Clips flushed so far; an exception compares it before and after its
   /// triggers run (an `emit` action re-enters observe on the way).
   int _replayFlushes = 0;
@@ -245,7 +269,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   /// Whether the screen is recorded: screen capture is on and this platform
   /// can encode video.
-  bool get recordsScreen => _options.screenCapture && _videoSupported;
+  bool get recordsScreen => _screenCapture && _videoSupported;
+
+  /// Screen recordings only go to Traceway: standalone there is nowhere to
+  /// upload them.
+  bool get _screenCapture => _options.screenCapture && !_standalone;
+
+  bool get _remoteConfig => _options.remoteConfig && !_standalone;
 
   /// Completes when the SDK has finished starting and queued records have
   /// been emitted.
@@ -283,8 +313,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _replay.attach(source);
   }
 
+  /// Starts the SDK. Without [connectionString] it runs standalone and
+  /// sends everything to [TracewayOptions.telemetry].
   static TracewayClient initialize(
-    String connectionString,
+    String? connectionString,
     TracewayOptions options,
   ) {
     final existing = _instance;
@@ -297,7 +329,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   @visibleForTesting
   static Future<TracewayClient> initializeForTest(
-    String connectionString,
+    String? connectionString,
     TracewayOptions options, {
     TracewayTestOverrides? overrides,
   }) async {
@@ -355,7 +387,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
     Uint8List? appliedHash;
     final cached = _store.get('config');
-    if (_options.remoteConfig && cached is Map) {
+    if (_remoteConfig && cached is Map) {
       try {
         final body = cached['body'];
         final hash = cached['hash'];
@@ -371,16 +403,18 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     await _buildResource();
     await _setUpOTel(stateDir);
 
-    if (_control.settings.sessionsEnabled) {
-      _sessions = SessionManager(
-        store: _store,
-        onStart: _onSessionStart,
-        onEnd: _onSessionEnd,
-      )..start();
-    }
+    // Sessions always run: their id correlates records, samples and keys
+    // trigger state. `sessions` only decides whether the session records
+    // are sent.
+    _sessions = SessionManager(
+      store: _store,
+      onStart: _onSessionStart,
+      onEnd: _onSessionEnd,
+    )..start();
 
     if (stateDir != null) {
-      final persisted = BufferPersistence(stateDir);
+      final persisted =
+          BufferPersistence(stateDir, destination: _bufferDestination);
       _persisted = persisted;
       final settings = _control.settings;
       if (settings.persist) {
@@ -399,9 +433,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       WidgetsBinding.instance.addObserver(this);
     } catch (_) {}
 
-    if (_options.remoteConfig) {
+    final endpoints = _endpoints;
+    if (_remoteConfig && endpoints != null) {
       _opamp = OpampHttpClient(
-        endpoint: _endpoints.opamp,
+        endpoint: endpoints.opamp,
         headers: {'Authorization': 'Bearer $_token'},
         instanceUid: _instanceUid,
         capabilities: AgentCapabilities.reportsStatus |
@@ -439,6 +474,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       unawaited(opamp.poll().whenComplete(_confirmCaptures));
     }
     _outbox?.schedule(const Duration(seconds: 2));
+    _tracewayOutbox?.schedule(const Duration(seconds: 2));
     _log('started, instance ${bytesToUuid(_instanceUid)}');
   }
 
@@ -481,6 +517,40 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (_options.captureMetrics) attrs['traceway.metrics'] = 'aggregated';
   }
 
+  /// Queues of receivers no longer configured: nothing would ever send
+  /// them, so they only take space.
+  static void _pruneOutboxes(Directory? stateDir, {String? keep}) {
+    if (stateDir == null) return;
+    try {
+      for (final entry in stateDir.listSync()) {
+        final name = entry.path.split(Platform.pathSeparator).last;
+        if (entry is Directory && name.startsWith('outbox-') && name != keep) {
+          entry.deleteSync(recursive: true);
+        }
+      }
+    } catch (_) {}
+  }
+
+  Map<String, String> get _tracewayAuth =>
+      {if (_token != null) 'Authorization': 'Bearer $_token'};
+
+  /// Where records restored from disk would be sent; empty for Traceway
+  /// alone.
+  String get _bufferDestination {
+    final routes = _routes;
+    if (!routes.logs.external &&
+        !routes.traces.external &&
+        routes.traceway != null) {
+      return '';
+    }
+    return fingerprint([
+      routes.logs.key,
+      routes.traces.key,
+      routes.traceway?.key ?? '',
+      routes.traceway?.headers['Authorization'] ?? '',
+    ].join('|'));
+  }
+
   String get _serviceName {
     final name = _options.serviceName;
     return name == null || name.isEmpty ? 'flutter-app' : name;
@@ -490,38 +560,59 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       _options.version.isEmpty ? 'unknown' : _options.version;
 
   Future<void> _setUpOTel(Directory? stateDir) async {
-    final outbox = Outbox(
-      directory: stateDir == null
-          ? null
-          : Directory('${stateDir.path}${Platform.pathSeparator}outbox'),
-      logsUrl: _endpoints.logs,
-      tracesUrl: _endpoints.traces,
-      token: _token,
-      httpClient: _http,
-    );
+    Directory? dir(String name) => stateDir == null
+        ? null
+        : Directory('${stateDir.path}${Platform.pathSeparator}$name');
+    final routes = _routes;
+    final endpoints = _endpoints;
+    // Batches queued for Traceway stay in `outbox`, as before; batches for
+    // another receiver wait in a directory of their own destinations.
+    final tracewayOutbox = endpoints == null
+        ? null
+        : Outbox(
+            directory: dir('outbox'),
+            destinations: {
+              'logs': OtlpDestination(endpoints.logs, _tracewayAuth),
+              'traces': OtlpDestination(endpoints.traces, _tracewayAuth),
+            },
+            httpClient: _http,
+          );
+    final external = routes.logs.external || routes.traces.external;
+    final externalName = external
+        ? 'outbox-${fingerprint('${routes.logs.key}|${routes.traces.key}')}'
+        : null;
+    final outbox = externalName == null && tracewayOutbox != null
+        ? tracewayOutbox
+        : Outbox(
+            directory: dir(externalName ?? 'outbox'),
+            destinations: {'logs': routes.logs, 'traces': routes.traces},
+            httpClient: _http,
+          );
     _outbox = outbox;
-    final headers = {'authorization': 'Bearer $_token'};
+    // Drained too when it is not the live one, so what an earlier run left
+    // there for Traceway still goes.
+    _tracewayOutbox = identical(tracewayOutbox, outbox) ? null : tracewayOutbox;
+    _splitsLogs = routes.splitsLogs;
+    outbox.claim();
+    _tracewayOutbox?.claim();
+    _pruneOutboxes(stateDir, keep: externalName);
     final delay = Duration(
-        milliseconds: _options.exportDelayMs < 50 ? 50 : _options.exportDelayMs);
+        milliseconds:
+            _options.exportDelayMs < 50 ? 50 : _options.exportDelayMs);
 
-    final logExporter = _overrides?.logExporter ??
-        PersistingLogExporter(
-          OtlpHttpLogRecordExporter(OtlpHttpLogRecordExporterConfig(
-            endpoint: _endpoints.logs,
-            headers: headers,
-            compression: true,
-          )),
-          outbox,
-        );
+    LogRecordExporter logExporter =
+        _overrides?.logExporter ?? OtlpLogExporter(routes.logs, outbox, _http);
+    final tracewayLogs = routes.traceway;
+    if (routes.splitsLogs && tracewayLogs != null && tracewayOutbox != null) {
+      logExporter = RoutingLogExporter(
+        logExporter,
+        OtlpLogExporter(tracewayLogs, tracewayOutbox, _http),
+      );
+    }
     final spanExporter = _overrides?.spanExporter ??
-        PersistingSpanExporter(
-          OtlpHttpSpanExporter(OtlpHttpExporterConfig(
-            endpoint: _endpoints.traces,
-            headers: headers,
-            compression: true,
-          )),
-          outbox,
-        );
+        OtlpSpanExporter(routes.traces, outbox, _http);
+    _logExporter = logExporter;
+    _spanExporter = spanExporter;
     final logSink = BatchLogRecordProcessor(
         logExporter, BatchLogRecordProcessorConfig(scheduleDelay: delay));
     final spanSink = BatchSpanProcessor(
@@ -766,14 +857,17 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       _metrics.setDimension(key, value);
 
   Future<int> _sendMetrics(List<int> body) async {
+    final destination = _routes.metrics;
     final response = await _http
         .post(
-          Uri.parse(_endpoints.metrics),
+          Uri.parse(destination.url),
           headers: {
+            'User-Agent': otlpUserAgent,
+            ...destination.headers,
             'Content-Type': 'application/x-protobuf',
-            'Authorization': 'Bearer $_token',
+            'Content-Encoding': 'gzip',
           },
-          body: body,
+          body: gzip.encode(body),
         )
         .timeout(const Duration(seconds: 10));
     return response.statusCode;
@@ -919,8 +1013,62 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         return null;
       };
 
+  /// Client spans of requests that carry a `traceparent`, open until their
+  /// [NetworkEvent] arrives. Bounded: a request whose event never comes is
+  /// forgotten, its span never sent.
+  final Map<String, Span> _requestSpans = {};
+  static const int _maxRequestSpans = 256;
+
+  bool _isOwnRequest(String url) =>
+      _endpoints?.isOwn(url) == true || _routes.isOwn(url);
+
+  /// The W3C `traceparent` to send with a request to [url], or null when
+  /// [TracewayOptions.propagateTraceHeaderUrls] does not select it. Starts
+  /// the request's client span now, so the header names it; the
+  /// [NetworkEvent] that carries the header back ends it.
+  String? traceparentFor(String method, Uri url, {DateTime? startTime}) {
+    final tracer = _tracer;
+    final patterns = _options.propagateTraceHeaderUrls;
+    if (patterns.isEmpty || tracer == null || !_ready || _shutdown) {
+      return null;
+    }
+    final full = url.toString();
+    if (_isOwnRequest(full) || !patterns.any((p) => _urlMatches(p, full))) {
+      return null;
+    }
+    try {
+      final span = tracer.startSpan(
+        method.toUpperCase(),
+        kind: SpanKind.client,
+        root: true,
+        startTime: startTime ?? DateTime.now(),
+      );
+      final context = span.spanContext;
+      final header = '00-${context.traceId.hexString}-'
+          '${context.spanId.hexString}-'
+          '${context.traceFlags.isSampled ? '01' : '00'}';
+      if (_requestSpans.length >= _maxRequestSpans) {
+        _requestSpans.remove(_requestSpans.keys.first);
+      }
+      _requestSpans[header] = span;
+      return header;
+    } catch (e) {
+      _log('trace header failed: $e');
+      return null;
+    }
+  }
+
+  /// The request named by [traceparent] did not send it after all: its
+  /// span is recorded from its [NetworkEvent] instead.
+  void forgetRequestSpan(String traceparent) =>
+      _requestSpans.remove(traceparent);
+
+  static bool _urlMatches(Pattern pattern, String url) => pattern is String
+      ? url.startsWith(pattern)
+      : pattern.allMatches(url).isNotEmpty;
+
   void recordNetworkEvent(NetworkEvent event) {
-    if (_endpoints.isOwn(event.url)) return;
+    if (_isOwnRequest(event.url)) return;
     if (!_ready) {
       _queue(() => recordNetworkEvent(event));
       return;
@@ -943,13 +1091,21 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         else if (status != null && status >= 400)
           'error.type': '$status',
       };
-      final span = tracer.startSpan(
-        event.method,
-        kind: SpanKind.client,
-        root: true,
-        attributes: OTel.attributesFromMap(attrs),
-        startTime: end.subtract(event.duration),
-      );
+      final open = event.traceparent == null
+          ? null
+          : _requestSpans.remove(event.traceparent);
+      final Span span;
+      if (open != null) {
+        span = open..addAttributes(OTel.attributesFromMap(attrs));
+      } else {
+        span = tracer.startSpan(
+          event.method,
+          kind: SpanKind.client,
+          root: true,
+          attributes: OTel.attributesFromMap(attrs),
+          startTime: end.subtract(event.duration),
+        );
+      }
       final failed = event.error != null || (status != null && status >= 400);
       span.end(
         endTime: end,
@@ -988,10 +1144,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     try {
       await _logSink?.forceFlush();
       await _spanSink?.forceFlush();
+      // The processors hand a batch over and forget it: wait for the
+      // requests still on their way.
+      await _logExporter?.forceFlush();
+      await _spanExporter?.forceFlush();
       await _replay.drain();
       await _logSink?.forceFlush();
+      await _logExporter?.forceFlush();
       await _metrics.flush();
       await _outbox?.drain();
+      await _tracewayOutbox?.drain();
       await _persistBuffer();
       _saveTriggerProgress(now: true);
       await _store.flush();
@@ -1019,7 +1181,6 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     sessions?.stop();
     _opamp?.stop();
     _replay.stop();
-    _outbox?.dispose();
     _refreshTimer?.cancel();
     _overrideTimer?.cancel();
     _progressTimer?.cancel();
@@ -1035,6 +1196,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         await _spanSink?.shutdown();
       }
     } catch (_) {}
+    // After the processors' last export: a batch that fails then is still
+    // queued on disk for the next start.
+    _outbox?.dispose();
+    _tracewayOutbox?.dispose();
     if (identical(_instance, this)) _instance = null;
   }
 
@@ -1082,7 +1247,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
   }
 
+  /// Sessions whose start (or resumption) was reported in this run: their
+  /// end is reported too, and only theirs, whatever remote settings say by
+  /// then, so the server never has a start without an end or the reverse.
+  final Set<String> _reportedSessions = {};
+
   void _emitSessionEnd(SessionInfo session, int endedAtMs) {
+    if (!_reportedSessions.remove(session.id)) return;
     _emit(
       eventName: eventSessionEnd,
       severity: Severity.INFO,
@@ -1115,12 +1286,17 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       _settleMemoryPeak(session.id);
       _metrics.sessionStarted(session.id, resumed: resumed);
     }
-    _emit(
-      eventName: resumed ? eventSessionUpdate : eventSessionStart,
-      severity: Severity.INFO,
-      time: resumed ? null : DateTime.fromMillisecondsSinceEpoch(session.startedAtMs),
-      attributes: _sessionAttributes(session),
-    );
+    if (_control.settings.sessionsEnabled) {
+      _reportedSessions.add(session.id);
+      _emit(
+        eventName: resumed ? eventSessionUpdate : eventSessionStart,
+        severity: Severity.INFO,
+        time: resumed
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(session.startedAtMs),
+        attributes: _sessionAttributes(session),
+      );
+    }
     _applyReplay();
     _scheduleRefresh();
   }
@@ -1188,7 +1364,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void observe(ObservedRecord observed) {
     if (observed.signal == signalControl) return;
     if (!_control.enabled) return;
-    if (observed.signal == 'navigation' && _sequenceKinds.contains('navigation')) {
+    if (observed.signal == 'navigation' &&
+        _sequenceKinds.contains('navigation')) {
       _screenObservedForSequences = true;
     }
     final fired = _triggers.observe(
@@ -1204,10 +1381,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       for (final trigger in _control.settings.triggers) {
         if (trigger.id == defaultExceptionTriggerId) defaultTrigger = trigger;
       }
-      final replayRequested = fired.any((f) => f.trigger.actions
-          .any((a) => a.replay || a.type == 'startReplay'));
-      flushRequested = fired.any((f) => f.trigger.actions.any(
-          (a) => a.replay && (a.type == 'flush' || a.type == 'capture')));
+      final replayRequested = fired.any((f) =>
+          f.trigger.actions.any((a) => a.replay || a.type == 'startReplay'));
+      flushRequested = fired.any((f) => f.trigger.actions
+          .any((a) => a.replay && (a.type == 'flush' || a.type == 'capture')));
       final skipped = _triggers.skipped[defaultExceptionTriggerId];
       final status = _control.replayMode == Mode.off
           ? 'disabled'
@@ -1233,8 +1410,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       for (final action in contextActions) {
         lookback = max(lookback, action.lookbackSeconds ?? 0);
       }
-      item.record.addAttribute(OTel.attributeDouble(
-          'traceway.context.lookback_seconds', lookback));
+      item.record.addAttribute(
+          OTel.attributeDouble('traceway.context.lookback_seconds', lookback));
       item.record.addAttribute(
           OTel.attributeInt('traceway.context.evicted', _buffer.evictedCount));
     }
@@ -1314,8 +1491,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     for (final action in fired.trigger.actions) {
       _runAction(action, exceptionId: exceptionId, triggerId: fired.trigger.id);
     }
-    final wantsReplay = fired.trigger.actions
-        .any((a) => a.replay || a.type == 'startReplay');
+    final wantsReplay =
+        fired.trigger.actions.any((a) => a.replay || a.type == 'startReplay');
     _emit(
       eventName: eventTriggerFired,
       severity: Severity.INFO,
@@ -1385,10 +1562,21 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final persisted = _persisted;
     final outbox = _outbox;
     if (persisted == null || outbox == null) return;
-    final bodies = persisted.take(sinceMs, signals, untilMs, _control.canExport);
+    final bodies =
+        persisted.take(sinceMs, signals, untilMs, _control.canExport);
     if (bodies.isEmpty) return;
-    bodies.forEach(outbox.add);
+    final traceway = _splitsLogs ? _tracewayOutbox : null;
+    bodies.forEach((kind, body) {
+      if (kind != 'logs' || traceway == null) {
+        outbox.add(kind, body);
+        return;
+      }
+      final (own, rest) = splitLogsRequest(body);
+      if (own != null) traceway.add(kind, own);
+      if (rest != null) outbox.add(kind, rest);
+    });
     unawaited(outbox.drain());
+    if (traceway != null) unawaited(traceway.drain());
   }
 
   Future<void> _persistBuffer() async {
@@ -1467,7 +1655,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       final signals = capture['signals'];
       _control.setOverrides('local:${capture['triggerId']}', [
         StreamOverride(
-          signals: signals is List ? signals.whereType<String>().toList() : const ['*'],
+          signals: signals is List
+              ? signals.whereType<String>().toList()
+              : const ['*'],
           untilMs: capture['untilMs'] as int,
           replay: capture['replay'] == true,
           includeOff: true,
@@ -1519,10 +1709,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
           'traceway.capture.id': id,
           'traceway.capture.source': 'trigger',
           'traceway.trigger.id': triggerId,
-          'traceway.capture.until':
-              DateTime.fromMillisecondsSinceEpoch(untilMs)
-                  .toUtc()
-                  .toIso8601String(),
+          'traceway.capture.until': DateTime.fromMillisecondsSinceEpoch(untilMs)
+              .toUtc()
+              .toIso8601String(),
         },
       );
     }
@@ -1724,6 +1913,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       _sessions?.markActivity();
       unawaited(_opamp?.poll());
       unawaited(_outbox?.drain());
+      unawaited(_tracewayOutbox?.drain());
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       _replay.onPaused();

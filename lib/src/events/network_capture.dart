@@ -5,12 +5,16 @@ import 'dart:io';
 import '../traceway_client.dart';
 import 'traceway_event.dart';
 
+/// Set in the zone of a request `TracewayHttpClient` records: the dart:io
+/// layer under it must not record it, or set another `traceparent`, again.
+const Object recordedByTracewayHttpClient = #tracewayRecordedRequest;
+
 /// Installs a global [HttpOverrides] that wraps every dart:io [HttpClient] so
 /// every HTTP call gets recorded as a [NetworkEvent].
 ///
 /// Captures `package:http`, Dio, Firebase, and any other library that sits on
-/// dart:io HttpClient on native platforms. Has no effect on Flutter web —
-/// use [TracewayHttpClient] there.
+/// dart:io HttpClient. A request a `TracewayHttpClient` already records is
+/// left to it, so it is recorded once.
 class TracewayHttpOverrides extends HttpOverrides {
   TracewayHttpOverrides(this._previous);
 
@@ -32,6 +36,7 @@ void _emit({
   int? requestBytes,
   int? responseBytes,
   String? error,
+  String? traceparent,
 }) {
   try {
     TracewayClient.instance?.recordNetworkEvent(NetworkEvent(
@@ -42,6 +47,7 @@ void _emit({
       requestBytes: requestBytes,
       responseBytes: responseBytes,
       error: error,
+      traceparent: traceparent,
     ));
   } catch (_) {
     // Never let event recording break the host app's networking.
@@ -55,10 +61,24 @@ class _TracewayHttpClient implements HttpClient {
 
   @override
   Future<HttpClientRequest> openUrl(String method, Uri url) async {
+    if (Zone.current[recordedByTracewayHttpClient] == true) {
+      return _inner.openUrl(method, url);
+    }
     final start = DateTime.now();
     try {
       final req = await _inner.openUrl(method, url);
-      return _TracewayHttpClientRequest(req, method, url, start);
+      String? traceparent;
+      try {
+        // The app's own trace context wins.
+        if (req.headers.value('traceparent') == null) {
+          traceparent = TracewayClient.instance
+              ?.traceparentFor(method, url, startTime: start);
+          if (traceparent != null) req.headers.set('traceparent', traceparent);
+        }
+      } catch (_) {
+        traceparent = null;
+      }
+      return _TracewayHttpClientRequest(req, method, url, start, traceparent);
     } catch (e) {
       _emit(method: method, url: url, start: start, error: e.toString());
       rethrow;
@@ -183,14 +203,38 @@ class _TracewayHttpClient implements HttpClient {
 }
 
 class _TracewayHttpClientRequest implements HttpClientRequest {
-  _TracewayHttpClientRequest(this._inner, this._method, this._url, this._start);
+  _TracewayHttpClientRequest(
+      this._inner, this._method, this._url, this._start, this._traceparent);
 
   final HttpClientRequest _inner;
   final String _method;
   final Uri _url;
   final DateTime _start;
+  String? _traceparent;
   int _bytesWritten = 0;
   bool _emitted = false;
+
+  /// The app may set its own `traceparent` after the request was opened:
+  /// its trace context wins, and the request's span is recorded as if none
+  /// had been sent.
+  void _yieldToAppTraceparent() {
+    final ours = _traceparent;
+    if (ours == null) return;
+    try {
+      final values = _inner.headers['traceparent'];
+      if (values == null || (values.length == 1 && values.single == ours)) {
+        return;
+      }
+      final theirs = values.where((v) => v != ours).toList();
+      if (theirs.isEmpty) {
+        _inner.headers.removeAll('traceparent');
+      } else {
+        _inner.headers.set('traceparent', theirs.first);
+      }
+      TracewayClient.instance?.forgetRequestSpan(ours);
+      _traceparent = null;
+    } catch (_) {}
+  }
 
   void _emitOnce({
     int? statusCode,
@@ -203,6 +247,7 @@ class _TracewayHttpClientRequest implements HttpClientRequest {
       method: _method,
       url: _url,
       start: _start,
+      traceparent: _traceparent,
       statusCode: statusCode,
       requestBytes: _bytesWritten > 0 ? _bytesWritten : null,
       responseBytes: responseBytes,
@@ -212,6 +257,7 @@ class _TracewayHttpClientRequest implements HttpClientRequest {
 
   @override
   Future<HttpClientResponse> close() async {
+    _yieldToAppTraceparent();
     try {
       final res = await _inner.close();
       final responseBytes = res.contentLength >= 0 ? res.contentLength : null;

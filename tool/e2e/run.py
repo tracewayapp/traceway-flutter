@@ -21,6 +21,13 @@ at each point:
   6. the app saves its buffer going to the background and is killed; the
      next start resumes the session and its first error brings up what the
      killed run had buffered
+  8. (with --otelcol) Traceway plus another OpenTelemetry backend: an
+     OpenTelemetry Collector receives the logs, taps, request span and
+     metrics; Traceway keeps the issue, its replay clip and the session, and
+     none of the breadcrumbs
+  9. (with --otelcol) standalone, without a connection string: the
+     collector receives everything, the exception included, and Traceway
+     nothing
   7. (checked before 6) the app's performance arrives as client metrics:
      cold start, screen display times, slow and frozen frames, a hang, the
      unhandled error, session, user, requests and app-defined metrics; the
@@ -28,7 +35,7 @@ at each point:
      chart them
 
   python3 tool/e2e/run.py --base http://127.0.0.1:8082 --email .. --password .. \\
-      [--storage <backend STORAGE_PATH>] -- <app command>
+      [--storage <backend STORAGE_PATH>] [--otelcol <otelcol binary>] -- <app command>
 
 The app must be built with TRACEWAY_DSN pointing at a Flutter project of that
 account. Needs ffprobe on PATH to inspect the clips. With --storage (a local
@@ -148,6 +155,217 @@ def stored_segments(storage, project_id, session_id):
     return dict(sorted(out.items()))
 
 
+COLLECTOR_PORT = 4318
+
+
+class Echo:
+    """An HTTP server that answers 200 and keeps the traceparent of every request, by path and query."""
+
+    def __init__(self):
+        import http.server
+        seen = self.seen = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen[self.path] = self.headers.get('traceparent')
+                self.send_response(200)
+                self.send_header('Content-Length', '2')
+                self.end_headers()
+                self.wfile.write(b'ok')
+
+            def log_message(self, *args):
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f'http://127.0.0.1:{self.server.server_address[1]}'
+
+    def stop(self):
+        self.server.shutdown()
+
+
+class Collector:
+    """A real OpenTelemetry Collector (otelcol) with an OTLP/HTTP receiver
+    that writes what it receives to JSON-lines files, one per signal."""
+
+    def __init__(self, binary):
+        self.dir = tempfile.mkdtemp(prefix='traceway-e2e-otelcol-')
+        config = os.path.join(self.dir, 'config.yaml')
+        with open(config, 'w') as f:
+            f.write(f'''receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:{COLLECTOR_PORT}
+exporters:
+''' + ''.join(f'''  file/{k}:
+    path: {self.dir}/{k}.jsonl
+    flush_interval: 100ms
+''' for k in ('logs', 'traces', 'metrics')) + '''service:
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+''' + ''.join(f'''    {k}:
+      receivers: [otlp]
+      exporters: [file/{k}]
+''' for k in ('logs', 'traces', 'metrics')))
+        self.log = open(os.path.join(self.dir, 'otelcol.log'), 'w')
+        self.proc = subprocess.Popen([binary, '--config', config], stdout=self.log, stderr=subprocess.STDOUT)
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                urllib.request.urlopen(urllib.request.Request(
+                    f'http://127.0.0.1:{COLLECTOR_PORT}/v1/logs', data=b'{}',
+                    headers={'Content-Type': 'application/json'}), timeout=2)
+                break
+            except urllib.error.HTTPError:
+                break
+            except Exception:
+                time.sleep(0.3)
+        else:
+            sys.exit('otelcol did not start: ' + open(self.log.name).read()[-2000:])
+
+    @property
+    def url(self):
+        return f'http://127.0.0.1:{COLLECTOR_PORT}'
+
+    def read(self, kind):
+        path = os.path.join(self.dir, f'{kind}.jsonl')
+        if not os.path.exists(path):
+            return []
+        with open(path) as f:
+            return [json.loads(line) for line in f if line.strip()]
+
+    @staticmethod
+    def _attrs(items):
+        out = {}
+        for a in items or []:
+            v = a.get('value') or {}
+            out[a['key']] = next(iter(v.values()), None) if v else None
+        return out
+
+    def logs(self):
+        """(resource attributes, record attributes, event name, body) of every log record."""
+        return [(self._attrs(rl.get('resource', {}).get('attributes')), self._attrs(r.get('attributes')),
+                 r.get('eventName') or '', (r.get('body') or {}).get('stringValue'))
+                for req in self.read('logs') for rl in req.get('resourceLogs', [])
+                for sl in rl.get('scopeLogs', []) for r in sl.get('logRecords', [])]
+
+    def spans(self):
+        return [(self._attrs(rs.get('resource', {}).get('attributes')), self._attrs(sp.get('attributes')), sp.get('name'),
+                 sp.get('traceId'), sp.get('spanId'))
+                for req in self.read('traces') for rs in req.get('resourceSpans', [])
+                for ss in rs.get('scopeSpans', []) for sp in ss.get('spans', [])]
+
+    def metrics(self, skip=0):
+        """(resource attributes, name) of every metric, past the first [skip] requests. Metric
+        resources name no installation, by design, so a run is told apart by when they arrived."""
+        return [(self._attrs(rm.get('resource', {}).get('attributes')), m.get('name'))
+                for req in self.read('metrics')[skip:] for rm in req.get('resourceMetrics', [])
+                for sm in rm.get('scopeMetrics', []) for m in sm.get('metrics', [])]
+
+    def stop(self):
+        self.proc.terminate()
+        try:
+            self.proc.wait(10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.log.close()
+
+
+def check_other_backend(api, check, collector, echo, launch, wait_phase, state_dir, scenario):
+    """Phases 8 and 9: telemetry to an OpenTelemetry Collector. Each runs as a
+    fresh installation, so its records are told apart by its instance id."""
+    if state_dir and os.path.isdir(state_dir):
+        shutil.rmtree(state_dir)
+    since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=2)
+    issues_before = {i.get('id') or i.get('exceptionHash') for i in
+                     api.page('/api/exception-stack-traces', since - datetime.timedelta(hours=1), {'orderBy': 'last_seen'})}
+    metric_requests_before = len(collector.read('metrics'))
+    launch(scenario, {'E2E_COLLECTOR': collector.url, 'E2E_ECHO': echo.url})
+    instance = wait_phase('start', 90).split('instance=')[1]
+    session = wait_phase('telemetry_sent', 90).split('session=')[1]
+    wait_phase('done', 90)
+    time.sleep(8)  # the collector flushes its files, the server writes in batches
+    mine = lambda rows: [r for r in rows if r[0].get('service.instance.id') == instance]
+    logs, spans = mine(collector.logs()), mine(collector.spans())
+    metrics = collector.metrics(metric_requests_before)
+    names, tw_spans, issues, sessions = snapshot(api, since, instance)
+    log_line = f'e2e {scenario} log'
+    event = f'e2e_{scenario}_event'
+    boom = f'StateError: Bad state: e2e {scenario} boom'
+    # Each scenario runs as a fresh installation: every log record of this instance belongs to this run, so the
+    # checks below look at all of them, not only the ones that name the session.
+    run_logs = logs
+    collector_events = {r[2] for r in run_logs}
+
+    check(any(r[3] == log_line for r in run_logs), 'the collector received the print() line')
+    check(event in collector_events, 'the collector received the tracked event')
+    check('browser.user_action.click' in collector_events, 'the collector received the tap')
+    without = [r[2] or r[3] for r in run_logs if r[1].get('session.id') != session]
+    check(run_logs and not without, 'every record in the collector carries the session id',
+          f'{len(run_logs)} records, without: {without[:5]}')
+    request = [s for s in spans if s[2] == 'GET' and f'has-organizations?{scenario}' in str(s[1].get('url.full'))]
+    check(len(request) == 1, 'the collector received the HTTP client span', f'{len(spans)} spans')
+    metric_names = {m[1] for m in metrics}
+    check({f'e2e.{scenario}', 'app.session', 'app.crash', 'app.start.duration'} <= metric_names,
+          'the collector received the metrics: the cold start, the session, the unhandled error', f'{sorted(metric_names)}')
+    check(all(m[0].get('traceway.metrics') == 'aggregated' and 'service.instance.id' not in m[0] for m in metrics),
+          'metric resources carry no installation id')
+    now = datetime.datetime.now(datetime.timezone.utc)
+    status, body = api.call('POST', '/api/metrics/query', {
+        'queries': [{'name': f'e2e.{scenario}', 'aggregation': 'sum'}],
+        'from': since.replace(second=0, microsecond=0).isoformat(),
+        'to': (now + datetime.timedelta(minutes=2)).isoformat(), 'wholeRange': True})
+    series = ((body or {}).get('results') or [{}])[0].get('series') or {} if isinstance(body, dict) else {}
+    check(status == 200 and not any(series.values()), 'Traceway received none of these metrics', f'{status} {series}')
+    header = echo.seen.get(f'/checkout?{scenario}') or ''
+    echoed = [s for s in spans if s[1].get('url.full') == f'{echo.url}/checkout?{scenario}']
+    check(len(echoed) == 1 and header == f'00-{echoed[0][3]}-{echoed[0][4]}-01',
+          'the request carried a traceparent naming the span the collector received', header)
+    check(f'/other?{scenario}' in echo.seen and echo.seen[f'/other?{scenario}'] is None,
+          'a request to a URL that is not selected got no traceparent')
+    check(not [s for s in spans if str(s[1].get('url.full', '')).startswith(collector.url)],
+          'the SDK did not record its requests to the collector')
+    check(log_line not in bodies(names) and event not in names, 'Traceway received none of these breadcrumbs')
+    check(not [s for s in tw_spans if f'has-organizations?{scenario}' in json.dumps(s)],
+          'Traceway received no request span')
+
+    new_issues = [i for i in issues if (i.get('id') or i.get('exceptionHash')) not in issues_before]
+    in_collector = [r for r in run_logs if r[2] == 'exception']
+    if scenario == 'external':
+        leaked = collector_events & {'exception', 'traceway.message', 'session.start', 'session.end',
+                                     'traceway.session.update', 'traceway.trigger.fired',
+                                     'traceway.capture.started', 'traceway.config.applied'}
+        check(not leaked, 'the exception, session and control records did not go to the collector',
+              f'{sorted(leaked)}')
+        exceptions = [r for r in names.get('exception', []) if attrs(r).get('session.id') == session]
+        check(len(exceptions) == 1, 'Traceway received the exception', f'{len(exceptions)}')
+        check(any(s['id'] == session for s in sessions), 'Traceway has the session')
+        exception_id = attrs(exceptions[0]).get('traceway.exception.id') if exceptions else None
+        status, detail = api.call('POST', f'/api/exception-stack-traces/by-id/{exception_id}', {})
+        detail = detail if isinstance(detail, dict) else {}
+        check(status == 200 and (detail.get('exception') or {}).get('stackTrace', '').startswith(boom),
+              'the issue has its stack trace', f'{status}')
+        events = (detail.get('sessionRecording') or {}).get('events') or []
+        check(len(events) == 1 and events[0].get('type') == 'flutter_video',
+              'the replay clip went to Traceway\'s recordings endpoint')
+        if events:
+            _, codec, frames, duration, _ = probe(events[0]['data'])
+            check(codec == 'h264' and frames > 0, 'the clip is a playable H.264 MP4', f'{codec} {frames} frames')
+        return {'session': session, 'issue': exception_id}
+    check(len(in_collector) == 1 and str(in_collector[0][1].get('exception.stacktrace', '')).startswith(boom),
+          'the collector received the exception with its stack trace')
+    check(not {'session.start', 'session.end', 'traceway.session.update'} & collector_events,
+          'no Traceway session records were sent')
+    check(not new_issues and not [r for r in names.get('exception', []) if attrs(r).get('session.id') == session],
+          'Traceway received no issue', f'{len(new_issues)} new')
+    check(not any(s['id'] == session for s in sessions), 'Traceway has no session for the standalone run')
+    check(not names, 'Traceway received no record at all from the standalone run', f'{sorted(names)}')
+    return {'session': session}
+
+
 def check_metrics(api, since, check):
     """Phase 7: the app's performance as client metrics, and the project's default dashboard."""
     print('\n[7] performance metrics and the Flutter Performance dashboard')
@@ -238,6 +456,7 @@ def main():
     ap.add_argument('--password', required=True)
     ap.add_argument('--project', default='')
     ap.add_argument('--storage', default='')
+    ap.add_argument('--otelcol', default='', help='an otelcol binary: runs phases 8 and 9')
     ap.add_argument('--state-dir', default=DEFAULT_STATE_DIR,
                     help='the app\'s SDK state, cleared so each run starts fresh')
     ap.add_argument('app', nargs=argparse.REMAINDER)
@@ -257,10 +476,11 @@ def main():
     phases, lines = {}, []
     proc = None
 
-    def launch(scenario=None):
+    def launch(scenario=None, extra_env=None):
         nonlocal proc
         phases.clear()
         env = dict(os.environ)
+        env.update(extra_env or {})
         if scenario:
             env['E2E_SCENARIO'] = scenario
         proc = subprocess.Popen(app_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -528,6 +748,26 @@ def main():
         taps = [attrs(r) for r in names.get('browser.user_action.click', []) if attrs(r).get('app.widget.id') == 'pay']
         check(len(taps) == 3, 'and the tap, with its selector', f'{len(taps)} pay taps')
         check(len(issues) == 2, 'the second error is its own issue', f'{len(issues)}')
+        proc.kill()
+        proc.wait()
+
+        if args.otelcol:
+            collector = Collector(args.otelcol)
+            echo = Echo()
+            try:
+                print(f'\n[8] Traceway plus another OpenTelemetry backend (otelcol at {collector.url})')
+                external = check_other_backend(api, check, collector, echo, launch, wait_phase, args.state_dir, 'external')
+                proc.kill()
+                proc.wait()
+                print(f'\n[9] standalone: no connection string, only the collector')
+                check_other_backend(api, check, collector, echo, launch, wait_phase, args.state_dir, 'standalone')
+                print(f'        collector output: {collector.dir}')
+                summary = {'external': external, 'collectorDir': collector.dir}
+                with open(os.path.join(collector.dir, 'summary.json'), 'w') as f:
+                    json.dump(summary, f)
+            finally:
+                collector.stop()
+                echo.stop()
     finally:
         if proc:
             proc.kill()

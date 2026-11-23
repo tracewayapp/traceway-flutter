@@ -123,6 +123,18 @@ class AppVitals {
     }
   }
 
+  /// Whether a start whose first frame came in [state] is one somebody
+  /// waited for. Launched into the background, or left before the first
+  /// frame, it is not. `inactive` is still on screen: an unfocused desktop
+  /// window, iOS during its launch transition, a system overlay.
+  @visibleForTesting
+  static bool coldStartCounts(
+          bool backgroundedBeforeFirstFrame, AppLifecycleState? state) =>
+      !backgroundedBeforeFirstFrame &&
+      state != AppLifecycleState.hidden &&
+      state != AppLifecycleState.paused &&
+      state != AppLifecycleState.detached;
+
   void _measureColdStart(int? processStartMs, int sdkStartMs) {
     final binding = WidgetsBinding.instance;
     // Started after the first frame: there is no start left to measure.
@@ -139,11 +151,8 @@ class AppVitals {
         : sdkStartMs;
     unawaited(binding.waitUntilFirstFrameRasterized.then((_) {
       _firstFrameDone = true;
-      // Launched into the background, or left before the first frame: not a
-      // start anyone waited for.
-      final state = binding.lifecycleState;
-      if (_backgroundedBeforeFirstFrame ||
-          (state != null && state != AppLifecycleState.resumed)) {
+      if (!coldStartCounts(
+          _backgroundedBeforeFirstFrame, binding.lifecycleState)) {
         return;
       }
       final ms = _nowUs() / 1000 - startMs;

@@ -2,38 +2,133 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
+import 'package:dartastic_opentelemetry/proto/opentelemetry_proto_dart.dart'
+    as proto;
 import 'package:http/http.dart' as http;
+
+import '../core/endpoints.dart';
+import '../otel/events.dart';
+import '../sdk_version.dart';
 
 const int _maxBatches = 200;
 const Duration _maxAge = Duration(hours: 24);
 const int _maxBatchBytes = 4 * 1024 * 1024;
 
-/// OTLP batches the exporter could not deliver, kept on disk as protobuf and
+/// Delays between the attempts of a live export, before a batch that keeps
+/// failing goes to the [Outbox].
+const List<Duration> liveRetryDelays = [
+  Duration(milliseconds: 200),
+  Duration(seconds: 1),
+];
+
+/// Posts one OTLP/HTTP protobuf request to [destination], gzipped, trying
+/// again after each of [retryDelays] while the failure may pass. Returns the
+/// last status code, 0 when no answer came.
+Future<int> postOtlp(
+  http.Client client,
+  OtlpDestination destination,
+  List<int> body, {
+  List<Duration> retryDelays = const [],
+}) async {
+  final compressed = gzip.encode(body);
+  var status = 0;
+  for (var attempt = 0;; attempt++) {
+    try {
+      final response = await client
+          .post(
+            Uri.parse(destination.url),
+            headers: {
+              'User-Agent': otlpUserAgent,
+              ...destination.headers,
+              'Content-Type': 'application/x-protobuf',
+              'Content-Encoding': 'gzip',
+            },
+            body: compressed,
+          )
+          .timeout(const Duration(seconds: 10));
+      status = response.statusCode;
+    } catch (_) {
+      status = 0;
+    }
+    if (!isTransientFailure(status) || attempt >= retryDelays.length) {
+      return status;
+    }
+    await Future<void>.delayed(retryDelays[attempt]);
+  }
+}
+
+/// No answer, throttled or a server error: worth sending again later.
+bool isTransientFailure(int status) =>
+    status == 0 || status == 408 || status == 429 || status >= 500;
+
+/// OTLP batches that could not be delivered, kept on disk as protobuf and
 /// sent again later: after start, when connectivity returns, on the next
 /// failed-export cycle. Bounded in count and age so an unreachable server
-/// cannot fill the device.
+/// cannot fill the device. One outbox per set of destinations, in its own
+/// directory, so batches queued for one receiver never go to another.
 class Outbox {
   Outbox({
     required this.directory,
-    required this.logsUrl,
-    required this.tracesUrl,
-    required this.token,
+    required this.destinations,
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client();
 
   final Directory? directory;
-  final String logsUrl;
-  final String tracesUrl;
-  final String token;
+
+  /// By kind: `logs`, `traces`.
+  final Map<String, OtlpDestination> destinations;
   final http.Client _http;
   int _sequence = 0;
   Timer? _timer;
   Future<void>? _draining;
   int _attempts = 0;
+  bool _disposed = false;
+
+  /// Identifies where this outbox sends, its credentials included: batches
+  /// queued for other destinations or another project's token are dropped,
+  /// never sent here.
+  String get destinationKey => [
+        for (final kind in destinations.keys.toList()..sort())
+          '$kind=${destinations[kind]!.url}'
+              '${destinations[kind]!.external ? '' : '#${destinations[kind]!.headers['Authorization']}'}',
+      ].join('|');
+
+  /// Makes the directory this outbox's own: what an earlier run queued there
+  /// for different destinations is deleted. Call once, before [drain].
+  void claim() {
+    final dir = directory;
+    if (dir == null) return;
+    try {
+      final marker = File('${dir.path}${Platform.pathSeparator}destination');
+      final key = fingerprint(destinationKey);
+      // A directory without a marker was written before markers existed,
+      // when every queued batch went to Traceway: it is adopted.
+      final known = marker.existsSync() ? marker.readAsStringSync() : null;
+      if (known != key) {
+        if (known != null) {
+          for (final file in _files()) {
+            try {
+              file.deleteSync();
+            } catch (_) {}
+          }
+        }
+        dir.createSync(recursive: true);
+        marker.writeAsStringSync(key);
+      }
+    } catch (_) {
+      // Best effort.
+    }
+  }
 
   void add(String kind, List<int> body) {
     final dir = directory;
-    if (dir == null || body.isEmpty || body.length > _maxBatchBytes) return;
+    if (_disposed ||
+        dir == null ||
+        body.isEmpty ||
+        body.length > _maxBatchBytes) {
+      return;
+    }
+    if (!destinations.containsKey(kind)) return;
     try {
       dir.createSync(recursive: true);
       final name =
@@ -84,7 +179,7 @@ class Outbox {
   }
 
   void schedule(Duration delay) {
-    if (directory == null || _timer != null) return;
+    if (_disposed || directory == null || _timer != null) return;
     _timer = Timer(delay, () {
       _timer = null;
       unawaited(drain());
@@ -102,24 +197,12 @@ class Outbox {
   Future<void> _drain() async {
     _prune();
     for (final file in _files()) {
-      final url = file.path.endsWith('.traces.pb') ? tracesUrl : logsUrl;
-      int status;
-      try {
-        final response = await _http
-            .post(
-              Uri.parse(url),
-              headers: {
-                'Content-Type': 'application/x-protobuf',
-                'Authorization': 'Bearer $token',
-              },
-              body: await file.readAsBytes(),
-            )
-            .timeout(const Duration(seconds: 10));
-        status = response.statusCode;
-      } catch (_) {
-        status = 0;
-      }
-      if (status == 0 || status == 429 || status >= 500) {
+      final kind = file.path.endsWith('.traces.pb') ? 'traces' : 'logs';
+      final destination = destinations[kind];
+      final status = destination == null
+          ? 400
+          : await postOtlp(_http, destination, await file.readAsBytes());
+      if (isTransientFailure(status)) {
         _attempts++;
         schedule(Duration(seconds: _backoffSeconds()));
         return;
@@ -133,71 +216,185 @@ class Outbox {
   }
 
   void dispose() {
+    _disposed = true;
     _timer?.cancel();
     _timer = null;
   }
 }
 
-/// Wraps the OTLP log exporter: a batch it fails to deliver goes to the
-/// [Outbox] instead of being lost.
-class PersistingLogExporter implements LogRecordExporter {
-  PersistingLogExporter(this._inner, this._outbox);
+/// FNV-1a as hex: stable across runs and platforms, for names and markers
+/// that must not hold a credential in the clear.
+String fingerprint(String value) {
+  var hash = 0x811c9dc5;
+  for (final unit in value.codeUnits) {
+    hash = ((hash ^ unit) * 0x01000193) & 0xffffffff;
+  }
+  return hash.toRadixString(16).padLeft(8, '0');
+}
 
-  final LogRecordExporter _inner;
+/// Tracks an exporter's requests still on their way, so a flush can wait
+/// for them: the batch processor hands a batch over and forgets it.
+mixin _InFlight {
+  final Set<Future<void>> _inFlight = {};
+
+  Future<T> _track<T>(Future<T> work) {
+    final done = work.then((_) {}, onError: (_) {});
+    _inFlight.add(done);
+    done.whenComplete(() => _inFlight.remove(done));
+    return work;
+  }
+
+  Future<void> _settle() async {
+    while (_inFlight.isNotEmpty) {
+      await Future.wait(List.of(_inFlight));
+    }
+  }
+}
+
+/// Sends log records as OTLP/HTTP protobuf to one destination, at exactly
+/// its URL. A batch that fails for a reason that may pass goes to the
+/// [Outbox] instead of being lost.
+class OtlpLogExporter with _InFlight implements LogRecordExporter {
+  OtlpLogExporter(this._destination, this._outbox, this._http);
+
+  final OtlpDestination _destination;
   final Outbox _outbox;
+  final http.Client _http;
 
   @override
   Future<ExportResult> export(List<ReadableLogRecord> logRecords) async {
     if (logRecords.isEmpty) return ExportResult.success;
-    var result = ExportResult.failure;
+    final List<int> body;
     try {
-      result = await _inner.export(logRecords);
+      body = OtlpLogRecordTransformer.transformLogRecords(logRecords)
+          .writeToBuffer();
     } catch (_) {
-      result = ExportResult.failure;
+      return ExportResult.failure;
     }
-    if (result == ExportResult.failure) {
-      try {
-        _outbox.add(
-          'logs',
-          OtlpLogRecordTransformer.transformLogRecords(logRecords)
-              .writeToBuffer(),
-        );
-      } catch (_) {}
-    }
-    return ExportResult.success;
+    return _track(() async {
+      final status = await postOtlp(_http, _destination, body,
+          retryDelays: liveRetryDelays);
+      if (isTransientFailure(status)) _outbox.add('logs', body);
+      return ExportResult.success;
+    }());
   }
 
   @override
-  Future<void> forceFlush() => _inner.forceFlush();
+  Future<void> forceFlush() => _settle();
 
   @override
-  Future<void> shutdown() => _inner.shutdown();
+  Future<void> shutdown() => _settle();
 }
 
-class PersistingSpanExporter implements SpanExporter {
-  PersistingSpanExporter(this._inner, this._outbox);
+/// The span counterpart of [OtlpLogExporter].
+class OtlpSpanExporter with _InFlight implements SpanExporter {
+  OtlpSpanExporter(this._destination, this._outbox, this._http);
 
-  final SpanExporter _inner;
+  final OtlpDestination _destination;
   final Outbox _outbox;
+  final http.Client _http;
 
   @override
   Future<void> export(List<Span> spans) async {
     if (spans.isEmpty) return;
+    final List<int> body;
     try {
-      await _inner.export(spans);
+      body = OtlpSpanTransformer.transformSpans(spans).writeToBuffer();
     } catch (_) {
-      try {
-        _outbox.add(
-          'traces',
-          OtlpSpanTransformer.transformSpans(spans).writeToBuffer(),
-        );
-      } catch (_) {}
+      return;
     }
+    await _track(() async {
+      final status = await postOtlp(_http, _destination, body,
+          retryDelays: liveRetryDelays);
+      if (isTransientFailure(status)) _outbox.add('traces', body);
+    }());
   }
 
   @override
-  Future<void> forceFlush() => _inner.forceFlush();
+  Future<void> forceFlush() => _settle();
 
   @override
-  Future<void> shutdown() => _inner.shutdown();
+  Future<void> shutdown() => _settle();
+}
+
+/// Whether a log record belongs to Traceway even when ordinary logs go to
+/// another receiver: exceptions and messages (the issues), and the SDK's
+/// control records (sessions, triggers, captures, config).
+bool isTracewayLog(String? eventName) {
+  final signal = classifyLog(eventName);
+  return signal == 'errors' || signal == 'messages' || signal == signalControl;
+}
+
+/// Sends what [isTracewayLog] selects to [traceway], everything else to
+/// [inner]. Runs after the ring buffer, so a record flushed by a trigger is
+/// routed the same as one streamed live.
+class RoutingLogExporter implements LogRecordExporter {
+  RoutingLogExporter(this.inner, this.traceway);
+
+  final LogRecordExporter inner;
+  final LogRecordExporter traceway;
+
+  @override
+  Future<ExportResult> export(List<ReadableLogRecord> logRecords) async {
+    final own = <ReadableLogRecord>[];
+    final rest = <ReadableLogRecord>[];
+    for (final record in logRecords) {
+      (isTracewayLog(record.eventName) ? own : rest).add(record);
+    }
+    final results = await Future.wait([
+      if (own.isNotEmpty) traceway.export(own),
+      if (rest.isNotEmpty) inner.export(rest),
+    ]);
+    return results.contains(ExportResult.failure)
+        ? ExportResult.failure
+        : ExportResult.success;
+  }
+
+  @override
+  Future<void> forceFlush() async {
+    await traceway.forceFlush();
+    await inner.forceFlush();
+  }
+
+  @override
+  Future<void> shutdown() async {
+    await traceway.shutdown();
+    await inner.shutdown();
+  }
+}
+
+/// Splits an OTLP logs request in two: the records [isTracewayLog] selects
+/// and the rest. Either side is null when it holds no record.
+(List<int>?, List<int>?) splitLogsRequest(List<int> body) {
+  final request = proto.ExportLogsServiceRequest.fromBuffer(body);
+  final own = proto.ExportLogsServiceRequest();
+  final rest = proto.ExportLogsServiceRequest();
+  var ownCount = 0, restCount = 0;
+  for (final resourceLogs in request.resourceLogs) {
+    final ownResource = proto.ResourceLogs(resource: resourceLogs.resource);
+    final restResource = proto.ResourceLogs(resource: resourceLogs.resource);
+    for (final scopeLogs in resourceLogs.scopeLogs) {
+      final ownScope = proto.ScopeLogs(scope: scopeLogs.scope);
+      final restScope = proto.ScopeLogs(scope: scopeLogs.scope);
+      for (final record in scopeLogs.logRecords) {
+        if (isTracewayLog(record.eventName)) {
+          ownScope.logRecords.add(record);
+          ownCount++;
+        } else {
+          restScope.logRecords.add(record);
+          restCount++;
+        }
+      }
+      if (ownScope.logRecords.isNotEmpty) ownResource.scopeLogs.add(ownScope);
+      if (restScope.logRecords.isNotEmpty) {
+        restResource.scopeLogs.add(restScope);
+      }
+    }
+    if (ownResource.scopeLogs.isNotEmpty) own.resourceLogs.add(ownResource);
+    if (restResource.scopeLogs.isNotEmpty) rest.resourceLogs.add(restResource);
+  }
+  return (
+    ownCount == 0 ? null : own.writeToBuffer(),
+    restCount == 0 ? null : rest.writeToBuffer(),
+  );
 }
