@@ -14,6 +14,7 @@ executables:
 dependencies:
   flutter:
     sdk: flutter
+  crypto: ^3.0.0
   http: ^1.5.0
   dartastic_opentelemetry: 0.12.0
   dartastic_opentelemetry_api: 0.12.0

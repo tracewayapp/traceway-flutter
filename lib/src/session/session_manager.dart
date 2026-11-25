@@ -43,7 +43,7 @@ class SessionManager {
   String? get currentId => _session?.id;
 
   void start() {
-    if (_session != null) return;
+    if (_timer != null) return;
     _open();
     _timer ??= Timer.periodic(const Duration(seconds: 30), (_) => check());
   }
@@ -64,13 +64,14 @@ class SessionManager {
 
   /// Notes user activity; an expired session is replaced first.
   void markActivity() {
-    if (_session == null) return;
+    if (_timer == null) return;
     check();
+    if (_session == null) _open();
     _lastActivityMs = _now();
     if (_lastActivityMs - _lastPersistMs > 5000) _persist();
   }
 
-  /// Ends the session if it has expired and starts a fresh one.
+  /// Ends an expired session. The next activity starts its successor.
   void check() {
     final session = _session;
     if (session == null) return;
@@ -82,7 +83,6 @@ class SessionManager {
     _session = null;
     store.set(_storeKey, null);
     onEnd(session, endedAt);
-    _open();
   }
 
   void _open() {

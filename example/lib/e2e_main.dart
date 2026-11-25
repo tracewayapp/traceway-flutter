@@ -16,6 +16,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart' as otel;
+import 'package:dartastic_opentelemetry/testing.dart' as otel_test;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 // ignore: deprecated_member_use
@@ -89,7 +91,7 @@ Map<String, String> _readLaunchSettings() {
 
 final _launchSettings = _readLaunchSettings();
 
-void main() {
+Future<void> main() async {
   if (_dsn.isEmpty) {
     stderr.writeln('Set --dart-define=TRACEWAY_DSN=token@http://host:port');
     exit(64);
@@ -103,6 +105,15 @@ void main() {
   final echo = _launchSettings['E2E_ECHO'];
   final otherBackend = collector != null &&
       (scenario == 'external' || scenario == 'standalone');
+  if (scenario == 'external') {
+    await otel.OTel.initialize(
+      serviceName: 'e2e-host-app',
+      logRecordProcessor: otel.SimpleLogRecordProcessor(otel_test.InMemoryLogExporter()),
+      spanProcessor: otel.SimpleSpanProcessor(otel_test.InMemorySpanExporter()),
+      enableMetrics: false,
+      detectPlatformResources: false,
+    );
+  }
   Traceway.run(
     connectionString: scenario == 'standalone' ? null : _dsn,
     options: TracewayOptions(
@@ -288,6 +299,18 @@ class _HomeState extends State<_Home> {
     await _wait(3);
     _setPhase('start instance=${client.getInstanceId()}');
     switch (_launchSettings['E2E_SCENARIO']) {
+      case 'exit-after-error':
+        await client.ready;
+        client.captureUnhandledException(
+          StateError('e2e exit after capture'),
+          StackTrace.current,
+        );
+        debugPrintSynchronously('E2E_PHASE captured');
+        exit(0);
+      case 'recover-error':
+        await client.flush(15000);
+        _setPhase('recovered');
+        return;
       case 'restart-a':
         // Leave breadcrumbs, let the SDK save its buffer the way it does when
         // the app goes to the background, then wait to be killed.

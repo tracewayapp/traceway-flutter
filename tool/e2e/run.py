@@ -768,6 +768,22 @@ def main():
         check(len(issues) == 2, 'the second error is its own issue', f'{len(issues)}')
         stop()
 
+        launch('exit-after-error')
+        wait_phase('captured', 90)
+        stop()
+        launch('recover-error')
+        wait_phase('recovered', 90)
+        for _ in range(12):
+            names, _, _, _ = snapshot(api, since, instance)
+            errors = [r for r in names.get('exception', [])
+                      if 'e2e exit after capture' in attrs(r).get('exception.message', '')]
+            if errors:
+                break
+            time.sleep(1)
+        check(len(errors) == 1, 'the next launch delivers the error captured immediately before process exit')
+
+        stop()
+
         if args.otelcol:
             collector = Collector(args.otelcol)
             echo = Echo()

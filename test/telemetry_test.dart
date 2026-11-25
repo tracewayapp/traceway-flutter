@@ -30,6 +30,7 @@ class Wire {
 
   /// How long every answer takes.
   Duration delay = Duration.zero;
+
   /// Paths of the requests answered so far.
   final List<String> answered = [];
 
@@ -100,6 +101,91 @@ Future<TracewayClient> start(
 
 void main() {
   tearDown(TracewayClient.resetForTest);
+
+  test(
+      'a captured exception is durable before capture returns and is sent once',
+      () async {
+    final dir = Directory.systemTemp.createTempSync('traceway_crash');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final wire = Wire();
+    final client = await start(
+        wire, const TracewayOptions(remoteConfig: false, captureMetrics: false),
+        dir: dir);
+    client.captureUnhandledException(StateError('last error'));
+    final saved = dir
+        .listSync(recursive: true)
+        .whereType<File>()
+        .singleWhere((f) => f.path.endsWith('.logs.pb'));
+    final record =
+        proto.ExportLogsServiceRequest.fromBuffer(saved.readAsBytesSync())
+            .resourceLogs
+            .single
+            .scopeLogs
+            .single
+            .logRecords
+            .single;
+    expect(record.eventName, 'exception');
+    expect(attrOf(record, 'exception.message'), contains('last error'));
+    await client.flush();
+    await client.flush();
+    expect(wire.logs('traceway.test').where((r) => r.eventName == 'exception'),
+        hasLength(1));
+    expect(saved.existsSync(), isFalse);
+  });
+
+  test('disabled errors are never written to the durable queue', () async {
+    final dir = Directory.systemTemp.createTempSync('traceway_sampling');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final wire = Wire();
+    final client = await start(
+        wire, const TracewayOptions(remoteConfig: false, sampleRate: 0),
+        dir: dir);
+    client.captureUnhandledException(StateError('filtered'));
+    expect(dir.listSync(recursive: true).where((f) => f.path.endsWith('.pb')),
+        isEmpty);
+    await client.flush();
+    expect(wire.logs('traceway.test').where((r) => r.eventName == 'exception'),
+        isEmpty);
+  });
+
+  test('the project identity scopes buffered records and the saved session',
+      () async {
+    final dir = Directory.systemTemp.createTempSync('traceway_project');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    const options = TracewayOptions(remoteConfig: false);
+    final first = await start(Wire(), options, dir: dir);
+    final previousSession = first.currentSessionId;
+    first.recordLog('first project breadcrumb');
+    await first.shutdown();
+    final nextWire = Wire();
+    final second = await start(nextWire, options,
+        connection: 'next@https://traceway.test', dir: dir);
+    expect(second.currentSessionId, isNot(previousSession));
+    second.captureException(StateError('second project'));
+    await second.flush();
+    expect(nextWire.logs('traceway.test').map((r) => r.body.stringValue),
+        isNot(contains('first project breadcrumb')));
+  });
+
+  test(
+      'collector identity includes tenant headers and canonicalizes their order and names',
+      () {
+    const url = 'https://collector.test/v1/logs';
+    const current = OtlpDestination(
+        url, {'Authorization': 'one', 'X-Tenant': 'a'},
+        external: true);
+    expect(
+        current.key,
+        const OtlpDestination(url, {'x-tenant': 'a', 'authorization': 'one'},
+                external: true)
+            .key);
+    expect(
+        current.key,
+        isNot(const OtlpDestination(
+                url, {'Authorization': 'one', 'X-Tenant': 'b'},
+                external: true)
+            .key));
+  });
 
   group('TelemetryRoutes', () {
     final traceway = resolveEndpoints('https://traceway.test/api/report');
@@ -351,6 +437,10 @@ void main() {
       addTearDown(() => dir.deleteSync(recursive: true));
       // A batch the last run could not deliver to Traceway.
       final queued = Directory('${dir.path}/outbox')..createSync();
+      File('${queued.path}/destination').writeAsStringSync(fingerprint(
+        'logs=https://traceway.test/api/otel/v1/logs#Bearer test-token|'
+        'traces=https://traceway.test/api/otel/v1/traces#Bearer test-token',
+      ));
       File('${queued.path}/1-0.logs.pb').writeAsBytesSync(
         proto.ExportLogsServiceRequest(resourceLogs: [
           proto.ResourceLogs(scopeLogs: [
@@ -562,6 +652,18 @@ void main() {
       await client.flush();
       expect(wire.to('collector.test', '/v1/logs').first.headers['User-Agent'],
           startsWith('OTel-OTLP-Exporter-Dart/'));
+    });
+
+    test('unmarked batches are discarded on upgrade', () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_queue');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final queue = Directory('${dir.path}/outbox')..createSync();
+      final file = File('${queue.path}/1-0.logs.pb')..writeAsBytesSync([1]);
+      final client = await start(
+          Wire(), const TracewayOptions(remoteConfig: false),
+          dir: dir);
+      await client.flush();
+      expect(file.existsSync(), isFalse);
     });
 
     test('a queue for another project\'s token is dropped, not sent', () async {

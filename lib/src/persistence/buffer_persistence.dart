@@ -40,8 +40,7 @@ class BufferPersistence {
 
   /// Where restored records would be sent. A file saved for other
   /// destinations is dropped: a changed receiver is never sent what was
-  /// meant for the previous one. Empty for Traceway alone, as files written
-  /// before destinations were recorded were.
+  /// meant for the previous one.
   final String destination;
   final List<RestoredEntry> restored = [];
 
@@ -128,7 +127,7 @@ class BufferPersistence {
           return;
         }
         await file.parent.create(recursive: true);
-        final tmp = File('${file.path}.tmp');
+        final tmp = File('${file.path}.$destination.tmp');
         await tmp.writeAsString(body);
         await tmp.rename(file.path);
       } catch (_) {

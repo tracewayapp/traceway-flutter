@@ -79,6 +79,7 @@ class Outbox {
   final Map<String, OtlpDestination> destinations;
   final http.Client _http;
   int _sequence = 0;
+  bool _claimed = false;
   Timer? _timer;
   Future<void>? _draining;
   int _attempts = 0;
@@ -87,58 +88,84 @@ class Outbox {
   /// Identifies where this outbox sends, its credentials included: batches
   /// queued for other destinations or another project's token are dropped,
   /// never sent here.
-  String get destinationKey => [
-        for (final kind in destinations.keys.toList()..sort())
-          '$kind=${destinations[kind]!.url}'
-              '${destinations[kind]!.external ? '' : '#${destinations[kind]!.headers['Authorization']}'}',
-      ].join('|');
+  late final String destinationKey = destinationDigest([
+    for (final kind in destinations.keys.toList()..sort()) ...[
+      kind,
+      destinations[kind]!.key
+    ],
+  ]);
 
-  /// Makes the directory this outbox's own: what an earlier run queued there
-  /// for different destinations is deleted. Call once, before [drain].
   void claim() {
     final dir = directory;
     if (dir == null) return;
     try {
-      final marker = File('${dir.path}${Platform.pathSeparator}destination');
-      final key = fingerprint(destinationKey);
-      // A directory without a marker was written before markers existed,
-      // when every queued batch went to Traceway: it is adopted.
-      final known = marker.existsSync() ? marker.readAsStringSync() : null;
-      if (known != key) {
-        if (known != null) {
-          for (final file in _files()) {
-            try {
-              file.deleteSync();
-            } catch (_) {}
-          }
+      dir.createSync(recursive: true);
+      final marker = File('${dir.path}/destination');
+      final previous = marker.existsSync() ? marker.readAsStringSync() : null;
+      // Older Traceway queues recorded the URL and project credential in
+      // their marker. Unmarked queues and old external markers cannot
+      // establish who owns their contents.
+      final legacyKey = fingerprint([
+        for (final kind in destinations.keys.toList()..sort())
+          '$kind=${destinations[kind]!.url}#${destinations[kind]!.headers['Authorization']}',
+      ].join('|'));
+      final adopt = previous == legacyKey &&
+          destinations.values.every((d) => !d.external);
+      for (final file in dir.listSync(followLinks: false).whereType<File>()) {
+        final name = file.uri.pathSegments.last;
+        if (!name.endsWith('.pb') || name.startsWith('$destinationKey-')) {
+          continue;
         }
-        dir.createSync(recursive: true);
-        marker.writeAsStringSync(key);
+        if (adopt && RegExp(r'^\d+-\d+\.(logs|traces)\.pb$').hasMatch(name)) {
+          file.renameSync('${dir.path}/$destinationKey-$name');
+        } else {
+          file.deleteSync();
+        }
       }
-    } catch (_) {
-      // Best effort.
+      marker.writeAsStringSync(destinationKey);
+      _claimed = true;
+    } on FileSystemException {
+      // Disk failures fall back to the live exporter.
     }
   }
 
-  void add(String kind, List<int> body) {
+  bool persistLog(ReadableLogRecord record) {
+    try {
+      final body = OtlpLogRecordTransformer.transformLogRecords([record])
+          .writeToBuffer();
+      return add('logs', body);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool add(String kind, List<int> body) {
     final dir = directory;
-    if (_disposed ||
+    if (!_claimed ||
+        _disposed ||
         dir == null ||
         body.isEmpty ||
-        body.length > _maxBatchBytes) {
-      return;
+        body.length > _maxBatchBytes ||
+        !destinations.containsKey(kind)) {
+      return false;
     }
-    if (!destinations.containsKey(kind)) return;
     try {
-      dir.createSync(recursive: true);
       final name =
-          '${DateTime.now().microsecondsSinceEpoch}-${_sequence++}.$kind.pb';
-      File('${dir.path}${Platform.pathSeparator}$name').writeAsBytesSync(body);
+          '$destinationKey-${DateTime.now().microsecondsSinceEpoch}-${_sequence++}.$kind.pb';
+      final file = File('${dir.path}/$name');
+      final tmp = File('${file.path}.tmp');
+      tmp.writeAsBytesSync(body, flush: true);
+      tmp.renameSync(file.path);
+    } on FileSystemException {
+      return false;
+    }
+    try {
       _prune();
-    } catch (_) {
-      // Best effort.
+    } on FileSystemException {
+      // The batch is already durable. Pruning also runs on drain.
     }
     schedule(Duration(seconds: _backoffSeconds()));
+    return true;
   }
 
   int _backoffSeconds() {
@@ -152,7 +179,9 @@ class Outbox {
     final files = dir
         .listSync()
         .whereType<File>()
-        .where((f) => f.path.endsWith('.pb'))
+        .where((f) =>
+            f.uri.pathSegments.last.startsWith('$destinationKey-') &&
+            f.path.endsWith('.pb'))
         .toList()
       ..sort((a, b) => a.path.compareTo(b.path));
     return files;
@@ -189,19 +218,28 @@ class Outbox {
   Future<void> drain() {
     final running = _draining;
     if (running != null) return running;
-    final future = _drain().whenComplete(() => _draining = null);
+    final future = _drain().onError<FileSystemException>((error, stack) {
+      if (!_disposed) schedule(Duration(seconds: _backoffSeconds()));
+    }).whenComplete(() => _draining = null);
     _draining = future;
     return future;
   }
 
   Future<void> _drain() async {
+    if (!_claimed || _disposed) return;
     _prune();
     for (final file in _files()) {
+      if (_disposed) return;
+      final List<int> body;
+      try {
+        body = await file.readAsBytes();
+      } on PathNotFoundException {
+        continue;
+      }
       final kind = file.path.endsWith('.traces.pb') ? 'traces' : 'logs';
       final destination = destinations[kind];
-      final status = destination == null
-          ? 400
-          : await postOtlp(_http, destination, await file.readAsBytes());
+      final status =
+          destination == null ? 400 : await postOtlp(_http, destination, body);
       if (isTransientFailure(status)) {
         _attempts++;
         schedule(Duration(seconds: _backoffSeconds()));

@@ -96,6 +96,7 @@ class TelemetryRouter {
     required this.logSink,
     required this.spanSink,
     required this.hooks,
+    this.persistIssue,
     double Function()? random,
   }) : _random = random ?? Random().nextDouble;
 
@@ -104,6 +105,7 @@ class TelemetryRouter {
   final LogRecordProcessor logSink;
   final SpanProcessor spanSink;
   final RouterHooks hooks;
+  final bool Function(ReadableLogRecord)? persistIssue;
   final double Function() _random;
 
   List<String> _activeCaptureIds() {
@@ -243,6 +245,11 @@ class TelemetryRouter {
   void _send(TelemetryItem item) {
     switch (item) {
       case LogItem(:final record):
+        if ((record.eventName == eventException ||
+                record.eventName == eventMessage) &&
+            persistIssue?.call(record) == true) {
+          return;
+        }
         logSink.onEmit(record, null);
       case SpanItem(:final span):
         spanSink.onEnd(span);

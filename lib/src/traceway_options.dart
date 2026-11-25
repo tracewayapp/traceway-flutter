@@ -37,6 +37,10 @@ class TracewayOptions {
   /// that failed to send on disk so they survive app restarts.
   final bool persistToDisk;
 
+  /// The previous 1.x project's connection string. Set during an upgrade to
+  /// drain its pending errors and clips. Those files contain no project ID.
+  final String? legacyConnectionString;
+
   /// Capture every `print` / `debugPrint` line as a log record.
   final bool captureLogs;
 
@@ -147,6 +151,7 @@ class TracewayOptions {
     this.maxBufferFrames = 150,
     this.fps = 15,
     this.persistToDisk = true,
+    this.legacyConnectionString,
     this.captureLogs = true,
     this.captureNetwork = true,
     this.captureNavigation = true,

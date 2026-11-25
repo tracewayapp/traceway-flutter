@@ -32,8 +32,7 @@ void main() {
       events = [];
     });
 
-    test('ends after inactivity at the last activity and starts a new one',
-        () {
+    test('waits for activity after timeout even across an idle hour', () {
       final m = manager(StateStore(null))..start();
       final first = m.currentId!;
       now += 60000;
@@ -41,6 +40,13 @@ void main() {
       final lastActivity = now;
       now += defaultInactivityMs;
       m.check();
+      for (var i = 0; i < 120; i++) {
+        now += 30000;
+        m.check();
+      }
+      expect(m.currentId, isNull);
+      expect(events, ['start:$first', 'end:$first@$lastActivity']);
+      m.markActivity();
       expect(m.currentId, isNot(first));
       expect(events, [
         'start:$first',
@@ -144,8 +150,8 @@ void main() {
         url: 'https://h/api/recordings',
         token: 'tok',
         retryDelaysMs: const [1, 1, 1],
-        httpClient: MockClient(
-            (_) async => http.Response('', ++calls < 3 ? 503 : 200)),
+        httpClient:
+            MockClient((_) async => http.Response('', ++calls < 3 ? 503 : 200)),
       );
       transport.send([segment()]);
       await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -210,8 +216,9 @@ void main() {
 
     List<Map<String, dynamic>> segments() => [
           for (final post in posts)
-            for (final segment in (jsonDecode(utf8.decode(
-                    gzip.decode(post.bodyBytes))) as Map)['segments'] as List)
+            for (final segment
+                in (jsonDecode(utf8.decode(gzip.decode(post.bodyBytes)))
+                    as Map)['segments'] as List)
               (segment as Map).cast<String, dynamic>(),
         ];
 
@@ -325,8 +332,7 @@ void main() {
       expect(now.difference(source.captures.single.since!).inSeconds, 30);
     });
 
-    test('a slow encoder makes the next segment longer, not a queue',
-        () async {
+    test('a slow encoder makes the next segment longer, not a queue', () async {
       final source = SlowReplaySource();
       final c = controller(segmentMs: 20)
         ..attach(source)

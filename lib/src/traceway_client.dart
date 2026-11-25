@@ -30,6 +30,7 @@ import 'opamp/messages.dart';
 import 'otel/events.dart';
 import 'otel/router.dart';
 import 'persistence/buffer_persistence.dart';
+import 'persistence/legacy_reports.dart';
 import 'persistence/outbox.dart';
 import 'persistence/state_store.dart';
 import 'replay/recordings_transport.dart';
@@ -56,6 +57,7 @@ class TracewayTestOverrides {
     this.spanExporter,
     this.httpClient,
     this.stateDirectory,
+    this.legacyDirectory,
     this.deviceAttributes = const {},
     this.random,
     this.opampMinPollIntervalMs,
@@ -69,6 +71,7 @@ class TracewayTestOverrides {
 
   /// `null` keeps state in memory only.
   final Directory? stateDirectory;
+  final Directory? legacyDirectory;
   final Map<String, String> deviceAttributes;
   final double Function()? random;
   final int? opampMinPollIntervalMs;
@@ -163,7 +166,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       resource: () => _resourceAttributes,
       send: _sendMetrics,
       store: () => _store,
-      storageScope: _routes.metrics.external ? _routes.metrics.key : '',
+      storageScope: _routes.metrics.key,
       scopeName: tracewaySdkName,
       scopeVersion: tracewaySdkVersion,
       dimensions: _options.metricDimensions,
@@ -217,6 +220,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   StateStore _store = StateStore(null);
   Outbox? _outbox;
+  LegacyReports? _legacyReports;
 
   /// Traceway's queue when the live one belongs to another receiver: it
   /// takes the exceptions, messages and control records restored from disk
@@ -240,6 +244,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   bool _ready = false;
   bool _shutdown = false;
   bool _ownsOTel = false;
+  LoggerProvider? _privateLoggerProvider;
+  TracerProvider? _privateTracerProvider;
 
   /// Clips flushed so far; an exception compares it before and after its
   /// triggers run (an `emit` action re-enters observe on the way).
@@ -372,9 +378,29 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   Future<void> _startUnguarded() async {
     final stateDir = await _stateDirectory();
-    _store = StateStore(stateDir);
+    _store = StateStore(stateDir,
+        destination: _routes.traceway?.key ?? _bufferDestination);
     await _store.load();
     _replay.budget.store = _store;
+    final legacyDirectory = _overrides == null && stateDir != null
+        ? Directory('${stateDir.parent.path}/traceway_pending')
+        : _overrides?.legacyDirectory;
+    if (legacyDirectory != null) {
+      OtlpDestination? target;
+      final previous = _options.legacyConnectionString;
+      if (previous != null) {
+        try {
+          final parsed = parseConnectionString(previous);
+          target = OtlpDestination(
+              parsed.apiUrl, {'Authorization': 'Bearer ${parsed.token}'});
+        } on ArgumentError {
+          _log(
+              'Invalid 1.x connection string; legacy reports will expire on device.');
+        }
+      }
+      _legacyReports = LegacyReports(legacyDirectory, target, _http);
+      unawaited(_legacyReports!.drain());
+    }
 
     final storedUid = _store.get('instanceUid');
     final uid = storedUid is String ? uuidToBytes(storedUid) : null;
@@ -534,22 +560,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   Map<String, String> get _tracewayAuth =>
       {if (_token != null) 'Authorization': 'Bearer $_token'};
 
-  /// Where records restored from disk would be sent; empty for Traceway
-  /// alone.
-  String get _bufferDestination {
-    final routes = _routes;
-    if (!routes.logs.external &&
-        !routes.traces.external &&
-        routes.traceway != null) {
-      return '';
-    }
-    return fingerprint([
-      routes.logs.key,
-      routes.traces.key,
-      routes.traceway?.key ?? '',
-      routes.traceway?.headers['Authorization'] ?? '',
-    ].join('|'));
-  }
+  String get _bufferDestination => destinationDigest([
+        _routes.traceway?.key ?? '',
+        _routes.logs.key,
+        _routes.traces.key,
+        _routes.metrics.key,
+      ]);
 
   String get _serviceName {
     final name = _options.serviceName;
@@ -579,7 +595,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
           );
     final external = routes.logs.external || routes.traces.external;
     final externalName = external
-        ? 'outbox-${fingerprint('${routes.logs.key}|${routes.traces.key}')}'
+        ? 'outbox-${destinationDigest([routes.logs.key, routes.traces.key])}'
         : null;
     final outbox = externalName == null && tracewayOutbox != null
         ? tracewayOutbox
@@ -625,6 +641,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       logSink: logSink,
       spanSink: spanSink,
       hooks: this,
+      persistIssue: stateDir == null || _overrides?.logExporter != null
+          ? null
+          : (tracewayOutbox ?? outbox).persistLog,
       random: _overrides?.random,
     );
 
@@ -632,17 +651,37 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final spanProcessor = ControlSpanProcessor(() => _router, spanSink);
     // The OpenTelemetry SDK prints its own diagnostics, export failures
     // included; an app should only see them when it asked for debug output.
-    final previousLog = OTelLog.logFunction;
-    OTelLog.logFunction =
-        _options.debug ? (message) => debugPrint('Traceway: $message') : null;
-    try {
+    final factory = OTelFactory.otelFactory;
+    if (factory is OTelSDKFactory) {
+      // Private providers keep this installation's resource and lifetime
+      // independent of the app's exporters and processors.
+      final resource =
+          OTel.resource(OTel.attributesFromMap(_resourceAttributes));
+      _privateLoggerProvider = factory.loggerProvider(
+        endpoint: routes.logs.url,
+        serviceName: _serviceName,
+        serviceVersion: _serviceVersion,
+        resource: resource,
+      ) as LoggerProvider;
+      _privateTracerProvider = factory.tracerProvider(
+        endpoint: routes.traces.url,
+        serviceName: _serviceName,
+        serviceVersion: _serviceVersion,
+        resource: resource,
+      ) as TracerProvider;
+      _privateLoggerProvider!.addLogRecordProcessor(logProcessor);
+      _privateTracerProvider!
+        ..sampler = ParentBasedSampler(const AlwaysOnSampler())
+        ..addSpanProcessor(spanProcessor);
+    } else {
+      OTelLog.logFunction =
+          _options.debug ? (message) => debugPrint('Traceway: $message') : null;
       await OTel.initialize(
         serviceName: _serviceName,
         serviceVersion: _serviceVersion,
         tracerName: tracewaySdkName,
         tracerVersion: tracewaySdkVersion,
-        resourceAttributes: OTel.attributesFromMap(
-            Map<String, Object>.from(_resourceAttributes)),
+        resourceAttributes: OTel.attributesFromMap(_resourceAttributes),
         spanProcessor: spanProcessor,
         logRecordProcessor: logProcessor,
         enableMetrics: false,
@@ -650,16 +689,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         spanKind: SpanKind.client,
       );
       _ownsOTel = true;
-    } on StateError {
-      // The app already runs the OpenTelemetry SDK: join its providers
-      // instead of replacing them.
-      OTelLog.logFunction = previousLog;
-      OTel.tracerProvider().addSpanProcessor(spanProcessor);
-      OTel.loggerProvider().addLogRecordProcessor(logProcessor);
     }
-    _logger = OTel.loggerProvider()
+    _logger = (_privateLoggerProvider ?? OTel.loggerProvider())
         .getLogger(tracewaySdkName, version: tracewaySdkVersion);
-    _tracer = OTel.tracerProvider()
+    _tracer = (_privateTracerProvider ?? OTel.tracerProvider())
         .getTracer(tracewaySdkName, version: tracewaySdkVersion);
   }
 
@@ -881,7 +914,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
   }
 
-  static const String _memoryKey = 'metricsMemory';
+  late final String _memoryKey = 'metricsMemory:${_routes.metrics.key}';
 
   /// The process may be killed in the background: what the session used so
   /// far is kept, and observed when the session is known to have ended.
@@ -1020,7 +1053,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   static const int _maxRequestSpans = 256;
 
   bool _isOwnRequest(String url) =>
-      _endpoints?.isOwn(url) == true || _routes.isOwn(url);
+      _endpoints?.isOwn(url) == true ||
+      _routes.isOwn(url) ||
+      _legacyReports?.destination?.url == url;
 
   /// The W3C `traceparent` to send with a request to [url], or null when
   /// [TracewayOptions.propagateTraceHeaderUrls] does not select it. Starts
@@ -1152,6 +1187,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       await _logSink?.forceFlush();
       await _logExporter?.forceFlush();
       await _metrics.flush();
+      await _legacyReports?.drain();
       await _outbox?.drain();
       await _tracewayOutbox?.drain();
       await _persistBuffer();
@@ -1192,8 +1228,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       if (_ownsOTel) {
         await OTel.shutdown();
       } else {
-        await _logSink?.shutdown();
-        await _spanSink?.shutdown();
+        await _privateLoggerProvider?.shutdown();
+        await _privateTracerProvider?.shutdown();
       }
     } catch (_) {}
     // After the processors' last export: a batch that fails then is still
@@ -1274,7 +1310,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   void _onSessionStart(SessionInfo session, bool resumed) {
     // What an earlier session left behind is not this one's context.
-    if (!resumed) _persisted?.restored.clear();
+    if (!resumed) {
+      _buffer.clear();
+      _persisted?.restored.clear();
+    }
     _triggers.resetSession();
     final limits = _store.get('triggerLimits');
     if (limits is Map && limits['sessionId'] == session.id) {
@@ -1900,6 +1939,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void _flushSoon() {
     _flushTimer ??= Timer(const Duration(milliseconds: 100), () {
       _flushTimer = null;
+      unawaited((_tracewayOutbox ?? _outbox)?.drain());
       unawaited(_logSink?.forceFlush());
       unawaited(_spanSink?.forceFlush());
     });
@@ -1912,6 +1952,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (state == AppLifecycleState.resumed) {
       _sessions?.markActivity();
       unawaited(_opamp?.poll());
+      unawaited(_legacyReports?.drain());
       unawaited(_outbox?.drain());
       unawaited(_tracewayOutbox?.drain());
     } else if (state == AppLifecycleState.paused ||
@@ -1925,6 +1966,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       }
       _saveTriggerProgress(now: true);
       unawaited(_persistBuffer());
+      unawaited((_tracewayOutbox ?? _outbox)?.drain());
       unawaited(_logSink?.forceFlush());
       unawaited(_spanSink?.forceFlush());
       unawaited(_store.flush());

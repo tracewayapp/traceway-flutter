@@ -1,4 +1,11 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+
 import '../traceway_telemetry.dart';
+
+String destinationDigest(List<String> parts) =>
+    sha256.convert(utf8.encode(jsonEncode(parts))).toString();
 
 /// Where one OTLP signal is sent, and with which headers.
 class OtlpDestination {
@@ -13,7 +20,19 @@ class OtlpDestination {
   /// Identifies the destination, for state kept per destination (queued
   /// batches, pending metrics), so a changed receiver is never sent what
   /// was meant for the previous one.
-  String get key => external ? 'ext:$url' : url;
+  String get key {
+    final normalized = {
+      for (final e in headers.entries) e.key.toLowerCase(): e.value
+    };
+    return destinationDigest([
+      external ? 'collector' : 'traceway',
+      url,
+      for (final name in normalized.keys.toList()..sort()) ...[
+        name,
+        normalized[name]!
+      ],
+    ]);
+  }
 }
 
 class TracewayEndpoints {

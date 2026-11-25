@@ -737,8 +737,16 @@ void main() {
         'a session that ended while the app was not running reports its peak memory',
         () async {
       final dir = await Directory.systemTemp.createTemp('traceway_memory');
-      await File('${dir.path}/state.json').writeAsString(jsonEncode({
-        'metricsMemory': {'s': 'killed-session', 'b': 123456789},
+      final initial = await startHarness(stateDirectory: dir);
+      await initial.client.shutdown();
+      final saved = File('${dir.path}/state.json');
+      final previous =
+          jsonDecode(await saved.readAsString()) as Map<String, dynamic>;
+      final memoryKey =
+          previous.keys.singleWhere((key) => key.startsWith('metricsMemory:'));
+      await saved.writeAsString(jsonEncode({
+        'destination': previous['destination'],
+        memoryKey: {'s': 'killed-session', 'b': 123456789},
       }));
       final h = await startHarness(stateDirectory: dir);
       await h.client.flush();
@@ -755,8 +763,8 @@ void main() {
       await h.client.flush();
       final state =
           jsonDecode(await File('${dir.path}/state.json').readAsString());
-      expect(state['metricsMemory']['s'], h.client.currentSessionId);
-      expect(state['metricsMemory']['b'], greaterThan(0));
+      expect(state[memoryKey]['s'], h.client.currentSessionId);
+      expect(state[memoryKey]['b'], greaterThan(0));
       await TracewayClient.resetForTest();
       await dir.delete(recursive: true);
     });

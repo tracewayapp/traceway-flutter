@@ -6,7 +6,9 @@ import 'dart:io';
 /// uid, the last applied remote config and the current session. One JSON
 /// file; with no directory it only lives in memory.
 class StateStore {
-  StateStore(this._directory);
+  StateStore(this._directory, {this.destination});
+
+  final String? destination;
 
   final Directory? _directory;
   Map<String, dynamic> _values = {};
@@ -14,6 +16,7 @@ class StateStore {
   /// Whether values outlive this run.
   bool get persistent => _directory != null;
   Timer? _writeTimer;
+  Future<void> _saving = Future.value();
 
   File? get _file {
     final directory = _directory;
@@ -28,7 +31,9 @@ class StateStore {
     try {
       if (await file.exists()) {
         final decoded = jsonDecode(await file.readAsString());
-        if (decoded is Map) _values = decoded.cast<String, dynamic>();
+        if (decoded is Map && decoded['destination'] == destination) {
+          _values = decoded.cast<String, dynamic>();
+        }
       }
     } catch (_) {
       _values = {};
@@ -46,18 +51,22 @@ class StateStore {
     _writeTimer ??= Timer(const Duration(milliseconds: 250), flush);
   }
 
-  Future<void> flush() async {
+  Future<void> flush() {
     _writeTimer?.cancel();
     _writeTimer = null;
     final file = _file;
-    if (file == null) return;
-    try {
-      await file.parent.create(recursive: true);
-      final tmp = File('${file.path}.tmp');
-      await tmp.writeAsString(jsonEncode(_values));
-      await tmp.rename(file.path);
-    } catch (_) {
-      // State is a convenience; losing it only costs a fresh id or config.
-    }
+    if (file == null) return _saving;
+    final body = jsonEncode(
+        {..._values, if (destination != null) 'destination': destination});
+    return _saving = _saving.then((_) async {
+      try {
+        await file.parent.create(recursive: true);
+        final tmp = File('${file.path}.${destination ?? ''}.tmp');
+        await tmp.writeAsString(body);
+        await tmp.rename(file.path);
+      } on FileSystemException {
+        // State is a convenience; losing it only costs a fresh id or config.
+      }
+    });
   }
 }
