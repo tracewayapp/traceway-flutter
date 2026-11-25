@@ -8,6 +8,10 @@ import 'package:traceway/src/core/matcher.dart' as m;
 import 'package:traceway/src/core/merge.dart';
 import 'package:traceway/src/core/settings.dart';
 import 'package:traceway/src/core/trigger_engine.dart';
+import 'package:traceway/src/traceway_client.dart';
+import 'package:traceway/src/traceway_options.dart';
+
+import 'support.dart';
 
 ObservedEvent event(int timeMs, Map<String, Object?> fields,
         {String? sequence}) =>
@@ -384,6 +388,28 @@ void main() {
       expect(engine.progressVersion, isNot(before));
     });
 
+    test('a snapshot does not change with later progress', () {
+      final counted = parseTrigger({
+        'id': 'burst',
+        'steps': [
+          {'match': named('a')},
+          {'match': named('err'), 'count': 5, 'periodSeconds': 1},
+        ],
+        'actions': [
+          {'type': 'emit', 'eventName': 'x'}
+        ],
+      });
+      final engine = TriggerEngine()..setTriggers([counted]);
+      engine.observe(event(0, {'event.name': 'a'}));
+      engine.observe(event(100, {'event.name': 'err'}));
+      final snapshot = engine.snapshotProgress();
+      final saved = jsonEncode(snapshot);
+      for (var t = 2000; t < 2600; t += 100) {
+        engine.observe(event(t, {'event.name': 'err'}));
+      }
+      expect(jsonEncode(snapshot), saved);
+    });
+
     test('fire counts survive a restart within the session', () {
       final once = parseTrigger({
         'id': 'once',
@@ -402,6 +428,49 @@ void main() {
           jsonDecode(jsonEncode(first.snapshotSessionLimits())));
       expect(next.observe(event(1, {'event.name': 'a'})), isEmpty);
       expect(next.skipped['once'], 'session_clip_limit');
+    });
+  });
+
+  group('progress on the device', () {
+    tearDown(TracewayClient.resetForTest);
+
+    test('a new config does not bring back progress of a trigger that fired',
+        () async {
+      final trigger = {
+        'id': 'a-then-b',
+        'steps': [
+          {'match': named('step_a')},
+          {'match': named('step_b')},
+        ],
+        'actions': [
+          {'type': 'emit', 'eventName': 'x'}
+        ],
+      };
+      Map<String, dynamic> settings = {
+        'triggers': [trigger]
+      };
+      var hash = [1];
+      final h = await startHarness(
+        options: const TracewayOptions(),
+        handler: (request) async => request.url.path.endsWith('/opamp')
+            ? opampConfig(settings, hash)
+            : null,
+      );
+      await h.client.refreshConfig();
+      h.client.track('step_a');
+      h.client.track('step_b');
+      settings = {
+        'triggers': [trigger],
+        'buffer': {'maxAgeSeconds': 300},
+      };
+      hash = [2];
+      await h.client.refreshConfig();
+      h.client.track('step_b');
+      await h.client.flush();
+      expect(
+          h.named('traceway.trigger.fired')
+              .where((r) => attr(r, 'traceway.trigger.id') == 'a-then-b'),
+          hasLength(1));
     });
   });
 }

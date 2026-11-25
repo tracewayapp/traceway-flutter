@@ -9,20 +9,40 @@ final RegExp _uuid = RegExp(
 final RegExp _hex = RegExp(r'^[0-9a-f]{8,}$', caseSensitive: false);
 final RegExp _token = RegExp(r'^[A-Za-z0-9_\-=.~]{20,}$');
 final RegExp _digit = RegExp(r'\d');
+// A percent-encoded ASCII character (a space, a slash, a brace) is a value
+// somebody typed, never a route literal. Encoded UTF-8 bytes (%C3%A9) stay.
+final RegExp _encodedAscii = RegExp(r'%[0-7][0-9a-f]', caseSensitive: false);
 
 bool _isId(String segment) {
   if (_number.hasMatch(segment) || _uuid.hasMatch(segment)) return true;
+  if (_encodedAscii.hasMatch(segment)) return true;
   if (!_digit.hasMatch(segment)) return false;
   return _hex.hasMatch(segment) || _token.hasMatch(segment);
 }
 
+/// Where the query string or fragment begins, or -1. In a route template a
+/// `?` ends an optional parameter (`/:lang?/about`) and is kept.
+int _queryStart(String path) {
+  for (var i = 0; i < path.length; i++) {
+    if (path[i] == '#') return i;
+    if (path[i] != '?') continue;
+    final segment = i == 0 ? 0 : path.lastIndexOf('/', i - 1) + 1;
+    final optionalParam =
+        path[segment] == ':' && i + 1 < path.length && path[i + 1] == '/';
+    if (!optionalParam) return i;
+  }
+  return -1;
+}
+
 /// Turns a route path into something close to its template, so
 /// `/orders/8841` and `/orders/8842` are one series: segments that are
-/// numbers, UUIDs, or long hex or token strings become `:id`. The same rules
+/// numbers, UUIDs, long hex or token strings, or that carry a
+/// percent-encoded ASCII character become `:id`. The same rules
 /// as the browser SDK and the server (`backend/app/clientmetrics/route.go`).
 String normalizePath(String path) {
-  final clean =
-      path.split(RegExp('[?#]')).first.replaceFirst(RegExp(r'/+$'), '');
+  final end = _queryStart(path);
+  final clean = (end < 0 ? path : path.substring(0, end))
+      .replaceFirst(RegExp(r'/+$'), '');
   if (clean.isEmpty) return '/';
   final segments = clean.split('/').where((s) => s.isNotEmpty).toList();
   var truncated = segments.length > _maxSegments;

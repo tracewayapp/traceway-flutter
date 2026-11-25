@@ -3,8 +3,10 @@ import 'dart:io';
 
 import 'package:dartastic_opentelemetry/proto/opentelemetry_proto_dart.dart'
     as proto;
+import 'package:dartastic_opentelemetry/testing.dart' show InMemoryLogExporter;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:traceway/src/core/settings.dart';
 import 'package:traceway/src/events/traceway_event.dart';
 import 'package:traceway/src/persistence/buffer_persistence.dart';
@@ -130,6 +132,23 @@ void main() {
       await h.client.flush();
       expect(h.named('exception'), isEmpty);
       expect(h.named('traceway.message'), isEmpty);
+    });
+
+    test('an error that is not sampled uploads no breadcrumbs and no clip',
+        () async {
+      final h = await startHarness(
+          options: const TracewayOptions(
+              remoteConfig: false, sampleRate: 0, screenCapture: true));
+      final source = FakeReplaySource();
+      h.client.replaySource = source;
+      breadcrumbs(h.client);
+      h.client.captureException(StateError('x'));
+      await h.client.flush();
+      expect(h.named('exception'), isEmpty);
+      expect(h.named('traceway.action'), isEmpty);
+      expect(h.named('traceway.trigger.fired'), isEmpty);
+      expect(source.captures, isEmpty);
+      expect(h.client.bufferedCount, greaterThan(0));
     });
 
     test('capture flags are ceilings', () async {
@@ -556,6 +575,26 @@ void main() {
   });
 
   group('remote config', () {
+    test('attribute values are clipped to the bytes the server keeps', () async {
+      final h = await startHarness(options: const TracewayOptions());
+      h.client.setAttribute('note', 'é' * 600);
+      await h.client.refreshConfig();
+      final body = h.requestsTo('/opamp').last.bodyBytes;
+      bool contains(List<int> needle) {
+        for (var i = 0; i + needle.length <= body.length; i++) {
+          var j = 0;
+          while (j < needle.length && body[i + j] == needle[j]) {
+            j++;
+          }
+          if (j == needle.length) return true;
+        }
+        return false;
+      }
+
+      expect(contains(utf8.encode('é' * 512)), isTrue);
+      expect(contains(utf8.encode('é' * 513)), isFalse);
+    });
+
     test('is applied, reported back and cached for the next start', () async {
       final dir = Directory.systemTemp.createTempSync('traceway_test');
       addTearDown(() => dir.deleteSync(recursive: true));
@@ -699,6 +738,35 @@ void main() {
       final again = TracewayClient.initialize(
           connectionString, const TracewayOptions(remoteConfig: false));
       expect(again, same(h.client));
+    });
+
+    test('records from before the start keep the session start and errors',
+        () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_early');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final logs = InMemoryLogExporter();
+      final starting = TracewayClient.initializeForTest(
+        connectionString,
+        const TracewayOptions(remoteConfig: false, captureMetrics: false),
+        overrides: TracewayTestOverrides(
+          logExporter: logs,
+          httpClient: MockClient((_) async => http.Response('{}', 200)),
+          stateDirectory: dir,
+        ),
+      );
+      TracewayClient? client;
+      while ((client = TracewayClient.instance) == null) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      for (var i = 0; i < 600; i++) {
+        client!.recordLog('chatty startup line $i');
+      }
+      client!.captureException(StateError('early'));
+      await starting;
+      await client.flush();
+      final names = logs.records.map((r) => r.eventName).toList();
+      expect(names, contains('session.start'));
+      expect(names, contains('exception'));
     });
 
     test('shutdown ends the session and allows a fresh start', () async {

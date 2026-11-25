@@ -33,6 +33,15 @@ void main() {
       expect(e.isOwn('https://host/api/recordings'), isTrue);
       expect(e.isOwn('https://host/api/users'), isFalse);
     });
+
+    test('recognises its own requests whatever the case of the host or a default port', () {
+      // Request URLs are Uri strings: the host lowercased, the default port left out.
+      for (final url in ['https://Traceway.Test/api/report', 'https://traceway.test:443']) {
+        final e = resolveEndpoints(url);
+        expect(e.isOwn('https://traceway.test/api/otel/v1/logs'), isTrue, reason: url);
+        expect(e.isOwn('https://traceway.test/api/recordings'), isTrue, reason: url);
+      }
+    });
   });
 
   group('ids', () {
@@ -111,6 +120,12 @@ void main() {
       expect(m('resource.service.version', 'version', value: '>=2.1 <3'),
           isTrue);
       expect(m('resource.service.version', 'version', value: '<2.3'), isFalse);
+    });
+
+    test('a version part too long for an int is not a version, as on the server', () {
+      expect(satisfiesVersion('1.99999999999999999999', '>=1'), isFalse);
+      expect(satisfiesVersion('2.0', '>=1.99999999999999999999'), isFalse);
+      expect(compareVersions('12345678901234567890', '1'), isNull);
     });
 
     test('all, any and not combine', () {

@@ -89,17 +89,22 @@ class TriggerEngine {
 
   List<Trigger> get triggers => _triggers;
 
-  void setTriggers(List<Trigger> triggers) {
+  /// Returns the ids of the triggers that start without progress: new ones,
+  /// and ones whose steps or actions changed.
+  Set<String> setTriggers(List<Trigger> triggers) {
     _triggers = triggers
         .where((t) =>
             t.enabled != false && t.steps.isNotEmpty && t.actions.isNotEmpty)
         .toList();
     final next = <String, _TriggerState>{};
+    final created = <String>{};
     for (final trigger in _triggers) {
       final signature = trigger.signature;
       final prev = _states[trigger.id];
       final limits = sessionLimits[trigger.id];
-      next[trigger.id] = prev != null && prev.signature == signature
+      final kept = prev != null && prev.signature == signature;
+      if (!kept) created.add(trigger.id);
+      next[trigger.id] = kept
           ? prev
           : _TriggerState(
               signature,
@@ -111,6 +116,7 @@ class TriggerEngine {
     }
     _states = next;
     progressVersion++;
+    return created;
   }
 
   /// The progress of every trigger under way, as JSON, to continue it after
@@ -130,17 +136,19 @@ class TriggerEngine {
                       for (final a in step.anchors)
                         [a.at, max(0, a.from - step.base)]
                     ],
-                    'hits': step.hits,
+                    'hits': List.of(step.hits),
                   }
               ],
             }
       ];
 
-  void restoreProgress(Object? saved, [int? nowMs]) {
+  /// [only] limits the restore to those trigger ids.
+  void restoreProgress(Object? saved, [int? nowMs, Set<String>? only]) {
     if (saved is! List) return;
     final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
     for (final item in saved.take(20)) {
       if (item is! Map || item['v'] != 2) continue;
+      if (only != null && !only.contains(item['id'])) continue;
       final state = _states[item['id']];
       Trigger? trigger;
       for (final t in _triggers) {

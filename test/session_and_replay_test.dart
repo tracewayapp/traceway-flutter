@@ -160,6 +160,22 @@ void main() {
       expect(transport.pending, 0);
     });
 
+    test('keeps at most maxQueuedBytes waiting, dropping the oldest', () async {
+      final transport = RecordingsTransport(
+        url: 'https://h/api/recordings',
+        token: 'tok',
+        maxQueuedBytes: 10,
+        httpClient: MockClient((_) async => http.Response('{}', 200)),
+      );
+      for (var i = 0; i < 5; i++) {
+        transport.send([segment()]);
+      }
+      expect(transport.pending, 2);
+      expect(transport.failedSegments, 3);
+      await transport.flush();
+      expect(transport.sentSegments, 2);
+    });
+
     test('gives up after the retry budget, and at once on a permanent error',
         () async {
       var calls = 0;
@@ -271,7 +287,8 @@ void main() {
       expect(segments().single['exceptionId'], 'e1');
     });
 
-    test('clips of one session never overlap', () async {
+    test('clips of one session never overlap, and every exception gets its window',
+        () async {
       final source = FakeReplaySource();
       final c = controller()
         ..attach(source)
@@ -281,9 +298,16 @@ void main() {
       now = now.add(const Duration(seconds: 5));
       c.flush(30000, 'e2');
       await c.drain();
-      expect(source.captures[1].since, first);
-      expect(source.captures[1].until, now);
-      expect(segments().map((s) => s['segmentIndex']), [0, 1]);
+      final windows = {
+        for (final capture in source.captures)
+          capture.clipId: (capture.since, capture.until)
+      };
+      expect(windows['e2'], (now.subtract(const Duration(seconds: 30)), now));
+      expect(windows['s1_1'], (first, now));
+      final session = segments().where((s) => s['sessionId'] == 's1').toList();
+      expect(session.map((s) => s['segmentIndex']), [0, 1]);
+      final clip = segments().singleWhere((s) => s['exceptionId'] == 'e2');
+      expect(clip.containsKey('sessionId'), isFalse);
     });
 
     test('stream uploads consecutive segments that start where the last ended',
@@ -394,7 +418,7 @@ void main() {
         ..apply(Mode.buffer, maxAgeMs: 600000);
       for (var i = 0; i < 4; i++) {
         c.flush(30000, 'e$i');
-        now = now.add(const Duration(seconds: 1));
+        now = now.add(const Duration(seconds: 60));
         await c.drain();
       }
       expect(segments(), hasLength(2));

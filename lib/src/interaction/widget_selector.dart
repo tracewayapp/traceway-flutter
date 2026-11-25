@@ -425,6 +425,7 @@ String? _labelBelow(Element element) {
     if (count != 1) return null;
     current = only;
     final widget = current!.widget;
+    if (widget is TracewayPrivacyMask) return null;
     if (widget is Semantics) {
       final label = _semanticLabel(widget);
       if (label != null) return label;

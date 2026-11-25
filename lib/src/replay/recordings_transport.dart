@@ -33,23 +33,35 @@ class RecordingSegment {
 }
 
 class _Batch {
-  _Batch(this.segments);
+  _Batch(this.segments) {
+    for (final segment in segments) {
+      for (final event in segment.events) {
+        final data = event['data'];
+        if (data is String) bytes += data.length;
+      }
+    }
+  }
   final List<RecordingSegment> segments;
+  int bytes = 0;
   int attempts = 0;
 }
 
 const List<int> _defaultRetryDelaysMs = [5000, 30000, 120000];
 const Set<int> _permanentFailures = {400, 401, 403, 404, 413, 422};
+const int _defaultMaxQueuedBytes = 10 * 1024 * 1024;
 
 /// Sends replay clips to the dedicated, non-OpenTelemetry recordings
 /// endpoint. Failed batches are retried a few times with growing delays and
 /// then dropped, so a server that keeps rejecting them cannot grow memory.
+/// What waits is bounded by [maxQueuedBytes] too: a device that streams
+/// while offline drops its oldest segments.
 class RecordingsTransport {
   RecordingsTransport({
     required this.url,
     required this.token,
     http.Client? httpClient,
     List<int>? retryDelaysMs,
+    this.maxQueuedBytes = _defaultMaxQueuedBytes,
   })  : _http = httpClient ?? http.Client(),
         _retryDelaysMs = retryDelaysMs ?? _defaultRetryDelaysMs;
 
@@ -57,7 +69,9 @@ class RecordingsTransport {
   final String token;
   final http.Client _http;
   final List<int> _retryDelaysMs;
+  final int maxQueuedBytes;
   final List<_Batch> _queue = [];
+  int _queuedBytes = 0;
   Timer? _timer;
   Future<void>? _inFlight;
   int _generation = 0;
@@ -69,13 +83,21 @@ class RecordingsTransport {
 
   void send(List<RecordingSegment> segments) {
     if (segments.isEmpty) return;
-    _queue.add(_Batch(segments));
+    final batch = _Batch(segments);
+    _queue.add(batch);
+    _queuedBytes += batch.bytes;
+    while (_queuedBytes > maxQueuedBytes && _queue.length > 1) {
+      final dropped = _queue.removeAt(0);
+      _queuedBytes -= dropped.bytes;
+      failedSegments += dropped.segments.length;
+    }
     _schedule(0);
   }
 
   void discard() {
     _generation++;
     _queue.clear();
+    _queuedBytes = 0;
     _timer?.cancel();
     _timer = null;
   }
@@ -102,11 +124,13 @@ class RecordingsTransport {
     final future = () async {
       while (_queue.isNotEmpty) {
         final batch = _queue.removeAt(0);
+        _queuedBytes -= batch.bytes;
         final generation = _generation;
         final retryAfterMs = await _post(batch);
         if (generation != _generation) continue;
         if (retryAfterMs != null) {
           _queue.insert(0, batch);
+          _queuedBytes += batch.bytes;
           _schedule(retryAfterMs);
           return;
         }

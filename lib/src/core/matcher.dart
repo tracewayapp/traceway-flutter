@@ -29,7 +29,8 @@ final RegExp _versionPattern = RegExp(r'^v?(\d+(?:\.\d+)*)');
 List<int>? _versionParts(String version) {
   final match = _versionPattern.firstMatch(version.trim());
   if (match == null) return null;
-  return match.group(1)!.split('.').map(int.parse).toList();
+  final parts = match.group(1)!.split('.').map(int.tryParse).toList();
+  return parts.contains(null) ? null : parts.cast<int>();
 }
 
 int? compareVersions(String a, String b) {

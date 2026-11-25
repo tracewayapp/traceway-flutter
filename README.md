@@ -477,6 +477,21 @@ TracewayPrivacyMask(
 
 This replaces the region with a solid color (black by default) in the recording.
 
+## Android build setup
+
+The screen recorder's encoder plugin, `flutter_quick_video_encoder` 1.7.2, declares `compileSdk` 33, while the AndroidX libraries of current Flutter versions need 34. With a current Flutter template (seen with Flutter 3.50 and Android Gradle Plugin 9.3) `flutter build apk` stops with `:flutter_quick_video_encoder is currently compiled against android-33`. Raise it in `android/build.gradle.kts`, above the `subprojects { project.evaluationDependsOn(":app") }` block, as `example/android/build.gradle.kts` does:
+
+```kotlin
+// The encoder 1.7.2 declares API 33; the AndroidX libraries it builds with need 34.
+project(":flutter_quick_video_encoder") {
+    plugins.withId("com.android.library") {
+        extensions.getByType<com.android.build.api.variant.LibraryAndroidComponentsExtension>().finalizeDsl {
+            it.compileSdk = maxOf(it.compileSdk ?: 0, 34)
+        }
+    }
+}
+```
+
 ## Platform Support
 
 | Platform | Error Tracking | Screen Recording |
@@ -491,7 +506,17 @@ For Flutter web, use the JS SDK instead — see [Flutter Web](#flutter-web) belo
 
 ## Performance
 
-> These numbers were measured on 1.x. The capture path (frames, encoding) is unchanged in 2.0, but the transport is new and has not been re-benchmarked yet.
+### 2.0
+
+Measured with Flutter 3.50 on Android 14 (an x86_64 container with software rendering, so ratios matter more than absolute times):
+
+- **App size**: a release arm64 APK grows by 1.77 MB (1.0.9: 0.98 MB). The SDK is 313 KB of Dart code, `protobuf` 120 KB and the OpenTelemetry SDK for Dart 160 KB.
+- **Network**: about 40 KB an hour while idle (an OpAMP poll of 1.1 KB and a metrics upload of 0.5–0.7 KB every five minutes, headers included); breadcrumbs cost nothing until an error. An exception sends about 4.5 KB plus its clip, 10–280 KB on a UI and about 1.3 MB on a screen playing video.
+- **Performance**, profile build of the benchmark below with app vitals running, median over the ten workloads: without screen capture, build and raster times and wall clock are within noise of the app without the SDK. With screen capture, raster time p90 is ×1.23 and RSS +23 MB; bursts of exceptions take ×1.3 as long while their clips encode. Capturing an exception takes 0.2–1.1 ms.
+
+### 1.x
+
+> The numbers below were measured on 1.x. The capture path (frames, encoding) is unchanged in 2.0.
 
 Measured on Firebase Test Lab — Pixel 5 (API 30), Pixel 6 (API 33), Pixel 8 (API 34), iPhone 8 / 14 Pro / 16 Pro across 10 workloads (idle, scroll, navigation, video playback, exception bursts, and combinations) for each of four configs: no SDK, SDK loaded but idle, SDK actively recording, and SDK recording with disk persistence. Full benchmark harness lives in [`example/integration_test/`](example/integration_test/) and runs as a GitHub Action — re-run it on your own device tier any time.
 
@@ -531,6 +556,7 @@ To deliver unsent 1.x errors and their clips, set `TracewayOptions(legacyConnect
 - **Connection string**: unchanged. `token@https://host/api/report` still works, as does `token@https://host`; the other endpoints are derived from it. It is now optional: without it the SDK runs [standalone](#standalone-without-a-traceway-server).
 - **Behaviour**: logs and actions are no longer limited to the last 10 seconds and no longer travel inside the recording. They are buffered for up to 10 minutes and sent as their own records with an exception. `captureMessage` no longer attaches a screen recording.
 - **Removed options**: `debounceMs`, `retryDelayMs`, `maxPendingExceptions`, `maxLocalFiles`, `localFileMaxAgeHours`, `eventsWindow`, `eventsMaxCount`.
+- **Removed API**: the 1.x transport methods of `TracewayClient` (`addException`, `loadPendingFromDisk`, `pendingExceptions`, `pendingRecordings`, `bufferedEvents`, `collectDeviceInfo`, `collectSyncDeviceInfo`, `setDeviceAttributes`) and the `ReportSender` export. Use `captureException`, `Traceway.setAttribute` and `flush()`. `TracewayClient.initialize` returns the running client instead of replacing it: call `shutdown()` and wait for it before initializing with another connection string.
 - **New API**: `Traceway.track`, `Traceway.setAttribute`, `Traceway.recordNavigation`, `Traceway.reportFullyDisplayed`, `Traceway.metric`, `Traceway.count`, `Traceway.setMetricDimension`, `TracewayTelemetry` and `TracewayTelemetryEndpoint`, `TracewayClient.refreshConfig`, `shutdown`, `getInstanceId`. New options include `telemetry`, `propagateTraceHeaderUrls`, `collection`, `captureUserActions`, `captureMetrics` and `recordAllSessions`.
 - **OpenTelemetry**: the SDK initializes the global `OTel` instance of `dartastic_opentelemetry`. If your app already initializes OpenTelemetry, Traceway creates separate log and trace providers for its installation. The app keeps its own exporters and can continue tracing after Traceway shuts down.
 

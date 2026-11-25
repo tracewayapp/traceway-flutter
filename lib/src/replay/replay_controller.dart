@@ -160,19 +160,19 @@ class ReplayController {
     if (session != null && cursor != null && cursor.isAfter(from)) {
       from = cursor;
     }
-    if (!source.hasFrames(since: from, until: until)) {
-      if (!hasException || !source.hasFrames(since: since, until: until)) {
-        return false;
-      }
-      // Everything in the window already went up with the session: the
-      // exception still gets its clip, outside the session.
+    var clipped = false;
+    if (hasException && from != since) {
+      // Part of the window already went up with the session: the exception
+      // still gets a clip of the whole window, outside the session.
+      if (!source.hasFrames(since: since, until: until)) return false;
       _encode(since: since, until: until, exceptionId: exceptionId);
-      return true;
+      clipped = true;
     }
+    if (!source.hasFrames(since: from, until: until)) return clipped;
     _encode(
       since: from,
       until: until,
-      exceptionId: hasException ? exceptionId : null,
+      exceptionId: hasException && !clipped ? exceptionId : null,
       session: session,
       index: session == null ? null : nextSegmentIndex(),
     );
@@ -212,6 +212,9 @@ class ReplayController {
     final source = _source!;
     segmentsQueued++;
     final clipId = exceptionId ?? '${session}_$index';
+    // An exception's clip outside the session still counts against the
+    // budget of the session it happened in.
+    final budgetSession = session ?? sessionId();
     final recording = source.captureRecording(clipId, since: since, until: until);
     final future = () async {
       try {
@@ -222,7 +225,7 @@ class ReplayController {
           final data = event['data'];
           bytes += data is String ? data.length : 0;
         }
-        if (!budget.admit(session, bytes, clip.events.length)) return;
+        if (!budget.admit(budgetSession, bytes, clip.events.length)) return;
         transport.send([
           RecordingSegment(
             exceptionId: exceptionId,

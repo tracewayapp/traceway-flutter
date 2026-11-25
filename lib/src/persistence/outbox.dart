@@ -113,6 +113,11 @@ class Outbox {
           destinations.values.every((d) => !d.external);
       for (final file in dir.listSync(followLinks: false).whereType<File>()) {
         final name = file.uri.pathSegments.last;
+        if (name.endsWith('.pb.tmp')) {
+          // Left half written by a crash before its rename.
+          file.deleteSync();
+          continue;
+        }
         if (!name.endsWith('.pb') || name.startsWith('$destinationKey-')) {
           continue;
         }

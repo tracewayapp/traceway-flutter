@@ -1,14 +1,18 @@
+import 'dart:ui' show ErrorCallback;
+
 import 'package:flutter/foundation.dart';
 
 import 'traceway_client.dart';
 
 class ErrorHandler {
   FlutterExceptionHandler? _previousFlutterErrorHandler;
+  ErrorCallback? _previousPlatformErrorHandler;
 
   void install() {
     _previousFlutterErrorHandler = FlutterError.onError;
     FlutterError.onError = _handleFlutterError;
 
+    _previousPlatformErrorHandler = PlatformDispatcher.instance.onError;
     PlatformDispatcher.instance.onError = _handlePlatformError;
   }
 
@@ -25,7 +29,7 @@ class ErrorHandler {
 
   bool _handlePlatformError(Object error, StackTrace stackTrace) {
     _captureError(error, stackTrace);
-    return true;
+    return _previousPlatformErrorHandler?.call(error, stackTrace) ?? true;
   }
 
   void handleZoneError(Object error, StackTrace stackTrace) {

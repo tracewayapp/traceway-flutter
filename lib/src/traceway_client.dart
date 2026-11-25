@@ -48,6 +48,15 @@ const int _maxErrorsPerMinute = 60;
 const int _duplicateErrorWindowMs = 1000;
 const int _maxGlobalAttributes = 64;
 
+/// Kept while the SDK starts even when breadcrumbs filled the queue.
+const Set<String> _keptBeforeReady = {
+  eventException,
+  eventMessage,
+  eventSessionStart,
+  eventSessionEnd,
+  eventSessionUpdate,
+};
+
 /// Replaces the parts of the SDK that touch the platform or the network, so
 /// tests can run it against in-memory exporters and a fake server.
 @visibleForTesting
@@ -1241,8 +1250,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   // ------------------------------------------------------------- emission
 
-  void _queue(void Function() emit) {
-    if (_pending.length < _maxPendingBeforeReady) _pending.add(emit);
+  /// Breadcrumbs take at most [_maxPendingBeforeReady] places, so a chatty
+  /// start cannot crowd out errors and session records ([keep]).
+  void _queue(void Function() emit, {bool keep = false}) {
+    final limit =
+        keep ? 2 * _maxPendingBeforeReady : _maxPendingBeforeReady;
+    if (_pending.length < limit) _pending.add(emit);
   }
 
   void _emit({
@@ -1256,14 +1269,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (_shutdown) return;
     final timestamp = time ?? DateTime.now();
     if (!_ready) {
-      _queue(() => _emit(
-            eventName: eventName,
-            severity: severity,
-            severityText: severityText,
-            body: body,
-            attributes: attributes,
-            time: timestamp,
-          ));
+      _queue(
+          () => _emit(
+                eventName: eventName,
+                severity: severity,
+                severityText: severityText,
+                body: body,
+                attributes: attributes,
+                time: timestamp,
+              ),
+          keep: _keptBeforeReady.contains(eventName));
       return;
     }
     final logger = _logger;
@@ -1319,7 +1334,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (limits is Map && limits['sessionId'] == session.id) {
       _triggers.restoreSessionLimits(limits['limits']);
     }
-    _restoreTriggerProgress();
+    // [_sessions] is not assigned yet when the first session starts.
+    _restoreTriggerProgress(session.id);
     _replay.onSessionStart();
     if (_options.captureMetrics) {
       _settleMemoryPeak(session.id);
@@ -1403,6 +1419,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void observe(ObservedRecord observed) {
     if (observed.signal == signalControl) return;
     if (!_control.enabled) return;
+    // An error or message left out by its sample rate is as if it never
+    // happened: it must not upload breadcrumbs or a clip of its own.
+    if (observed.routed == Routed.filtered &&
+        (observed.signal == 'errors' || observed.signal == 'messages')) {
+      return;
+    }
     if (observed.signal == 'navigation' &&
         _sequenceKinds.contains('navigation')) {
       _screenObservedForSequences = true;
@@ -1516,11 +1538,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     });
   }
 
-  void _restoreTriggerProgress() {
+  void _restoreTriggerProgress(String? session, {Set<String>? only}) {
     final saved = _store.get('triggerProgress');
-    final session = _sessions?.currentId;
     if (saved is Map && session != null && saved['sessionId'] == session) {
-      _triggers.restoreProgress(saved['progress']);
+      _triggers.restoreProgress(saved['progress'], null, only);
     }
   }
 
@@ -1837,8 +1858,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (!settings.persist) unawaited(_persisted?.clear());
     final maxAgeMs = (settings.bufferMaxAgeSeconds * 1000).round();
     _buffer.configure(maxBytes: settings.bufferMaxBytes, maxAgeMs: maxAgeMs);
-    _triggers.setTriggers(settings.triggers);
-    _restoreTriggerProgress();
+    // Triggers that were already running keep their progress: what was saved
+    // can be up to two seconds older, and would undo a fire.
+    _restoreTriggerProgress(_sessions?.currentId,
+        only: _triggers.setTriggers(settings.triggers));
     _sequenceKinds = {
       for (final trigger in _triggers.triggers)
         for (final step in trigger.steps) ...eventKinds(step.match),
@@ -1898,8 +1921,18 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     );
   }
 
-  static String _clip(String value) =>
-      value.length > 1024 ? value.substring(0, 1024) : value;
+  /// At most the 1024 UTF-8 bytes the server reads of a value; it ignores
+  /// longer ones.
+  static String _clip(String value) {
+    var bytes = 0;
+    final out = StringBuffer();
+    for (final rune in value.runes) {
+      bytes += utf8.encode(String.fromCharCode(rune)).length;
+      if (bytes > 1024) break;
+      out.writeCharCode(rune);
+    }
+    return out.toString();
+  }
 
   ApplyResult _applyRemoteConfig(RemoteConfig config) {
     final object = config.configMap['traceway'];

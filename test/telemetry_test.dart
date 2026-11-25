@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:dartastic_opentelemetry/proto/opentelemetry_proto_dart.dart'
     as proto;
@@ -666,6 +667,25 @@ void main() {
       expect(file.existsSync(), isFalse);
     });
 
+    test('a batch a crash left half written is removed', () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_telemetry');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final queue = Directory('${dir.path}/outbox')..createSync();
+      final outbox = Outbox(
+        directory: queue,
+        destinations: {
+          'logs': const OtlpDestination(
+              'https://traceway.test/api/otel/v1/logs', {}),
+        },
+      );
+      final partial =
+          File('${queue.path}/${outbox.destinationKey}-1-0.logs.pb.tmp')
+            ..writeAsBytesSync([1, 2, 3]);
+      outbox.claim();
+      outbox.dispose();
+      expect(partial.existsSync(), isFalse);
+    });
+
     test('a queue for another project\'s token is dropped, not sent', () async {
       final dir = Directory.systemTemp.createTempSync('traceway_telemetry');
       addTearDown(() => dir.deleteSync(recursive: true));
@@ -786,5 +806,24 @@ void main() {
       FlutterError.onError = previous;
     }
     expect(reported.single.exception, isStateError);
+  });
+
+  test('the app\'s own platform error handler keeps running', () {
+    final dispatcher = PlatformDispatcher.instance;
+    final previousPlatform = dispatcher.onError;
+    final previousFlutter = FlutterError.onError;
+    addTearDown(() {
+      dispatcher.onError = previousPlatform;
+      FlutterError.onError = previousFlutter;
+    });
+    final seen = <Object>[];
+    dispatcher.onError = (error, stack) {
+      seen.add(error);
+      return false;
+    };
+    ErrorHandler().install();
+    final handled = dispatcher.onError!(StateError('platform'), StackTrace.current);
+    expect(seen.single, isStateError);
+    expect(handled, isFalse);
   });
 }

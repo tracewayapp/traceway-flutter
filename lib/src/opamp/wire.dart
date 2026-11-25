@@ -87,7 +87,7 @@ class Reader {
       if (shift < 63) result |= (byte & 0x7f) << shift;
       if (byte < 0x80) return result;
       shift += 7;
-      if (shift > 70) throw const FormatException('varint too long');
+      if (shift >= 70) throw const FormatException('varint too long');
     }
   }
 
@@ -114,16 +114,23 @@ class Reader {
         varint();
         return;
       case wireFixed64:
-        _pos += 8;
+        _advance(8);
         return;
       case wireLength:
         bytes();
         return;
       case wireFixed32:
-        _pos += 4;
+        _advance(4);
         return;
     }
     throw FormatException('unsupported wire type $wireType');
+  }
+
+  void _advance(int length) {
+    if (_pos + length > _buf.length) {
+      throw const FormatException('truncated field');
+    }
+    _pos += length;
   }
 }
 

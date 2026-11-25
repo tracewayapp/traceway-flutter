@@ -51,12 +51,14 @@ class _NoOpSpanExporter implements SpanExporter {
 /// With a real DSN the SDK talks to the backend. Without one, telemetry is
 /// discarded and replay uploads are measured (the clip is already gzipped,
 /// which is the cost worth tracking) and dropped.
+/// App vitals (frame timings, the hang watchdog, start) run as in an app.
 TracewayTestOverrides _overrides({Directory? stateDirectory}) {
   if (_useRealBackend) {
-    return TracewayTestOverrides(stateDirectory: stateDirectory);
+    return TracewayTestOverrides(stateDirectory: stateDirectory, appVitals: true);
   }
   return TracewayTestOverrides(
     stateDirectory: stateDirectory,
+    appVitals: true,
     logExporter: _NoOpLogExporter(),
     spanExporter: _NoOpSpanExporter(),
     httpClient: MockClient((request) async {

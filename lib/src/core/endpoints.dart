@@ -65,11 +65,14 @@ class TracewayEndpoints {
 /// connection string. Accepts the bare server URL as well as the 1.x form
 /// that ended in `/api/report`, so existing connection strings keep working.
 TracewayEndpoints resolveEndpoints(String apiUrl) {
-  final base = apiUrl
+  final trimmed = apiUrl
       .trim()
       .replaceFirst(RegExp(r'/+$'), '')
       .replaceFirst(RegExp(r'/api/report$'), '')
       .replaceFirst(RegExp(r'/api$'), '');
+  // In the form request URLs take (lowercase host, no default port), so
+  // [TracewayEndpoints.isOwn] recognises the SDK's own requests.
+  final base = trimmed.isEmpty ? trimmed : Uri.parse(trimmed).toString();
   return TracewayEndpoints(
     base: base,
     logs: '$base/api/otel/v1/logs',

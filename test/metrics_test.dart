@@ -263,13 +263,37 @@ void main() {
   });
 
   test('route paths normalize like the server', () {
-    expect(normalizePath('/orders/8841'), '/orders/:id');
-    expect(normalizePath('/users/3f2b8c1e-9f4d-4b1a-8c7e-0123456789ab/edit'),
-        '/users/:id/edit');
-    expect(normalizePath('/search?q=1#top'), '/search');
-    expect(normalizePath(''), '/');
-    expect(normalizePath('/CheckoutPage'), '/CheckoutPage');
-    expect(normalizePath('/a/b/c/d/e/f/g/h'), '/a/b/c/d/e/f/*');
+    // The table of backend/app/clientmetrics/route_test.go.
+    const table = {
+      '/': '/',
+      '': '/',
+      '/orders/8841': '/orders/:id',
+      '/orders/8841/': '/orders/:id',
+      '/orders/8841?x=1#y': '/orders/:id',
+      '/u/3f2b8c1e-9a4d-4c7e-8b1a-2d3e4f5a6b7c/edit': '/u/:id/edit',
+      '/commit/9fceb02d0ae598e9': '/commit/:id',
+      '/reset/dGhpcyBpcyBhIHRva2VuIHZhbHVl0': '/reset/:id',
+      '/products/blue-suede-shoes': '/products/blue-suede-shoes',
+      '/deadbeef': '/deadbeef',
+      '/a/b/c/d/e/f/g/h': '/a/b/c/d/e/f/*',
+      '/search/hello%20world': '/search/:id',
+      '/endpoints/POST%20%2Ftasks%2F%7BtaskId%7D/9fceb02d0ae598e9': '/endpoints/:id/:id',
+      '/caf%C3%A9/menu': '/caf%C3%A9/menu',
+      '/:lang?/about': '/:lang?/about',
+      '/:locale(en|fr)?/products/:slug': '/:locale(en|fr)?/products/:slug',
+      '/users/:id?': '/users/:id',
+      '/orders/8841?/next': '/orders/:id',
+      '/products/:slug()': '/products/:slug()',
+      '/docs/:slug(.*)*': '/docs/:slug(.*)*',
+      '/docs/:slug*': '/docs/:slug*',
+      '/posts/\$postId': '/posts/\$postId',
+      '/posts/[id]': '/posts/[id]',
+      '/CheckoutPage': '/CheckoutPage',
+    };
+    table.forEach((input, want) => expect(normalizePath(input), want, reason: input));
+    final long = normalizePath('/${'segment-that-is-long/' * 8}');
+    expect(long.length, lessThanOrEqualTo(64));
+    expect(long, endsWith('/*'));
   });
 
   group('settings', () {

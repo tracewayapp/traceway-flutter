@@ -318,6 +318,31 @@ void main() {
       expect(target.selector, 'IconButton');
     });
 
+    testWidgets('a mask inside a control hides its label', (tester) async {
+      await tester.pumpWidget(app(Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            onPressed: () {},
+            icon: const TracewayPrivacyMask(
+              child: Icon(Icons.call, semanticLabel: 'Call Ann Smith'),
+            ),
+          ),
+          GestureDetector(
+            onTap: () {},
+            child: const TracewayPrivacyMask(
+              child: Icon(Icons.mail, semanticLabel: 'Mail Ann Smith'),
+            ),
+          ),
+        ],
+      )));
+      for (final icon in [Icons.call, Icons.mail]) {
+        final target = describeTap(pathAt(tester, find.byIcon(icon)))!;
+        expect(target.label, isNull, reason: '$icon');
+        expect(target.selector, isNot(contains('Ann')), reason: '$icon');
+      }
+    });
+
     testWidgets('a tap on plain text names the text', (tester) async {
       await tester.pumpWidget(app(const Text('Hello there')));
       final target = describeTap(pathAt(tester, find.text('Hello there')))!;

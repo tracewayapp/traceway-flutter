@@ -96,6 +96,17 @@ void main() {
       expect(decodeServerToAgent(fromHex('f801073001')).flags, 1);
     });
 
+    test('rejects a message cut off inside a field it skips', () {
+      // Field 31 as fixed32 and fixed64, with fewer bytes than they take.
+      expect(() => decodeServerToAgent(fromHex('fd010000')), throwsFormatException);
+      expect(() => decodeServerToAgent(fromHex('f901000000')), throwsFormatException);
+    });
+
+    test('rejects a varint longer than ten bytes', () {
+      expect(() => decodeServerToAgent(fromHex('f801${'ff' * 10}01')),
+          throwsFormatException);
+    });
+
     test('encodeServerToAgent round-trips through the decoder', () {
       final msg = decodeServerToAgent(encodeServerToAgent(
         flags: 1,
