@@ -37,12 +37,19 @@ at each point:
   python3 tool/e2e/run.py --base http://127.0.0.1:8082 --email .. --password .. \\
       [--storage <backend STORAGE_PATH>] [--otelcol <otelcol binary>] -- <app command>
 
+On Android install a profile APK built from lib/e2e_main.dart with the DSN
+pointing to 127.0.0.1 on the backend port. Use --android SERIAL in place of
+the app command. The harness clears the example app's data for fresh installs,
+preserves it across restart scenarios and forwards the local test ports.
+
 The app must be built with TRACEWAY_DSN pointing at a Flutter project of that
 account. Needs ffprobe on PATH to inspect the clips. With --storage (a local
 storage backend) every stored segment is checked on its own.
 """
 import argparse, base64, datetime, glob, json, os, shutil, subprocess, sys, tempfile, threading, time
 import urllib.error, urllib.parse, urllib.request
+
+from android import AndroidApp
 
 MAX_CLIP_SECONDS = 10.5  # 150 frames at 15 fps, plus rounding
 JOURNEY_CAPTURE_SECONDS = 30
@@ -457,13 +464,17 @@ def main():
     ap.add_argument('--project', default='')
     ap.add_argument('--storage', default='')
     ap.add_argument('--otelcol', default='', help='an otelcol binary: runs phases 8 and 9')
+    ap.add_argument('--android', metavar='SERIAL', help='run the installed example E2E APK via adb')
     ap.add_argument('--state-dir', default=DEFAULT_STATE_DIR,
                     help='the app\'s SDK state, cleared so each run starts fresh')
     ap.add_argument('app', nargs=argparse.REMAINDER)
     args = ap.parse_args()
     app_cmd = [a for a in args.app if a != '--']
-    if not app_cmd:
-        sys.exit('pass the app command after --')
+    if bool(args.android) == bool(app_cmd):
+        ap.error('supply either --android SERIAL or an app command after --')
+    android = AndroidApp(args.android, args.base) if args.android else None
+    if android:
+        args.state_dir = None
 
     api = Api(args.base, args.email, args.password, args.project)
     check = Check()
@@ -483,7 +494,8 @@ def main():
         env.update(extra_env or {})
         if scenario:
             env['E2E_SCENARIO'] = scenario
-        proc = subprocess.Popen(app_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        command = android.launch(scenario, extra_env or {}) if android else app_cmd
+        proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 errors='replace', env=env)
 
         def pump(stream):
@@ -496,7 +508,14 @@ def main():
 
         threading.Thread(target=pump, args=(proc.stdout,), daemon=True).start()
 
-    launch()
+    def stop():
+        nonlocal proc
+        if proc is not None:
+            if android:
+                android.force_stop()
+            proc.kill()
+            proc.wait()
+            proc = None
 
     def wait_phase(name, timeout):
         deadline = time.time() + timeout
@@ -507,11 +526,10 @@ def main():
                 break
             time.sleep(0.2)
         print('\n'.join(lines[-40:]))
-        if proc:
-            proc.kill()
         sys.exit(f'app never reached phase {name}')
 
     try:
+        launch()
         instance = wait_phase('start', 90).split('instance=')[1]
 
         # ---- 1. quiet phase ------------------------------------------------
@@ -612,6 +630,8 @@ def main():
               and profile[0].get('app.screen.name') == '/users/42', 'the journey tap was uploaded with the lookback')
         check(any(b and 'Profile loaded for 42' in b for b in bodies(names)), 'the journey log line was uploaded')
         ticks = [b for b in bodies(names) if b and b.startswith('e2e journey tick')]
+        check(not any(str(body).startswith('[FQVE]') for body in bodies(names)),
+              'native video encoder diagnostics stay out of app console telemetry')
         check(len(ticks) >= 5, 'logs stream while the capture runs, without an error', f'{len(ticks)} ticks')
         status, session_detail = api.call('POST', f'/api/sessions/{session_id}', {})
         reasons = ((session_detail or {}).get('session') or {}).get('recordingReasons') or [] if isinstance(session_detail, dict) else []
@@ -726,13 +746,11 @@ def main():
 
         # ---- 6. killed in the background, restarted ------------------------
         print('\n[6] the buffer outlives a kill in the background')
-        proc.kill()
-        proc.wait()
+        stop()
         launch('restart-a')
         saved = wait_phase('saved', 90).split('session=')[1]
         time.sleep(3)
-        proc.kill()
-        proc.wait()
+        stop()
         names, spans, issues, sessions = snapshot(api, since, instance)
         check('e2e before the kill' not in bodies(names), 'the killed run sent its breadcrumbs nowhere')
         check(saved == session_id, 'the restarted app continued the session', saved)
@@ -748,8 +766,7 @@ def main():
         taps = [attrs(r) for r in names.get('browser.user_action.click', []) if attrs(r).get('app.widget.id') == 'pay']
         check(len(taps) == 3, 'and the tap, with its selector', f'{len(taps)} pay taps')
         check(len(issues) == 2, 'the second error is its own issue', f'{len(issues)}')
-        proc.kill()
-        proc.wait()
+        stop()
 
         if args.otelcol:
             collector = Collector(args.otelcol)
@@ -757,8 +774,7 @@ def main():
             try:
                 print(f'\n[8] Traceway plus another OpenTelemetry backend (otelcol at {collector.url})')
                 external = check_other_backend(api, check, collector, echo, launch, wait_phase, args.state_dir, 'external')
-                proc.kill()
-                proc.wait()
+                stop()
                 print(f'\n[9] standalone: no connection string, only the collector')
                 check_other_backend(api, check, collector, echo, launch, wait_phase, args.state_dir, 'standalone')
                 print(f'        collector output: {collector.dir}')
@@ -769,8 +785,9 @@ def main():
                 collector.stop()
                 echo.stop()
     finally:
-        if proc:
-            proc.kill()
+        stop()
+        if android:
+            android.close()
 
     print(f"\n{'ALL CHECKS PASSED' if not check.failed else str(check.failed) + ' CHECK(S) FAILED'}")
     sys.exit(1 if check.failed else 0)

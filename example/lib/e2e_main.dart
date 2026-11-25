@@ -13,6 +13,7 @@
 // `external` (Traceway plus another OpenTelemetry backend) and `standalone`
 // (no connection string) send their telemetry to that collector.
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -74,6 +75,20 @@ class FfmpegVideoEncoder implements VideoEncoder {
   }
 }
 
+// Android activities cannot inherit the host harness's environment. Flutter's
+// system temp directory is inside the app's private data directory.
+Map<String, String> _readLaunchSettings() {
+  if (Platform.isAndroid) {
+    final file = File('${Directory.systemTemp.parent.path}/files/e2e-launch.json');
+    if (file.existsSync()) {
+      return Map<String, String>.from(jsonDecode(file.readAsStringSync()) as Map);
+    }
+  }
+  return Platform.environment;
+}
+
+final _launchSettings = _readLaunchSettings();
+
 void main() {
   if (_dsn.isEmpty) {
     stderr.writeln('Set --dart-define=TRACEWAY_DSN=token@http://host:port');
@@ -83,9 +98,9 @@ void main() {
     // ignore: invalid_use_of_visible_for_testing_member
     ScreenRecorder.encoderOverride = FfmpegVideoEncoder();
   }
-  final scenario = Platform.environment['E2E_SCENARIO'];
-  final collector = Platform.environment['E2E_COLLECTOR'];
-  final echo = Platform.environment['E2E_ECHO'];
+  final scenario = _launchSettings['E2E_SCENARIO'];
+  final collector = _launchSettings['E2E_COLLECTOR'];
+  final echo = _launchSettings['E2E_ECHO'];
   final otherBackend = collector != null &&
       (scenario == 'external' || scenario == 'standalone');
   Traceway.run(
@@ -272,7 +287,7 @@ class _HomeState extends State<_Home> {
     final client = TracewayClient.instance!;
     await _wait(3);
     _setPhase('start instance=${client.getInstanceId()}');
-    switch (Platform.environment['E2E_SCENARIO']) {
+    switch (_launchSettings['E2E_SCENARIO']) {
       case 'restart-a':
         // Leave breadcrumbs, let the SDK save its buffer the way it does when
         // the app goes to the background, then wait to be killed.
@@ -292,12 +307,12 @@ class _HomeState extends State<_Home> {
         _setPhase('done');
         return;
       case 'external' || 'standalone':
-        final scenario = Platform.environment['E2E_SCENARIO'];
+        final scenario = _launchSettings['E2E_SCENARIO'];
         debugPrint('e2e $scenario log');
         Traceway.track('e2e_${scenario}_event', {'n': 1});
         try {
           await http.get(Uri.parse('$_base/api/has-organizations?$scenario'));
-          final echo = Platform.environment['E2E_ECHO'];
+          final echo = _launchSettings['E2E_ECHO'];
           if (echo != null) {
             await http.get(Uri.parse('$echo/checkout?$scenario'));
             await http.get(Uri.parse('$echo/other?$scenario'));

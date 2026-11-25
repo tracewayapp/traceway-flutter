@@ -58,8 +58,9 @@ class PlatformVideoEncoder implements VideoEncoder {
     required String filepath,
     required bool debug,
   }) async {
+    // Standard verbosity prints twice per frame into the app's breadcrumb buffer.
     await FlutterQuickVideoEncoder.setLogLevel(
-      debug ? LogLevel.standard : LogLevel.none,
+      debug ? LogLevel.error : LogLevel.none,
     );
     await FlutterQuickVideoEncoder.setup(
       width: width,
