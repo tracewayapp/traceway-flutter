@@ -67,11 +67,7 @@ class ReplayController {
   /// The end of the last frames uploaded as part of the current session.
   DateTime? _sessionCursor;
 
-  /// Segments uploaded or being encoded since this controller started.
-  int segmentsQueued = 0;
-
   Mode get mode => _mode;
-  bool get hasSource => _source != null;
 
   void attach(ReplaySource? source) {
     final previous = _source;
@@ -210,7 +206,6 @@ class ReplayController {
     int? index,
   }) {
     final source = _source!;
-    segmentsQueued++;
     final clipId = exceptionId ?? '${session}_$index';
     // An exception's clip outside the session still counts against the
     // budget of the session it happened in.

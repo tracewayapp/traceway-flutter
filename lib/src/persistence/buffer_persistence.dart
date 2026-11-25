@@ -205,59 +205,76 @@ class BufferPersistence {
 
   /// Removes the restored records in the window whose signal is selected
   /// and returns them as OTLP request bodies, by kind (`logs`, `traces`).
-  /// `signals == null` selects every signal.
-  Map<String, List<int>> take(
+  /// `signals == null` selects every signal. A body holds about
+  /// [maxBodyBytes] of records at most, so a large buffer is several
+  /// requests, each small enough to be queued and accepted.
+  Map<String, List<List<int>>> take(
     int sinceMs,
     Set<String>? signals,
     int untilMs,
-    bool Function(String signal) canExport,
-  ) {
+    bool Function(String signal) canExport, {
+    int maxBodyBytes = 1024 * 1024,
+  }) {
     if (restored.isEmpty) return const {};
-    final taken = <String, List<RestoredEntry>>{};
+    final taken = <String, List<List<RestoredEntry>>>{};
+    final sizes = <String, int>{};
     restored.removeWhere((entry) {
       final selected = entry.timeMs >= sinceMs &&
           entry.timeMs <= untilMs &&
           (signals == null || signals.contains(entry.signal));
       if (!selected) return false;
       if (canExport(entry.signal)) {
-        taken.putIfAbsent(entry.kind, () => []).add(entry);
+        final chunks = taken.putIfAbsent(entry.kind, () => [[]]);
+        final size = (sizes[entry.kind] ?? 0) + entry.bytes.length;
+        if (size > maxBodyBytes && chunks.last.isNotEmpty) {
+          chunks.add([]);
+          sizes[entry.kind] = entry.bytes.length;
+        } else {
+          sizes[entry.kind] = size;
+        }
+        chunks.last.add(entry);
       }
       return true;
     });
-    final out = <String, List<int>>{};
-    final logs = taken['logs'];
-    if (logs != null) {
-      final request = proto.ExportLogsServiceRequest();
-      for (final group in _byResource(logs).entries) {
-        final merged = proto.ResourceLogs();
-        if (group.key.isNotEmpty) {
-          merged.resource = proto.Resource.fromBuffer(base64Decode(group.key));
-        }
-        for (final entry in group.value) {
-          merged.scopeLogs
-              .addAll(proto.ResourceLogs.fromBuffer(entry.bytes).scopeLogs);
-        }
-        request.resourceLogs.add(merged);
+    return {
+      for (final kind in taken.keys)
+        kind: [
+          for (final chunk in taken[kind]!)
+            kind == 'logs' ? _logsRequest(chunk) : _tracesRequest(chunk),
+        ],
+    };
+  }
+
+  static List<int> _logsRequest(List<RestoredEntry> entries) {
+    final request = proto.ExportLogsServiceRequest();
+    for (final group in _byResource(entries).entries) {
+      final merged = proto.ResourceLogs();
+      if (group.key.isNotEmpty) {
+        merged.resource = proto.Resource.fromBuffer(base64Decode(group.key));
       }
-      out['logs'] = request.writeToBuffer();
-    }
-    final spans = taken['traces'];
-    if (spans != null) {
-      final request = proto.ExportTraceServiceRequest();
-      for (final group in _byResource(spans).entries) {
-        final merged = proto.ResourceSpans();
-        if (group.key.isNotEmpty) {
-          merged.resource = proto.Resource.fromBuffer(base64Decode(group.key));
-        }
-        for (final entry in group.value) {
-          merged.scopeSpans
-              .addAll(proto.ResourceSpans.fromBuffer(entry.bytes).scopeSpans);
-        }
-        request.resourceSpans.add(merged);
+      for (final entry in group.value) {
+        merged.scopeLogs
+            .addAll(proto.ResourceLogs.fromBuffer(entry.bytes).scopeLogs);
       }
-      out['traces'] = request.writeToBuffer();
+      request.resourceLogs.add(merged);
     }
-    return out;
+    return request.writeToBuffer();
+  }
+
+  static List<int> _tracesRequest(List<RestoredEntry> entries) {
+    final request = proto.ExportTraceServiceRequest();
+    for (final group in _byResource(entries).entries) {
+      final merged = proto.ResourceSpans();
+      if (group.key.isNotEmpty) {
+        merged.resource = proto.Resource.fromBuffer(base64Decode(group.key));
+      }
+      for (final entry in group.value) {
+        merged.scopeSpans
+            .addAll(proto.ResourceSpans.fromBuffer(entry.bytes).scopeSpans);
+      }
+      request.resourceSpans.add(merged);
+    }
+    return request.writeToBuffer();
   }
 
   static Map<String, List<RestoredEntry>> _byResource(

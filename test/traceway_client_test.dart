@@ -75,6 +75,38 @@ void main() {
       expect(spanAttrs['session.id']!.value, matches(_uuid));
     });
 
+    test('a full buffer is flushed whole, its newest records included',
+        () async {
+      // More than the batch processors queue (2048): they drop what does
+      // not fit, which was the breadcrumbs right before the error, and the
+      // error itself where it is not written to disk first.
+      final h = await startHarness();
+      for (var i = 0; i < 3000; i++) {
+        h.client.recordLog('line $i');
+      }
+      expect(h.client.bufferedCount, 3000);
+      h.client.captureException(StateError('boom'), StackTrace.current);
+      await h.client.flush();
+      expect(h.named(null).map((r) => r.body),
+          [for (var i = 0; i < 3000; i++) 'line $i']);
+      expect(h.named('exception'), hasLength(1));
+
+      for (var i = 0; i < 2500; i++) {
+        h.client.recordNetworkEvent(NetworkEvent(
+          method: 'GET',
+          url: 'https://api.example.com/$i',
+          duration: const Duration(milliseconds: 5),
+          statusCode: 200,
+        ));
+      }
+      expect(h.client.bufferedCount, 2500);
+      h.client.captureException(StateError('again'), StackTrace.current);
+      await h.client.flush();
+      expect(h.spans.spans, hasLength(2500));
+      expect(h.named('exception'), hasLength(2));
+      expect(h.client.bufferedCount, 0);
+    });
+
     test('the exception record carries what the server needs', () async {
       final h = await startHarness(
           options: const TracewayOptions(remoteConfig: false, version: '1.2.3'));
@@ -282,6 +314,35 @@ void main() {
       await other.load('session-b', maxAgeMs: 600000, maxBytes: 1 << 20);
       expect(other.restored, isEmpty);
       expect(File('${dir.path}/buffer.json').existsSync(), isFalse);
+    });
+
+    test('a large restored buffer is uploaded as several requests', () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_buffer');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final h = await startHarness();
+      for (var i = 0; i < 40; i++) {
+        h.client.recordLog('restored line $i ${'x' * 200}');
+      }
+      await BufferPersistence(dir).save('session-a', h.client.bufferSnapshot);
+      final restored = BufferPersistence(dir);
+      await restored.load('session-a', maxAgeMs: 600000, maxBytes: 1 << 20);
+      expect(restored.restored, hasLength(40));
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final bodies = restored.take(0, null, now, (_) => true,
+          maxBodyBytes: 2000)['logs']!;
+      expect(bodies.length, greaterThan(3));
+      expect(bodies.every((b) => b.length < 4000), isTrue);
+      final lines = [
+        for (final body in bodies)
+          for (final rl
+              in proto.ExportLogsServiceRequest.fromBuffer(body).resourceLogs)
+            for (final sl in rl.scopeLogs)
+              for (final record in sl.logRecords)
+                record.body.stringValue.split(' ')[2],
+      ];
+      expect(lines, [for (var i = 0; i < 40; i++) '$i']);
+      expect(restored.restored, isEmpty);
     });
 
     test('buffer.persist false keeps nothing on disk', () async {
@@ -729,6 +790,54 @@ void main() {
       expect(h.named(null).map((r) => r.body),
           ['before capture', 'during capture']);
       expect(attr(h.named(null).last, 'traceway.capture.ids'), '["cap-1"]');
+    });
+  });
+
+  group('triggers that emit', () {
+    Map<String, Object?> emits(String id, String on, String emit) => {
+          'id': id,
+          'steps': [
+            {
+              'match': {'key': 'event.name', 'op': 'eq', 'value': on}
+            }
+          ],
+          'actions': [
+            {'type': 'emit', 'eventName': emit}
+          ],
+        };
+
+    test('a rule can answer the event another rule emitted', () async {
+      final h = await startHarness(
+        options: TracewayOptions(remoteConfig: false, collection: {
+          'signals': {
+            'custom': {'mode': 'stream'}
+          },
+          'triggers': [emits('a', 'first', 'second'), emits('b', 'second', 'third')],
+        }),
+      );
+      h.client.track('first');
+      await h.client.flush();
+      expect(h.named('second'), hasLength(1));
+      expect(h.named('third'), hasLength(1));
+    });
+
+    test('a rule that emits what it matches stops after a few rounds',
+        () async {
+      final h = await startHarness(
+        options: TracewayOptions(remoteConfig: false, collection: {
+          'signals': {
+            'custom': {'mode': 'stream'}
+          },
+          'triggers': [emits('loop', 'loop', 'loop')],
+        }),
+      );
+      h.client.track('loop');
+      await h.client.flush();
+      expect(h.named('loop'), hasLength(4));
+      // The SDK goes on working.
+      h.client.track('after');
+      await h.client.flush();
+      expect(h.named('after'), hasLength(1));
     });
   });
 

@@ -36,17 +36,14 @@ class ControlState {
   final int Function() _now;
   Ceilings _ceilings;
   Settings _effective;
-  Json? _remote;
   final Map<String, List<StreamOverride>> _overrides = {};
   int _overrideSequence = 0;
   final List<void Function(Settings)> _listeners = [];
 
   Settings get settings => _effective;
-  Json? get remoteOverlay => _remote;
 
   /// Applies a parsed remote document, or `null` to fall back to defaults.
   void applyRemote(Json? overlay) {
-    _remote = overlay;
     _ceilings = applyLimits(_appCeilings, overlay);
     final merged = overlay == null ? _defaults : applyOverlay(_defaults, overlay);
     _effective = clampToCeilings(merged, _ceilings);

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -56,6 +57,9 @@ abstract class RouterHooks {
 }
 
 const _spanStatus = ['unset', 'ok', 'error'];
+
+/// Records per export of a buffer flush, as many as a batch processor sends.
+const _flushBatchSize = 512;
 const _baselineSignals = {
   'network',
   'console',
@@ -95,6 +99,8 @@ class TelemetryRouter {
     required this.buffer,
     required this.logSink,
     required this.spanSink,
+    required this.logExporter,
+    required this.spanExporter,
     required this.hooks,
     this.persistIssue,
     double Function()? random,
@@ -104,6 +110,10 @@ class TelemetryRouter {
   final RingBuffer<TelemetryItem> buffer;
   final LogRecordProcessor logSink;
   final SpanProcessor spanSink;
+
+  /// The exporters behind [logSink] and [spanSink], for [flushBuffered].
+  final LogRecordExporter logExporter;
+  final SpanExporter spanExporter;
   final RouterHooks hooks;
   final bool Function(ReadableLogRecord)? persistIssue;
   final double Function() _random;
@@ -197,14 +207,56 @@ class TelemetryRouter {
     if (control.modeFor(observed.signal) == Mode.stream) _send(observed.item);
   }
 
+  final List<ReadableLogRecord> _flushedLogs = [];
+  final List<Span> _flushedSpans = [];
+
   /// Sends what the buffer holds in the window. `signals == null` selects
   /// every signal. Returns the number of records taken.
+  ///
+  /// They go straight to the exporters, a batch after the other: the batch
+  /// processors' queues are bounded and drop what does not fit, and a full
+  /// buffer holds more than they do. The newest breadcrumbs, the ones right
+  /// before the error, would be the ones lost.
   int flushBuffered(int sinceMs, Set<String>? signals, [int? untilMs]) {
     final entries = buffer.take(sinceMs, signals, untilMs);
     for (final entry in entries) {
-      if (control.canExport(entry.signal)) _send(entry.item);
+      if (!control.canExport(entry.signal)) continue;
+      switch (entry.item) {
+        case LogItem(:final record):
+          if (!_persistIssue(record)) _flushedLogs.add(record);
+        case SpanItem(:final span):
+          _flushedSpans.add(span);
+      }
     }
+    unawaited(settle());
     return entries.length;
+  }
+
+  /// Exports what [flushBuffered] took; completes when none of it is left.
+  /// The requests of the last batches may still be on their way: the
+  /// exporters' own `forceFlush` waits for those.
+  Future<void> settle() async {
+    while (_flushedLogs.isNotEmpty) {
+      final batch = _takeBatch(_flushedLogs);
+      try {
+        await logExporter.export(batch);
+      } catch (_) {
+        // An exporter that throws loses its batch, not the rest.
+      }
+    }
+    while (_flushedSpans.isNotEmpty) {
+      final batch = _takeBatch(_flushedSpans);
+      try {
+        await spanExporter.export(batch);
+      } catch (_) {}
+    }
+  }
+
+  static List<T> _takeBatch<T>(List<T> from) {
+    final count = min(_flushBatchSize, from.length);
+    final batch = from.sublist(0, count);
+    from.removeRange(0, count);
+    return batch;
   }
 
   /// Decides what happens to a record; a buffered one is stored here, a
@@ -242,15 +294,17 @@ class TelemetryRouter {
     return Routed.buffer;
   }
 
+  /// An issue is written to disk before it is sent, when there is a disk:
+  /// the app may not live to see the answer.
+  bool _persistIssue(ReadableLogRecord record) =>
+      (record.eventName == eventException ||
+          record.eventName == eventMessage) &&
+      persistIssue?.call(record) == true;
+
   void _send(TelemetryItem item) {
     switch (item) {
       case LogItem(:final record):
-        if ((record.eventName == eventException ||
-                record.eventName == eventMessage) &&
-            persistIssue?.call(record) == true) {
-          return;
-        }
-        logSink.onEmit(record, null);
+        if (!_persistIssue(record)) logSink.onEmit(record, null);
       case SpanItem(:final span):
         spanSink.onEnd(span);
     }

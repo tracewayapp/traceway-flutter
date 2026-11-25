@@ -428,7 +428,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         final hash = cached['hash'];
         if (body is String && hash is String) {
           _control.applyRemote(parseSettingsDocument(body));
-          appliedHash = _hexToBytes(hash);
+          appliedHash = hexToBytes(hash);
         }
       } catch (_) {
         appliedHash = null;
@@ -649,6 +649,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       buffer: _buffer,
       logSink: logSink,
       spanSink: spanSink,
+      logExporter: logExporter,
+      spanExporter: spanExporter,
       hooks: this,
       persistIssue: stateDir == null || _overrides?.logExporter != null
           ? null
@@ -827,8 +829,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   }
 
   void recordLog(String line) {
-    // The SDK's own debug output is not app telemetry.
-    if (line.startsWith('Traceway: ')) return;
+    // The SDK's own debug output is not app telemetry. Nor is a line printed
+    // while a record is emitted (OpenTelemetry's diagnostics, when the app
+    // turned them on): recording it would print the next one, without end.
+    if (line.startsWith('Traceway: ') || _emitDepth > 0) return;
     _emit(severity: Severity.INFO, severityText: 'INFO', body: line);
   }
 
@@ -898,22 +902,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void setMetricDimension(String key, String? value) =>
       _metrics.setDimension(key, value);
 
-  Future<int> _sendMetrics(List<int> body) async {
-    final destination = _routes.metrics;
-    final response = await _http
-        .post(
-          Uri.parse(destination.url),
-          headers: {
-            'User-Agent': otlpUserAgent,
-            ...destination.headers,
-            'Content-Type': 'application/x-protobuf',
-            'Content-Encoding': 'gzip',
-          },
-          body: gzip.encode(body),
-        )
-        .timeout(const Duration(seconds: 10));
-    return response.statusCode;
-  }
+  Future<int> _sendMetrics(List<int> body) =>
+      postOtlp(_http, _routes.metrics, body);
 
   static int _maxRss() {
     try {
@@ -930,21 +920,23 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void _rememberMemoryPeak() {
     final session = _sessions?.currentId;
     if (!_options.captureMetrics || session == null) return;
-    var bytes = _maxRss();
-    final record = _store.get(_memoryKey);
-    if (record is Map && record['s'] == session && record['b'] is int) {
-      bytes = max(bytes, record['b'] as int);
-    }
+    final bytes = _memoryPeak(session);
     if (bytes > 0) _store.set(_memoryKey, {'s': session, 'b': bytes});
+  }
+
+  /// The most memory [session] used: now, or in an earlier run of the app.
+  int _memoryPeak(String session) {
+    final record = _store.get(_memoryKey);
+    final remembered =
+        record is Map && record['s'] == session && record['b'] is int
+            ? record['b'] as int
+            : 0;
+    return max(_maxRss(), remembered);
   }
 
   void _recordMemoryPeak(String session) {
     if (!_options.captureMetrics) return;
-    var bytes = _maxRss();
-    final record = _store.get(_memoryKey);
-    if (record is Map && record['s'] == session && record['b'] is int) {
-      bytes = max(bytes, record['b'] as int);
-    }
+    final bytes = _memoryPeak(session);
     _store.set(_memoryKey, null);
     _metrics.memoryPeak(session, bytes);
   }
@@ -1188,6 +1180,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     try {
       await _logSink?.forceFlush();
       await _spanSink?.forceFlush();
+      await _router?.settle();
       // The processors hand a batch over and forget it: wait for the
       // requests still on their way.
       await _logExporter?.forceFlush();
@@ -1283,6 +1276,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
     final logger = _logger;
     if (logger == null) return;
+    _emitDepth++;
     try {
       logger.emit(
         timeStamp: timestamp,
@@ -1295,8 +1289,20 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       );
     } catch (e) {
       _log('emit failed: $e');
+    } finally {
+      _emitDepth--;
     }
   }
+
+  /// How many records are being emitted right now, one inside the other: a
+  /// record runs the triggers, and an `emit` action emits the next one from
+  /// inside them.
+  int _emitDepth = 0;
+
+  /// A rule may answer the event of another rule's `emit` action, this many
+  /// deep. A rule that emits what it matches (on its own or in a circle)
+  /// would otherwise never return.
+  static const int _maxEmitDepth = 4;
 
   /// Sessions whose start (or resumption) was reported in this run: their
   /// end is reported too, and only theirs, whatever remote settings say by
@@ -1606,6 +1612,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
           untilMs: now + ((action.durationSeconds ?? 0) * 1000).round(),
         );
       case 'emit':
+        if (_emitDepth >= _maxEmitDepth) break;
         _emit(
           eventName: action.eventName,
           severity: Severity.INFO,
@@ -1626,14 +1633,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         persisted.take(sinceMs, signals, untilMs, _control.canExport);
     if (bodies.isEmpty) return;
     final traceway = _splitsLogs ? _tracewayOutbox : null;
-    bodies.forEach((kind, body) {
-      if (kind != 'logs' || traceway == null) {
-        outbox.add(kind, body);
-        return;
+    bodies.forEach((kind, requests) {
+      for (final body in requests) {
+        if (kind != 'logs' || traceway == null) {
+          outbox.add(kind, body);
+          continue;
+        }
+        final (own, rest) = splitLogsRequest(body);
+        if (own != null) traceway.add(kind, own);
+        if (rest != null) outbox.add(kind, rest);
       }
-      final (own, rest) = splitLogsRequest(body);
-      if (own != null) traceway.add(kind, own);
-      if (rest != null) outbox.add(kind, rest);
     });
     unawaited(outbox.drain());
     if (traceway != null) unawaited(traceway.drain());
@@ -1944,7 +1953,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       return ApplyResult.failed(e.message);
     }
     _control.applyRemote(overlay);
-    final hash = _bytesToHex(config.configHash);
+    final hash = bytesToHex(config.configHash);
     _store.set('config', {'hash': hash, 'body': body});
     _emit(
       eventName: eventConfigApplied,
@@ -2008,19 +2017,5 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   void _log(String message) {
     if (_options.debug) debugPrint('Traceway: $message');
-  }
-
-  static String _bytesToHex(List<int> bytes) =>
-      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-
-  static Uint8List? _hexToBytes(String hex) {
-    if (hex.isEmpty || hex.length.isOdd) return null;
-    final out = Uint8List(hex.length ~/ 2);
-    for (var i = 0; i < out.length; i++) {
-      final byte = int.tryParse(hex.substring(i * 2, i * 2 + 2), radix: 16);
-      if (byte == null) return null;
-      out[i] = byte;
-    }
-    return out;
   }
 }

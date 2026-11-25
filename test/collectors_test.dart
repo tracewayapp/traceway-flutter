@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart'
+    show LogLevel, OTelLog;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -45,6 +47,36 @@ void main() {
     await flushWithError(h);
     expect(h.named(null).map((r) => r.body), ['hello from zone']);
     expect(forwarded, ['hello from zone', 'Traceway: internal debug line']);
+  });
+
+  test('a line printed while a record is emitted is not recorded', () async {
+    final h = await startHarness();
+    final level = OTelLog.currentLevel;
+    final function = OTelLog.logFunction;
+    addTearDown(() {
+      OTelLog.currentLevel = level;
+      OTelLog.logFunction = function;
+    });
+    final forwarded = <String>[];
+    runZoned(
+      () => runZoned(() {
+        // An app that turned OpenTelemetry's diagnostics on: the SDK prints
+        // while it emits, in the zone that records what is printed.
+        OTelLog.currentLevel = LogLevel.debug;
+        OTelLog.logFunction = print;
+        // ignore: avoid_print
+        print('hello');
+        OTelLog.currentLevel = level;
+        OTelLog.logFunction = function;
+      }, zoneSpecification: buildLogZoneSpec()),
+      zoneSpecification: ZoneSpecification(
+          print: (self, parent, zone, line) => forwarded.add(line)),
+    );
+    await flushWithError(h);
+    expect(h.named(null).map((r) => r.body), ['hello']);
+    // The line and what OpenTelemetry printed about recording it, once.
+    expect(forwarded, contains('hello'));
+    expect(forwarded.length, lessThan(10));
   });
 
   test('navigator observer records transitions', () async {
@@ -128,6 +160,35 @@ void main() {
     expect(byUrl['/refused']!.containsKey('error.type'), isTrue);
     expect(
         byUrl['/refused']!.containsKey('http.response.status_code'), isFalse);
+  });
+
+  test('HttpClient.get(host, port, path) keeps the query of the path',
+      () async {
+    final seen = <String>[];
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) {
+      // Only what this test sends: other programs on a development machine
+      // probe new local ports.
+      if (request.uri.path != '/') seen.add(request.uri.toString());
+      request.response.close();
+    });
+    addTearDown(() => server.close(force: true));
+    final h = await startHarness();
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final client = HttpClient();
+      for (final path in ['/search?q=1&r=2#top', '/plain']) {
+        final request = await client.get('127.0.0.1', server.port, path);
+        await (await request.close()).drain<void>();
+      }
+      client.close(force: true);
+    }, TracewayHttpOverrides(null));
+    await flushWithError(h);
+    expect(seen, ['/search?q=1&r=2', '/plain']);
+    expect(
+        h.spans.spans.map((s) => s.attributes.toMap()['url.full']!.value), [
+      'http://127.0.0.1:${server.port}/search?q=1&r=2',
+      'http://127.0.0.1:${server.port}/plain',
+    ]);
   });
 
   group('trace context propagation', () {
@@ -248,7 +309,9 @@ void main() {
 
       final span = h.spans.spans.single;
       expect(span.attributes.toMap()['url.full']!.value, '$base/once');
-      expect(headers.single,
+      // A request without the header is not the app's: other programs on
+      // a development machine probe new local ports.
+      expect(headers.whereType<String>().single,
           '00-${hex(span.spanContext.traceId)}-${hex(span.spanContext.spanId)}-01');
     });
 

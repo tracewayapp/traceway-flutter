@@ -24,22 +24,4 @@ void main() {
       expect(result, contains('_Exception: Exception: test'));
     });
   });
-
-  group('formatFlutterError', () {
-    test('formats with stack trace', () {
-      final result = formatFlutterError(
-        StateError('bad state'),
-        StackTrace.fromString(
-          '#0      myFunc (package:app/file.dart:42:12)',
-        ),
-      );
-      expect(result, contains('StateError: Bad state: bad state'));
-      expect(result, contains('myFunc'));
-    });
-
-    test('formats without stack trace', () {
-      final result = formatFlutterError(StateError('bad state'), null);
-      expect(result, 'StateError: Bad state: bad state');
-    });
-  });
 }

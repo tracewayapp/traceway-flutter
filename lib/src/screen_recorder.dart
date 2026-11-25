@@ -14,6 +14,7 @@ import 'circular_buffer.dart';
 import 'models/session_recording_payload.dart';
 import 'replay/replay_controller.dart';
 import 'traceway_mask_mode.dart';
+import 'traceway_privacy_mask.dart';
 
 class CapturedFrame {
   final Uint8List pngBytes;
@@ -116,9 +117,6 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   // Touch tracking (logical coordinates)
   Offset? _touchPosition;
 
-  // Privacy mask tracking (logical coordinates, relative to RepaintBoundary)
-  final Map<Key, MaskRegion> _maskRegions = {};
-
   ScreenRecorder({
     required this.repaintBoundaryKey,
     required int maxFrames,
@@ -133,14 +131,6 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
 
   void clearTouchPosition() {
     _touchPosition = null;
-  }
-
-  void addMaskRegion(Key key, Rect rect, TracewayMaskMode mode) {
-    _maskRegions[key] = MaskRegion(key: key, rect: rect, mode: mode);
-  }
-
-  void removeMaskRegion(Key key) {
-    _maskRegions.remove(key);
   }
 
   @override
@@ -186,6 +176,9 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
 
     _isCapturing = true;
     try {
+      // Read in the same turn as the picture is taken, so every mask is
+      // where its widget is in this frame.
+      final maskRegions = maskRegionsIn(boundary);
       final image = await boundary.toImage(pixelRatio: pixelRatio);
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       final width = image.width;
@@ -199,7 +192,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
           height: height,
           timestamp: DateTime.now(),
           touchPosition: _touchPosition,
-          maskRegions: _maskRegions.values.toList(),
+          maskRegions: maskRegions,
         ));
       }
     } catch (e) {
@@ -267,14 +260,21 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
     }
   }
 
+  /// The pixels of a frame a logical rectangle covers: left, top, right and
+  /// bottom, the last two exclusive. Rounded outwards, so a mask never ends
+  /// short of its widget; empty when the rectangle is outside the frame.
+  (int, int, int, int) _pixelRect(Rect logicalRect, int width, int height) => (
+        (logicalRect.left * pixelRatio).floor().clamp(0, width),
+        (logicalRect.top * pixelRatio).floor().clamp(0, height),
+        (logicalRect.right * pixelRatio).ceil().clamp(0, width),
+        (logicalRect.bottom * pixelRatio).ceil().clamp(0, height),
+      );
+
   /// Pixelates a rectangular region by averaging NxN blocks of pixels.
   void _applyPixelation(
     Uint8List pixels, int width, int height, Rect logicalRect, double ratio,
   ) {
-    final left = (logicalRect.left * pixelRatio).round().clamp(0, width - 1);
-    final top = (logicalRect.top * pixelRatio).round().clamp(0, height - 1);
-    final right = (logicalRect.right * pixelRatio).round().clamp(0, width);
-    final bottom = (logicalRect.bottom * pixelRatio).round().clamp(0, height);
+    final (left, top, right, bottom) = _pixelRect(logicalRect, width, height);
 
     final blockSize = max(2, (ratio * 20).round());
 
@@ -318,10 +318,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   void _applyBlank(
     Uint8List pixels, int width, int height, Rect logicalRect, ui.Color color,
   ) {
-    final left = (logicalRect.left * pixelRatio).round().clamp(0, width - 1);
-    final top = (logicalRect.top * pixelRatio).round().clamp(0, height - 1);
-    final right = (logicalRect.right * pixelRatio).round().clamp(0, width);
-    final bottom = (logicalRect.bottom * pixelRatio).round().clamp(0, height);
+    final (left, top, right, bottom) = _pixelRect(logicalRect, width, height);
 
     final r = (color.r * 255.0).round().clamp(0, 255);
     final g = (color.g * 255.0).round().clamp(0, 255);
@@ -369,6 +366,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
     _encodingLock = completer.future;
     await previous;
 
+    File? videoFile;
     try {
       // Find max dimensions across all frames so the encoder can handle
       // screen size changes (rotation, keyboard, navigation bar).
@@ -387,6 +385,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
 
       final tempDir = await getTemporaryDirectory();
       final outputPath = '${tempDir.path}/traceway_$clipId.mp4';
+      videoFile = File(outputPath);
 
       final encoder = encoderOverride ?? const PlatformVideoEncoder();
       await encoder.setup(
@@ -443,11 +442,8 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
 
       await encoder.finish();
 
-      final videoFile = File(outputPath);
       final videoBytes = await videoFile.readAsBytes();
       final base64Video = base64Encode(videoBytes);
-
-      await videoFile.delete();
 
       if (debug) {
         final bufferKB = frames.fold<int>(0, (sum, f) => sum + f.pngBytes.length) ~/ 1024;
@@ -474,6 +470,13 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
       }
       return null;
     } finally {
+      // Also after an encode that failed half way: the file is not left in
+      // the app's temporary directory.
+      try {
+        if (videoFile != null && await videoFile.exists()) {
+          await videoFile.delete();
+        }
+      } catch (_) {}
       completer.complete();
     }
   }

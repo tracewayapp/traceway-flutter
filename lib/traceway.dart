@@ -1,5 +1,5 @@
 export 'src/events/traceway_event.dart'
-    show TracewayEvent, LogEvent, NetworkEvent, NavigationEvent, CustomEvent;
+    show TracewayEvent, NetworkEvent, NavigationEvent;
 export 'src/events/traceway_http_client.dart' show TracewayHttpClient;
 export 'src/events/traceway_navigator_observer.dart'
     show TracewayNavigatorObserver;

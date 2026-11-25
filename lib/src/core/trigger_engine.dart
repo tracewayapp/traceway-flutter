@@ -414,14 +414,3 @@ Set<String> eventKinds(Matcher matcher, [Set<String>? into]) {
   }
   return out;
 }
-
-/// Whether any of [triggers] has a step that names one of [types].
-bool hasSequenceEvent(List<Trigger> triggers, Set<String> types) {
-  for (final trigger in triggers) {
-    if (trigger.enabled == false) continue;
-    for (final step in trigger.steps) {
-      if (eventKinds(step.match).any(types.contains)) return true;
-    }
-  }
-  return false;
-}

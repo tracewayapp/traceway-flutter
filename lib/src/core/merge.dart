@@ -309,9 +309,6 @@ Settings applyOverlay(Settings base, Json overlay) {
     if (mode != null) out.replayMode = mode;
     final sampleRate = _rate(replay['sessionSampleRate']);
     if (sampleRate != null) out.replaySessionSampleRate = sampleRate;
-    if (replay['maskAllInputs'] is bool) {
-      out.maskAllInputs = replay['maskAllInputs'] as bool;
-    }
   }
 
   final metrics = _object(overlay['metrics']);
@@ -334,8 +331,6 @@ Settings applyOverlay(Settings base, Json overlay) {
     if (maxBytes != null) out.bufferMaxBytes = maxBytes.toInt();
     final maxAge = _positive(buffer['maxAgeSeconds'], _maxBufferAgeSeconds);
     if (maxAge != null) out.bufferMaxAgeSeconds = maxAge;
-    final replayMax = _positive(buffer['replayMaxBytes'], _maxBufferBytes);
-    if (replayMax != null) out.replayMaxBytes = replayMax.toInt();
     if (buffer['persist'] is bool) out.persist = buffer['persist'] as bool;
   }
 

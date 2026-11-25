@@ -85,10 +85,31 @@ class _TracewayHttpClient implements HttpClient {
     }
   }
 
+  /// [path] may carry a query and a fragment, read the way dart:io's own
+  /// `open` reads them.
   @override
   Future<HttpClientRequest> open(
-          String method, String host, int port, String path) =>
-      openUrl(method, Uri(scheme: 'http', host: host, port: port, path: path));
+      String method, String host, int port, String path) {
+    var fragmentStart = path.length;
+    var queryStart = path.length;
+    for (var i = path.length - 1; i >= 0; i--) {
+      final char = path.codeUnitAt(i);
+      if (char == 0x23 /* # */) {
+        fragmentStart = i;
+        queryStart = i;
+      } else if (char == 0x3f /* ? */) {
+        queryStart = i;
+      }
+    }
+    String? query;
+    if (queryStart < fragmentStart) {
+      query = path.substring(queryStart + 1, fragmentStart);
+      path = path.substring(0, queryStart);
+    }
+    return openUrl(
+        method,
+        Uri(scheme: 'http', host: host, port: port, path: path, query: query));
+  }
 
   @override
   Future<HttpClientRequest> get(String host, int port, String path) =>

@@ -52,8 +52,6 @@ class AgentToServer {
     this.agentDescription,
     required this.capabilities,
     this.remoteConfigStatus,
-    this.agentDisconnect = false,
-    this.flags = 0,
     this.customCapabilities = const [],
   });
 
@@ -62,8 +60,6 @@ class AgentToServer {
   final AgentDescription? agentDescription;
   final int capabilities;
   final RemoteConfigStatus? remoteConfigStatus;
-  final bool agentDisconnect;
-  final int flags;
   final List<String> customCapabilities;
 }
 
@@ -149,8 +145,6 @@ Uint8List encodeAgentToServer(AgentToServer msg) {
       if (error != null && error.isNotEmpty) s.string(3, error);
     });
   }
-  if (msg.agentDisconnect) w.message(9, (_) {}, always: true);
-  w.uint(10, msg.flags);
   if (msg.customCapabilities.isNotEmpty) {
     w.message(12, (c) {
       for (final capability in msg.customCapabilities) {

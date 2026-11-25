@@ -477,6 +477,8 @@ TracewayPrivacyMask(
 
 This replaces the region with a solid color (black by default) in the recording.
 
+The mask covers the widget where it is in each recorded frame: its place is read from the render tree when the frame is captured, so it stays on the widget while that scrolls in a list, animates or is transformed.
+
 ## Android build setup
 
 The screen recorder's encoder plugin, `flutter_quick_video_encoder` 1.7.2, declares `compileSdk` 33, while the AndroidX libraries of current Flutter versions need 34. With a current Flutter template (seen with Flutter 3.50 and Android Gradle Plugin 9.3) `flutter build apk` stops with `:flutter_quick_video_encoder is currently compiled against android-33`. Raise it in `android/build.gradle.kts`, above the `subprojects { project.evaluationDependsOn(":app") }` block, as `example/android/build.gradle.kts` does:

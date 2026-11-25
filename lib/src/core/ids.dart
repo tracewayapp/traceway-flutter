@@ -11,22 +11,30 @@ Random _secureRandom() {
   }
 }
 
+String bytesToHex(List<int> bytes) =>
+    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+/// The bytes [hex] spells, or null when it is not an even run of hex digits.
+Uint8List? hexToBytes(String hex) {
+  if (hex.length.isOdd || !_hexDigits.hasMatch(hex)) return null;
+  final bytes = Uint8List(hex.length ~/ 2);
+  for (var i = 0; i < bytes.length; i++) {
+    bytes[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+  }
+  return bytes;
+}
+
+final RegExp _hexDigits = RegExp(r'^[0-9a-fA-F]+$');
+
 String bytesToUuid(List<int> bytes) {
-  final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  final hex = bytesToHex(bytes);
   return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
       '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
 }
 
-final RegExp _hex32 = RegExp(r'^[0-9a-fA-F]{32}$');
-
 Uint8List? uuidToBytes(String uuid) {
   final hex = uuid.replaceAll('-', '');
-  if (!_hex32.hasMatch(hex)) return null;
-  final bytes = Uint8List(16);
-  for (var i = 0; i < 16; i++) {
-    bytes[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
-  }
-  return bytes;
+  return hex.length == 32 ? hexToBytes(hex) : null;
 }
 
 /// RFC 9562 UUIDv7: a millisecond timestamp followed by random bits, as OpAMP

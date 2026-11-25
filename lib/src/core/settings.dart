@@ -294,10 +294,8 @@ class Settings {
     required this.baselineSampleRate,
     required this.replayMode,
     required this.replaySessionSampleRate,
-    this.maskAllInputs = true,
     required this.bufferMaxBytes,
     required this.bufferMaxAgeSeconds,
-    required this.replayMaxBytes,
     required this.persist,
     required this.triggers,
     required this.captures,
@@ -311,13 +309,8 @@ class Settings {
   double baselineSampleRate;
   Mode replayMode;
   double replaySessionSampleRate;
-
-  /// Read for schema parity with the browser SDK. Flutter masks with
-  /// `TracewayPrivacyMask` instead of input fields.
-  bool maskAllInputs;
   int bufferMaxBytes;
   double bufferMaxAgeSeconds;
-  int replayMaxBytes;
   bool persist;
   List<Trigger> triggers;
   List<Capture> captures;
@@ -330,10 +323,8 @@ class Settings {
         baselineSampleRate: baselineSampleRate,
         replayMode: replayMode,
         replaySessionSampleRate: replaySessionSampleRate,
-        maskAllInputs: maskAllInputs,
         bufferMaxBytes: bufferMaxBytes,
         bufferMaxAgeSeconds: bufferMaxAgeSeconds,
-        replayMaxBytes: replayMaxBytes,
         persist: persist,
         triggers: List.of(triggers),
         captures: List.of(captures),
@@ -424,7 +415,6 @@ Settings defaultSettings({
     replaySessionSampleRate: 1,
     bufferMaxBytes: 2 * 1024 * 1024,
     bufferMaxAgeSeconds: 600,
-    replayMaxBytes: 8 * 1024 * 1024,
     persist: true,
     triggers: [defaultExceptionTrigger()],
     captures: [],

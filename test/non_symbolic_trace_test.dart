@@ -34,28 +34,4 @@ void main() {
       expect(extractBuildId(_debugTrace), isNull);
     });
   });
-
-  group('formatFlutterError on a release trace', () {
-    test('sends the raw trace without a runtimeType prefix', () {
-      final result = formatFlutterError(
-        StateError('card declined'),
-        StackTrace.fromString(_releaseTrace),
-      );
-      expect(result.split('\n').first, 'Bad state: card declined');
-      expect(result, isNot(startsWith('StateError:')));
-      expect(result, contains('_kDartIsolateSnapshotInstructions+0x141e6b'));
-      expect(result, contains('_kDartIsolateSnapshotInstructions+0x141d9b'));
-      expect(result, contains("build_id: 'fe664295997135e7b67b648ba66ca9eb'"));
-    });
-
-    test('still symbolic-formats a debug trace', () {
-      final result = formatFlutterError(
-        StateError('x'),
-        StackTrace.fromString(_debugTrace),
-      );
-      expect(result, contains('chargeCard'));
-      expect(result, contains('package:flutter_demo/main.dart:20:3'));
-      expect(result, isNot(contains('SnapshotInstructions')));
-    });
-  });
 }

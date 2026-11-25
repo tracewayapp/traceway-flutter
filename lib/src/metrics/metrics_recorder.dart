@@ -414,10 +414,8 @@ class MetricsRecorder {
     await _sendBatch(batch, final_);
   }
 
-  String _batchId() {
-    final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-  }
+  String _batchId() =>
+      bytesToHex(List<int>.generate(16, (_) => _random.nextInt(256)));
 
   /// A payload over the server's body limit is sent as two; only a single
   /// cell that is too large is dropped.

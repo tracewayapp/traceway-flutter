@@ -18,7 +18,6 @@ dependencies:
   http: ^1.5.0
   dartastic_opentelemetry: 0.12.0
   dartastic_opentelemetry_api: 0.12.0
-  uuid: ^4.0.0
   path_provider: ^2.1.0
   flutter_quick_video_encoder: ^1.7.2
   device_info_plus: ^13.1.0
