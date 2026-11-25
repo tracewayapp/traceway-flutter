@@ -242,13 +242,12 @@ class _HomeState extends State<_Home> {
     super.initState();
     // Something has to move, or every frame of the clip is the same picture.
     _timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      // The recorder only captures while the app is in the foreground. A
-      // desktop window that does not hold keyboard focus reports `inactive`,
-      // so an unattended desktop run would record nothing: keep it `resumed`
-      // rather than stealing focus on the machine running the test.
-      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-        WidgetsBinding.instance
-            .handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      // An unfocused desktop window must resume for the recorder to capture.
+      // Every resume polls OpAMP, and the restart scenario needs to stay paused.
+      final binding = WidgetsBinding.instance;
+      if ((Platform.isLinux || Platform.isMacOS || Platform.isWindows) &&
+          binding.lifecycleState == AppLifecycleState.inactive) {
+        binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       }
       if (mounted) setState(() => _frame++);
     });

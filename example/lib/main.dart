@@ -67,8 +67,7 @@ class _HomePageState extends State<HomePage> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: ListView(
           children: [
             TracewayPrivacyMask(
               child: Text(
@@ -273,7 +272,8 @@ class _HomePageState extends State<HomePage> {
             Text('Event Log',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
-            Expanded(
+            SizedBox(
+              height: 160,
               child: Container(
                 decoration: BoxDecoration(
                   color: Colors.grey.shade100,
@@ -289,6 +289,7 @@ class _HomePageState extends State<HomePage> {
                         ),
                       )
                     : ListView.builder(
+                        primary: false,
                         padding: const EdgeInsets.all(8),
                         itemCount: _log.length,
                         itemBuilder: (_, i) => Padding(
