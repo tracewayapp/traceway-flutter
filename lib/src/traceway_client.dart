@@ -40,6 +40,8 @@ import 'session/session_manager.dart';
 import 'stack_trace_formatter.dart';
 import 'sdk_version.dart';
 import 'traceway_options.dart';
+import 'traceway_screen_capture_mode.dart';
+import 'wireframe/wireframe_recorder.dart';
 
 export 'sdk_version.dart' show tracewaySdkName, tracewaySdkVersion;
 
@@ -128,14 +130,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
     _videoSupported =
         _overrides?.videoSupported ?? ScreenRecorder.isVideoSupported;
-    if (_screenCapture && !_videoSupported) {
-      _log('screen capture needs a video encoder, which this platform '
-          'does not have: replay is off');
+    if (_screenCapture &&
+        _options.screenCaptureMode == TracewayScreenCaptureMode.video &&
+        !_videoSupported) {
+      _log('this platform has no video encoder: the screen is recorded as '
+          'a wireframe');
     }
     _control = ControlState(
       defaults,
       ceilingsFrom(
-        screenCapture: _screenCapture && _videoSupported,
+        screenCapture: recordsScreen,
         captureLogs: _options.captureLogs,
         captureNetwork: _options.captureNetwork,
         captureNavigation: _options.captureNavigation,
@@ -247,7 +251,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   Tracer? _tracer;
   OpampHttpClient? _opamp;
   Uint8List _instanceUid = Uint8List(16);
-  ScreenRecorder? _screenRecorder;
+  ReplaySource? _screenRecorder;
   Timer? _flushTimer;
   Timer? _refreshTimer;
   bool _ready = false;
@@ -282,9 +286,65 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   bool get debug => _options.debug;
   TracewayOptions get options => _options;
 
-  /// Whether the screen is recorded: screen capture is on and this platform
-  /// can encode video.
-  bool get recordsScreen => _screenCapture && _videoSupported;
+  /// Whether the screen is recorded: screen capture is on and there is a
+  /// Traceway to upload it to. Every platform can record a wireframe.
+  bool get recordsScreen => _screenCapture;
+
+  /// How the screen is recorded, or null when it is not. The [Traceway]
+  /// widget swaps its recorder when this changes: `replay.captureMode` in
+  /// the settings overrides [TracewayOptions.screenCaptureMode], and video
+  /// falls back to a wireframe where there is no video encoder.
+  ValueListenable<TracewayScreenCaptureMode?> get captureMode => _captureMode;
+  late final ValueNotifier<TracewayScreenCaptureMode?> _captureMode =
+      ValueNotifier(recordsScreen ? _wantedCaptureMode() : null);
+
+  TracewayScreenCaptureMode _wantedCaptureMode() {
+    final requested =
+        _captureModeNamed(_control.settings.replayCaptureMode) ??
+            _options.screenCaptureMode;
+    return requested == TracewayScreenCaptureMode.video && !_videoSupported
+        ? TracewayScreenCaptureMode.wireframe
+        : requested;
+  }
+
+  static TracewayScreenCaptureMode? _captureModeNamed(Object? name) =>
+      switch (name) {
+        'video' => TracewayScreenCaptureMode.video,
+        'wireframe' => TracewayScreenCaptureMode.wireframe,
+        _ => null,
+      };
+
+  /// Follows the settings' capture mode. One session's replay is all video
+  /// or all wireframe, since the dashboard plays it with one player: once
+  /// some of it was uploaded, a change waits for the next session. The
+  /// mode is saved with the session, which may resume after a restart.
+  void _updateCaptureMode() {
+    if (!recordsScreen) return;
+    final wanted = _wantedCaptureMode();
+    var mode = wanted;
+    final session = _sessions?.currentId;
+    if (session != null) {
+      final saved = _store.get('captureMode');
+      final savedMode = saved is Map && saved['sessionId'] == session
+          ? _captureModeNamed(saved['mode'])
+          : null;
+      if (savedMode != null &&
+          savedMode != wanted &&
+          (savedMode != TracewayScreenCaptureMode.video || _videoSupported) &&
+          _replay.budget.hasUploaded(session)) {
+        mode = savedMode;
+      }
+      if (savedMode != mode) {
+        _store.set('captureMode', {'sessionId': session, 'mode': mode.name});
+      }
+    }
+    if (_captureMode.value == mode) return;
+    final what =
+        mode == TracewayScreenCaptureMode.video ? 'video' : 'a wireframe';
+    _log('the screen is recorded as $what'
+        '${mode != wanted ? ' until this session ends' : ''}');
+    _captureMode.value = mode;
+  }
 
   /// Screen recordings only go to Traceway: standalone there is nowhere to
   /// upload them.
@@ -315,10 +375,14 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   @visibleForTesting
   ReplayController get replay => _replay;
 
-  /// The screen recorder of the mounted [Traceway] widget, if any.
-  ScreenRecorder? get screenRecorder => _screenRecorder;
-  set screenRecorder(ScreenRecorder? recorder) {
+  /// The screen recorder of the mounted [Traceway] widget, if any: a
+  /// [ScreenRecorder] or a [WireframeRecorder].
+  ReplaySource? get screenRecorder => _screenRecorder;
+  set screenRecorder(ReplaySource? recorder) {
     _screenRecorder = recorder;
+    if (recorder is WireframeRecorder) {
+      recorder.maskAllInputs = _control.settings.replayMaskAllInputs;
+    }
     _replay.attach(recorder);
   }
 
@@ -1692,8 +1756,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   }
 
   void _applyReplay() {
+    _updateCaptureMode();
     final session = _sessions?.currentId;
     final settings = _control.settings;
+    final recorder = _screenRecorder;
+    if (recorder is WireframeRecorder) {
+      recorder.maskAllInputs = settings.replayMaskAllInputs;
+    }
     _replay.apply(
       _control.replayMode,
       maxAgeMs: (settings.bufferMaxAgeSeconds * 1000).round(),

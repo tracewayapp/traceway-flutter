@@ -165,7 +165,7 @@ A capture uploads what the device holds from its lookback window and then stream
 - **From the dashboard**: the Capture button on a session or issue targets one installation (`service.instance.id`), user (`user.id`) or session. The device starts it at its next poll; cancelling it stops the streaming at the poll after that. Each capture's lookback is uploaded once per installation.
 - **From a trigger** (`{"type": "capture", ...}` action): started on the device the moment the trigger fires. It survives app restarts until it ends; firing again only extends it.
 
-While a capture streams replay, the recording leaves as consecutive MP4 segments of about 8 seconds that start where the previous one ended. An exception during a streaming capture still gets a clip of its own. Video needs a hardware encoder: Android, iOS and macOS. On other platforms `screenCapture` records nothing and captures bring logs and requests only.
+While a capture streams replay, the recording leaves as consecutive MP4 segments of about 8 seconds that start where the previous one ended. An exception during a streaming capture still gets a clip of its own. Video needs a hardware encoder: Android, iOS and macOS. On other platforms the SDK records a [wireframe](#wireframe-recording) instead, which streams rrweb segments.
 
 ### Recording triggers: journeys of taps, navigations and logs
 
@@ -339,7 +339,8 @@ A `telemetry` URL that is not HTTP(S) or carries credentials, a query or a fragm
 | Option | Default | Description |
 |--------|---------|-------------|
 | `sampleRate` | `1.0` | Share of exceptions and messages that are reported (0.0 - 1.0) |
-| `screenCapture` | `false` | Record the screen: the last ~10 seconds go up with an exception, and captures can stream it (Android, iOS, macOS) |
+| `screenCapture` | `false` | Record the screen: the last ~10 seconds go up with an exception, and captures can stream it |
+| `screenCaptureMode` | `video` | `TracewayScreenCaptureMode.video` (MP4, Android, iOS, macOS; a wireframe elsewhere) or `.wireframe` (the widget tree replayed as HTML, every platform); remote `replay.captureMode` overrides it. See [Wireframe recording](#wireframe-recording) |
 | `debug` | `false` | Print debug info to console |
 | `version` | `''` | App version, sent as `service.version` (`unknown` when empty) |
 | `serviceName` | `flutter-app` | Sent as `service.name` |
@@ -374,6 +375,30 @@ When `screenCapture: true`, the SDK:
 4. Uploads the clip to the recordings endpoint, linked to the exception by its id
 
 Nothing is encoded or uploaded unless an exception is captured or a capture streams replay, and a clip can never be longer than the frame buffer. While a capture streams, the session is uploaded as consecutive segments, each shorter than the frame buffer. Touch and click positions are drawn directly onto the recorded frames (invisible to the user) so you can see exactly what the user was doing before the crash.
+
+### Wireframe recording
+
+```dart
+TracewayOptions(
+  screenCapture: true,
+  screenCaptureMode: TracewayScreenCaptureMode.wireframe,
+)
+```
+
+Instead of pictures, the SDK records the widget tree. After a frame the app drew (at most `fps` times a second, and not at all while nothing changes) it walks the elements under `Traceway` and turns what they paint into HTML: boxes with their colors, gradients, borders, corners and shadows, text with its size, weight and color, clips, opacity, transforms and scroll positions, as absolutely positioned elements nested the way Flutter paints them. What changes from one frame to the next becomes an rrweb mutation, so the dashboard replays the session with the same player as a browser session, taps and drags included.
+
+- **Small and cheap.** No pixels are read and no video is encoded: a segment is a few kilobytes of JSON, and recording costs a walk of the tree after the frames that changed something.
+- **Every platform**, Linux and Windows included: no video encoder is needed.
+- **Not pixel-exact.** The browser draws the text in its own font. Icons are drawn from a small picture of each glyph, made once per icon. Custom painting (`CustomPaint`, charts) is a dashed outline. Images from the network load from their URL; other images (memory, file, asset) are placeholders. Web views, maps and other platform views, and video textures, are labeled placeholders: their pixels never pass through Flutter. Checkboxes, switches, radios, sliders, segmented buttons and progress indicators are drawn from their state; 3D transforms keep their perspective, blurs and grayscale filters are CSS filters, and shapes CSS has no shape for (beveled corners, stars, `ClipPath` clippers) become clip paths.
+- **Privacy.** Text typed into fields is replaced with `*` unless remote settings set `replay.maskAllInputs: false`; obscured fields always are. `TracewayPrivacyMask` with `TracewayMaskMode.blank` replaces its widget with a box of that color and records nothing of its subtree; with `blur` the text in it becomes `*` and its images placeholders.
+
+Clips and segments follow the same rules as video: the last frames stay on the device in a ring of `maxBufferFrames` (a wireframe frame is taken only when the screen changed, so it covers at least as long), an exception uploads the clip, and captures stream the session as segments that each start with a full snapshot.
+
+A regression suite (`tool/e2e/wireframe`) runs a gallery of layouts, scrolling, animations, gestures, overlays, images and platform views through the recorder and compares every replayed screen with the app's own picture of it; see its README.
+
+#### Video or wireframe
+
+`screenCaptureMode` is the app's choice, and the dashboard can change it without a release: a rule that sets `replay.captureMode` to `video` or `wireframe` (Data Collection → rule → Signals → Replay type) overrides it for the clients the rule targets. The change applies as soon as the settings arrive, unless the session has already uploaded replay in the other mode; then it applies from the next session, so one session's replay is all video or all wireframe. Where there is no video encoder (Linux, Windows) the SDK records a wireframe whichever mode is asked for.
 
 ## Logs & Actions
 
@@ -477,6 +502,8 @@ TracewayPrivacyMask(
 
 This replaces the region with a solid color (black by default) in the recording.
 
+In a [wireframe recording](#wireframe-recording) a blank mask is a box of its color and nothing inside it is recorded; a blur mask keeps the layout but replaces its text with `*` and its images with placeholders.
+
 The mask covers the widget where it is in each recorded frame: its place is read from the render tree when the frame is captured, so it stays on the widget while that scrolls in a list, animates or is transformed.
 
 ## Android build setup
@@ -501,7 +528,7 @@ project(":flutter_quick_video_encoder") {
 | iOS | Yes | Yes |
 | Android | Yes | Yes |
 | macOS | Yes | Yes |
-| Linux, Windows | Yes | No (no video encoder) |
+| Linux, Windows | Yes | Wireframe (no video encoder: video falls back to it) |
 | Web | No | No |
 
 For Flutter web, use the JS SDK instead — see [Flutter Web](#flutter-web) below.

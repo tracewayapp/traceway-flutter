@@ -1,3 +1,4 @@
+import 'traceway_screen_capture_mode.dart';
 import 'traceway_telemetry.dart';
 
 class TracewayOptions {
@@ -6,10 +7,21 @@ class TracewayOptions {
 
   /// Record the screen. By default the last frames stay on the device and
   /// leave only as the clip of an exception; a capture or trigger that asks
-  /// for replay, or a rule, streams the session as video segments while it
-  /// lasts. Needs a video encoder: Android, iOS and macOS. Elsewhere nothing
-  /// is recorded.
+  /// for replay, or a rule, streams the session as segments while it lasts.
+  /// [screenCaptureMode] picks video or a wireframe.
   final bool screenCapture;
+
+  /// How [screenCapture] records: [TracewayScreenCaptureMode.video] (the
+  /// default) or [TracewayScreenCaptureMode.wireframe], the widget tree
+  /// replayed as HTML.
+  ///
+  /// Video needs a video encoder (Android, iOS and macOS); elsewhere the
+  /// screen is recorded as a wireframe instead. `replay.captureMode`
+  /// (`video` or `wireframe`) in the remote settings overrides this. A
+  /// change applies at once, unless the session has already uploaded replay
+  /// in the other mode: then it applies from the next session, so one
+  /// session's replay is all video or all wireframe.
+  final TracewayScreenCaptureMode screenCaptureMode;
   final bool debug;
 
   /// App version, sent as `service.version`.
@@ -28,8 +40,9 @@ class TracewayOptions {
   final double capturePixelRatio;
 
   /// Size of the screen-recording ring buffer in frames. With the default 15
-  /// fps this is about 10 seconds; it is the upper bound of every clip and
-  /// cannot be raised remotely.
+  /// fps this is about 10 seconds of video; it is the upper bound of every
+  /// clip and cannot be raised remotely. A wireframe takes a frame only when
+  /// the screen changed, so its buffer covers at least as long.
   final int maxBufferFrames;
   final int fps;
 
@@ -144,6 +157,7 @@ class TracewayOptions {
   const TracewayOptions({
     this.sampleRate = 1.0,
     this.screenCapture = false,
+    this.screenCaptureMode = TracewayScreenCaptureMode.video,
     this.debug = false,
     this.version = '',
     this.serviceName,

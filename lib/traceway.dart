@@ -9,5 +9,6 @@ export 'src/traceway_privacy_mask.dart' show TracewayPrivacyMask;
 export 'src/traceway_widget.dart' show Traceway;
 export 'src/traceway_client.dart' show TracewayClient;
 export 'src/traceway_options.dart' show TracewayOptions;
+export 'src/traceway_screen_capture_mode.dart' show TracewayScreenCaptureMode;
 export 'src/traceway_telemetry.dart'
     show TracewayTelemetry, TracewayTelemetryEndpoint;

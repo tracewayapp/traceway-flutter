@@ -12,6 +12,7 @@ class RecordingSegment {
     required this.events,
     this.startedAt,
     this.endedAt,
+    this.approxBytes,
   });
 
   /// The `traceway.exception.id` of the exception this segment is a clip of.
@@ -21,6 +22,21 @@ class RecordingSegment {
   final List<Map<String, dynamic>> events;
   final DateTime? startedAt;
   final DateTime? endedAt;
+
+  /// Size of the events as JSON when known; see [SessionRecordingPayload].
+  final int? approxBytes;
+
+  /// What the segment weighs in the upload queue.
+  int get bytes {
+    final known = approxBytes;
+    if (known != null) return known;
+    var total = 0;
+    for (final event in events) {
+      final data = event['data'];
+      if (data is String) total += data.length;
+    }
+    return total;
+  }
 
   Map<String, dynamic> toJson() => {
         if (exceptionId != null) 'exceptionId': exceptionId,
@@ -35,10 +51,7 @@ class RecordingSegment {
 class _Batch {
   _Batch(this.segments) {
     for (final segment in segments) {
-      for (final event in segment.events) {
-        final data = event['data'];
-        if (data is String) bytes += data.length;
-      }
+      bytes += segment.bytes;
     }
   }
   final List<RecordingSegment> segments;

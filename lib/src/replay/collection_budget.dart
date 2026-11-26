@@ -63,6 +63,12 @@ class CollectionBudget {
     });
   }
 
+  /// Whether [sessionId] has uploaded any replay.
+  bool hasUploaded(String sessionId) {
+    _switchTo(sessionId);
+    return _events > 0;
+  }
+
   Map<String, int> snapshot(String? sessionId) {
     _switchTo(sessionId);
     return {

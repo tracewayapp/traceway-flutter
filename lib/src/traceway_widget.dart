@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
@@ -9,9 +10,12 @@ import 'events/log_capture.dart';
 import 'events/network_capture.dart';
 import 'events/traceway_event.dart';
 import 'events/traceway_navigator_observer.dart';
+import 'replay/replay_controller.dart';
 import 'screen_recorder.dart';
 import 'traceway_client.dart';
 import 'traceway_options.dart';
+import 'traceway_screen_capture_mode.dart';
+import 'wireframe/wireframe_recorder.dart';
 
 class Traceway extends StatefulWidget {
   final Widget child;
@@ -136,29 +140,69 @@ class Traceway extends StatefulWidget {
 class _TracewayState extends State<Traceway> {
   final GlobalKey _repaintBoundaryKey = GlobalKey();
   ScreenRecorder? _screenRecorder;
+  WireframeRecorder? _wireframeRecorder;
+  ValueListenable<TracewayScreenCaptureMode?>? _captureMode;
 
   @override
   void initState() {
     super.initState();
     final client = TracewayClient.instance;
-    if (client != null && client.recordsScreen) {
-      _screenRecorder = ScreenRecorder(
-        repaintBoundaryKey: _repaintBoundaryKey,
-        maxFrames: client.options.maxBufferFrames.clamp(1, 100000),
-        pixelRatio: client.options.capturePixelRatio,
-        fps: client.options.fps.clamp(1, 59),
-        debug: client.debug,
-      );
+    if (client == null) return;
+    _captureMode = client.captureMode..addListener(_onCaptureModeChanged);
+    final recorder = _createRecorder(client);
+    if (recorder != null) {
       // The client starts and stops the recorder as the replay mode allows.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) client.screenRecorder = _screenRecorder;
+        if (mounted && identical(recorder, _recorder)) {
+          client.screenRecorder = recorder;
+        }
       });
     }
   }
 
+  ReplaySource? get _recorder {
+    final ReplaySource? wireframe = _wireframeRecorder;
+    return wireframe ?? _screenRecorder;
+  }
+
+  ReplaySource? _createRecorder(TracewayClient client) {
+    _screenRecorder = null;
+    _wireframeRecorder = null;
+    switch (client.captureMode.value) {
+      case TracewayScreenCaptureMode.wireframe:
+        _wireframeRecorder = WireframeRecorder(
+          rootKey: _repaintBoundaryKey,
+          maxFrames: client.options.maxBufferFrames.clamp(2, 100000),
+          fps: client.options.fps.clamp(1, 59),
+          debug: client.debug,
+          screenName: () => client.currentScreen,
+        );
+      case TracewayScreenCaptureMode.video:
+        _screenRecorder = ScreenRecorder(
+          repaintBoundaryKey: _repaintBoundaryKey,
+          maxFrames: client.options.maxBufferFrames.clamp(1, 100000),
+          pixelRatio: client.options.capturePixelRatio,
+          fps: client.options.fps.clamp(1, 59),
+          debug: client.debug,
+        );
+      case null:
+    }
+    return _recorder;
+  }
+
+  /// Remote settings switched between video and wireframe: the new recorder
+  /// replaces the old one, whose frames are dropped.
+  void _onCaptureModeChanged() {
+    final client = TracewayClient.instance;
+    if (!mounted || client == null) return;
+    client.screenRecorder = _createRecorder(client);
+  }
+
   @override
   void dispose() {
+    _captureMode?.removeListener(_onCaptureModeChanged);
     _screenRecorder?.stop();
+    _wireframeRecorder?.stop();
     final client = TracewayClient.instance;
     if (client != null) {
       client.screenRecorder = null;
@@ -172,6 +216,8 @@ class _TracewayState extends State<Traceway> {
   void _onPointerDown(PointerDownEvent event) {
     TracewayClient.instance?.markActivity();
     _screenRecorder?.setTouchPosition(event.localPosition);
+    _wireframeRecorder?.pointerDown(event.pointer, event.localPosition,
+        touch: _isTouch(event.kind));
     final primary = event.kind != PointerDeviceKind.mouse ||
         event.buttons & kPrimaryButton != 0;
     if (primary) _downs[event.pointer] = event;
@@ -179,6 +225,8 @@ class _TracewayState extends State<Traceway> {
 
   void _onPointerMove(PointerMoveEvent event) {
     _screenRecorder?.setTouchPosition(event.localPosition);
+    _wireframeRecorder?.pointerMove(event.pointer, event.localPosition,
+        touch: _isTouch(event.kind));
     final down = _downs[event.pointer];
     if (down != null &&
         (event.position - down.position).distance > _slop(down.kind)) {
@@ -192,8 +240,11 @@ class _TracewayState extends State<Traceway> {
   void _onPointerUp(PointerUpEvent event) {
     _screenRecorder?.clearTouchPosition();
     final down = _downs.remove(event.pointer);
-    if (down == null) return;
-    if ((event.position - down.position).distance > _slop(down.kind)) return;
+    final tap = down != null &&
+        (event.position - down.position).distance <= _slop(down.kind);
+    _wireframeRecorder?.pointerUp(event.pointer, event.localPosition,
+        touch: _isTouch(event.kind), tap: tap);
+    if (down == null || !tap) return;
     try {
       TracewayClient.instance?.recordTap(down.position, viewId: down.viewId);
     } catch (_) {
@@ -204,15 +255,22 @@ class _TracewayState extends State<Traceway> {
   void _onPointerCancel(PointerCancelEvent event) {
     _downs.remove(event.pointer);
     _screenRecorder?.clearTouchPosition();
+    _wireframeRecorder?.pointerCancel(event.pointer, event.localPosition,
+        touch: _isTouch(event.kind));
   }
 
   void _onPointerHover(PointerHoverEvent event) {
     if (event.kind != PointerDeviceKind.mouse) return;
+    _wireframeRecorder?.pointerMove(event.pointer, event.localPosition,
+        touch: false);
     try {
       TracewayClient.instance
           ?.recordHover(event.position, viewId: event.viewId);
     } catch (_) {}
   }
+
+  static bool _isTouch(PointerDeviceKind kind) =>
+      kind != PointerDeviceKind.mouse && kind != PointerDeviceKind.trackpad;
 
   static double _slop(PointerDeviceKind kind) =>
       kind == PointerDeviceKind.mouse ? kPrecisePointerHitSlop * 4 : kTouchSlop;

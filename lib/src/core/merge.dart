@@ -309,6 +309,13 @@ Settings applyOverlay(Settings base, Json overlay) {
     if (mode != null) out.replayMode = mode;
     final sampleRate = _rate(replay['sessionSampleRate']);
     if (sampleRate != null) out.replaySessionSampleRate = sampleRate;
+    if (replay['maskAllInputs'] is bool) {
+      out.replayMaskAllInputs = replay['maskAllInputs'] as bool;
+    }
+    final captureMode = replay['captureMode'];
+    if (captureMode == 'video' || captureMode == 'wireframe') {
+      out.replayCaptureMode = captureMode as String;
+    }
   }
 
   final metrics = _object(overlay['metrics']);

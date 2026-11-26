@@ -5,8 +5,8 @@ import '../models/session_recording_payload.dart';
 import 'collection_budget.dart';
 import 'recordings_transport.dart';
 
-/// What the controller needs from the screen recorder; lets tests stand in
-/// for the platform video encoder.
+/// What the controller needs from a screen recorder: the video recorder or
+/// the wireframe recorder. Lets tests stand in for both.
 abstract class ReplaySource {
   bool get isRunning;
   void start();
@@ -16,8 +16,8 @@ abstract class ReplaySource {
   /// Whether any frame was captured at or after [since] and before [until].
   bool hasFrames({DateTime? since, DateTime? until});
 
-  /// Encodes the frames captured at or after [since] and before [until] into
-  /// one clip. The frames are chosen when this is called.
+  /// Makes one clip of what was on screen at or after [since] and before
+  /// [until]. The frames are chosen when this is called.
   Future<SessionRecordingPayload?> captureRecording(
     String clipId, {
     DateTime? since,
@@ -215,22 +215,20 @@ class ReplayController {
       try {
         final clip = await recording;
         if (clip == null || clip.events.isEmpty || _mode == Mode.off) return;
-        var bytes = 256;
-        for (final event in clip.events) {
-          final data = event['data'];
-          bytes += data is String ? data.length : 0;
+        final segment = RecordingSegment(
+          exceptionId: exceptionId,
+          sessionId: session,
+          segmentIndex: index,
+          events: clip.events,
+          startedAt: clip.startedAt,
+          endedAt: clip.endedAt,
+          approxBytes: clip.approxBytes,
+        );
+        if (!budget.admit(
+            budgetSession, 256 + segment.bytes, clip.events.length)) {
+          return;
         }
-        if (!budget.admit(budgetSession, bytes, clip.events.length)) return;
-        transport.send([
-          RecordingSegment(
-            exceptionId: exceptionId,
-            sessionId: session,
-            segmentIndex: index,
-            events: clip.events,
-            startedAt: clip.startedAt,
-            endedAt: clip.endedAt,
-          ),
-        ]);
+        transport.send([segment]);
       } catch (_) {
         // A failed encode loses the clip, never the app.
       }

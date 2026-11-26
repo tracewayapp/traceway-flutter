@@ -294,6 +294,8 @@ class Settings {
     required this.baselineSampleRate,
     required this.replayMode,
     required this.replaySessionSampleRate,
+    this.replayMaskAllInputs = true,
+    this.replayCaptureMode,
     required this.bufferMaxBytes,
     required this.bufferMaxAgeSeconds,
     required this.persist,
@@ -309,6 +311,15 @@ class Settings {
   double baselineSampleRate;
   Mode replayMode;
   double replaySessionSampleRate;
+
+  /// Wireframe recordings mask what is typed into text fields
+  /// (`replay.maskAllInputs`, as in the browser SDK).
+  bool replayMaskAllInputs;
+
+  /// How the Flutter SDK records the screen, `video` or `wireframe`
+  /// (`replay.captureMode`); null keeps the app's
+  /// `TracewayOptions.screenCaptureMode`.
+  String? replayCaptureMode;
   int bufferMaxBytes;
   double bufferMaxAgeSeconds;
   bool persist;
@@ -323,6 +334,8 @@ class Settings {
         baselineSampleRate: baselineSampleRate,
         replayMode: replayMode,
         replaySessionSampleRate: replaySessionSampleRate,
+        replayMaskAllInputs: replayMaskAllInputs,
+        replayCaptureMode: replayCaptureMode,
         bufferMaxBytes: bufferMaxBytes,
         bufferMaxAgeSeconds: bufferMaxAgeSeconds,
         persist: persist,
