@@ -1,18 +1,14 @@
-## Unreleased
+## 2.0.0-beta.1 — 2026-11-26
 
-Captures, recording triggers, taps and client metrics, at parity with the browser SDK 2.1.
+Rebuilt on the standard OpenTelemetry SDK for Dart, at parity with the browser SDK 2.1: OTLP logs, spans and metrics, a ring buffer on the device, remote config over OpAMP, captures with video, recording triggers, taps and app performance metrics.
 
-- **Fixed: a privacy mask stayed behind when its widget moved.** `TracewayPrivacyMask` recorded its place when it was built, so a masked widget that scrolled in a list or moved with an animation was recorded unmasked, with the mask left where the widget had been. The place of every mask is now read from the render tree as each frame is captured.
-- **Fixed: a large buffer lost its newest records on a flush.** Flushed breadcrumbs went through the batch processors, whose queues hold 2,048 records and drop the rest: with more than that buffered, the breadcrumbs right before the error were not uploaded, and with `persistToDisk: false` the error record itself could be dropped. A flush now hands the buffer to the exporters directly, 512 records per request.
-- **Fixed: `HttpClient.get/post/open(host, port, path)` with a query in the path** was sent to the wrong URL while network capture was on (`?` and `#` were percent-encoded into the path). The path is now read as dart:io reads it.
-- **Fixed: a rule whose `emit` action emits the event it matches** made the app spin without end. Rules may answer each other's emitted events four deep.
-- **Fixed: a line printed while a record is emitted** (OpenTelemetry's own diagnostics, when the app turns them on) was recorded as a console record, which printed the next line, without end.
-- A buffer restored after a restart is uploaded in requests of about 1 MiB. As one request, a buffer over 4 MiB (possible when a rule raises `buffer.maxBytes`) was dropped instead of queued.
-- A clip whose encoding fails no longer leaves its file in the temporary directory.
-- Removed the unused `LogEvent` and `CustomEvent` types and the JSON form of `TracewayEvent` (leftovers of the 1.x report format), the unused `uuid` dependency, and the `replay.maskAllInputs` and `buffer.replayMaxBytes` settings, which were read and never applied.
-
+- **Breaking**: requires a server with OTLP/OpAMP support for Flutter projects; the 1.x `/api/report` protocol is gone. Options `debounceMs`, `retryDelayMs`, `maxPendingExceptions`, `maxLocalFiles`, `localFileMaxAgeHours`, `eventsWindow` and `eventsMaxCount` were removed.
+- Logs and spans are OpenTelemetry records, built with `dartastic_opentelemetry` and sent as OTLP/HTTP.
+- Ring buffer: logs, HTTP requests, navigation and custom events stay on the device (2 MB / 10 minutes) and are uploaded when an exception or a trigger asks for them.
+- Remote config over OpAMP: signal modes, sample rates, triggers and on-demand captures from the dashboard. Init options are ceilings.
+- Screen recording is unchanged in size (150 frames, ~10 seconds). The clip of an exception is uploaded to `/api/recordings`.
+- Sessions, `Traceway.track`, `Traceway.setAttribute`, `refreshConfig`, `shutdown`, `getInstanceId`.
 - **App performance metrics**, aggregated on the device and uploaded as OTLP metrics (delta exponential histograms and monotonic sums) to `/api/otel/v1/metrics`, like the browser SDK's: cold and hot start, time to initial and full display per screen (`Traceway.reportFullyDisplayed()`), slow and frozen frames, hangs, unhandled errors, sessions, daily users and affected users, peak memory and HTTP requests by host. App-defined metrics with `Traceway.metric` / `Traceway.count`, and dimensions with `metricDimensions` / `Traceway.setMetricDimension`. Remote `metrics` settings (`enabled`, `sampleRate`, `flushSeconds`) and the plan's `limits.metrics` apply; `captureMetrics: false` turns them off. Resources gain `os.major`, `device.form_factor`, `device.class` and `traceway.metrics: aggregated`.
-
 - **Captures stream video.** A capture from the dashboard or a trigger that asks for replay (`capture`, `startReplay`, `stream` with `replay`, or a rule with `replay.mode: stream`) uploads the buffered lookback and then streams the session as consecutive MP4 segments until it ends; logs, requests and taps stream with it. A capture known only from the cached config starts nothing until the server confirms it. Video needs a hardware encoder (Android, iOS, macOS); elsewhere `screenCapture` records nothing.
 - **Recording triggers** (`event` steps of type `click`, `hover`, `navigation` and `log`) run in Flutter, with the browser SDK's sequence engine: overlapping progress, counts and windows, progress and fire counts kept across restarts within a session. Fired triggers that ask for replay report their steps, so the session lists them as recording reasons. The SDK advertises `io.traceway.sdk.sequence-triggers/v1`.
 - **Taps** are recorded as `browser.user_action.click` (signal `userActions`, buffered by default) with a CSS-like selector naming the widget (`ElevatedButton#pay`, `IconButton[label="Delete"]`), plus `app.widget.*` and `app.screen.*` attributes. Selectors match keys, `Semantics` identifiers, roles, labels, shown text and widget types; see the README.
@@ -26,20 +22,20 @@ Captures, recording triggers, taps and client metrics, at parity with the browse
 - **Standalone mode**: `Traceway.run(connectionString:)` is optional. Without it, `telemetry` must have a base `url` or all three signal endpoints (`ArgumentError` otherwise), every record goes there, and remote config, screen recording uploads and session records are off whatever the options say. Exceptions are OTLP log records with the event name `exception`.
 - **Invalid settings no longer blank the app**: when the connection string or `telemetry` is invalid (a URL that is not HTTP(S) or has credentials, a query or a fragment; standalone without a destination for every signal), `Traceway.run` reports the error as a `FlutterError` (library `traceway`, shown in the console) and runs the app without the SDK. `TracewayClient.initialize` called directly still throws `ArgumentError`.
 - **Trace propagation**: `TracewayOptions.propagateTraceHeaderUrls` (`List<Pattern>`, empty by default) selects requests that carry a W3C `traceparent` header naming their client span, so backend spans join the app's trace. A `String` matches URLs that start with it, a `RegExp` URLs it matches. Applies to `TracewayHttpClient` always and to other dart:io requests when `captureNetwork` is on; requests to Traceway and the `telemetry` receivers never carry it, and a request that already has a `traceparent` keeps its own. The client span of a propagated dart:io request starts when the request is opened (connect and TLS included). A request sent through `TracewayHttpClient` over a dart:io client is recorded once, not also by the `HttpOverrides` capture.
-- The SDK exports with its own OTLP/HTTP exporters instead of the `dartastic_opentelemetry` ones: protobuf to exactly the configured URL, logs and spans gzip-compressed. Failed batches are queued on disk per destination (`outbox` for Traceway, `outbox-<hash>` for each set of external destinations); pending metric payloads and the daily user count are kept per destination too, so a changed receiver is never sent what was meant for the previous one.
+- Records are exported by the SDK's own OTLP/HTTP exporters, not the `dartastic_opentelemetry` ones: protobuf to exactly the configured URL, logs and spans gzip-compressed. Failed batches are queued on disk per destination (`outbox` for Traceway, `outbox-<hash>` for each set of external destinations); pending metric payloads and the daily user count are kept per destination too, so a changed receiver is never sent what was meant for the previous one.
 - A cold start whose first frame came while the app was `inactive` (on screen without focus: an unfocused desktop window, iOS during its launch transition) is counted; only a start into the background (`hidden`, `paused`, `detached`) is not.
 - `sessions: false` now only stops the session records (`session.start`, `session.end`, `traceway.session.update`); the session id still exists and correlates records, sampling and trigger progress, as in the browser SDK, so captures and rules that stream replay still work for those apps. Such apps now also count `app.session` metrics and ask for remote settings when a session starts, as browser apps do.
 
-## 2.0.0-beta.1 — 2026-11-14
+Fixes and cleanups:
 
-Rebuilt on the standard OpenTelemetry SDK for Dart, matching the browser SDK's 2.0 architecture.
-
-- Logs and spans go through `dartastic_opentelemetry` and are exported as OTLP/HTTP.
-- Ring buffer: logs, HTTP requests, navigation and custom events stay on the device (2 MB / 10 minutes) and are uploaded when an exception or a trigger asks for them.
-- Remote config over OpAMP: signal modes, sample rates, triggers and on-demand captures from the dashboard. Init options are ceilings.
-- Screen recording is unchanged in size (150 frames, ~10 seconds) and is uploaded only as the clip of an exception, to `/api/recordings`. It cannot be streamed, locally or by remote config.
-- Sessions, `Traceway.track`, `Traceway.setAttribute`, `refreshConfig`, `shutdown`, `getInstanceId`.
-- **Breaking**: requires a server with OTLP/OpAMP support for Flutter projects; the 1.x `/api/report` protocol is gone. Options `debounceMs`, `retryDelayMs`, `maxPendingExceptions`, `maxLocalFiles`, `localFileMaxAgeHours`, `eventsWindow` and `eventsMaxCount` were removed.
+- **Fixed: a privacy mask stayed behind when its widget moved.** `TracewayPrivacyMask` recorded its place when it was built, so a masked widget that scrolled in a list or moved with an animation was recorded unmasked, with the mask left where the widget had been. The place of every mask is now read from the render tree as each frame is captured.
+- **Fixed: a large buffer lost its newest records on a flush.** Flushed breadcrumbs went through the batch processors, whose queues hold 2,048 records and drop the rest: with more than that buffered, the breadcrumbs right before the error were not uploaded, and with `persistToDisk: false` the error record itself could be dropped. A flush now hands the buffer to the exporters directly, 512 records per request.
+- **Fixed: `HttpClient.get/post/open(host, port, path)` with a query in the path** was sent to the wrong URL while network capture was on (`?` and `#` were percent-encoded into the path). The path is now read as dart:io reads it.
+- **Fixed: a rule whose `emit` action emits the event it matches** made the app spin without end. Rules may answer each other's emitted events four deep.
+- **Fixed: a line printed while a record is emitted** (OpenTelemetry's own diagnostics, when the app turns them on) was recorded as a console record, which printed the next line, without end.
+- A buffer restored after a restart is uploaded in requests of about 1 MiB. As one request, a buffer over 4 MiB (possible when a rule raises `buffer.maxBytes`) was dropped instead of queued.
+- A clip whose encoding fails no longer leaves its file in the temporary directory.
+- Removed the unused `LogEvent` and `CustomEvent` types and the JSON form of `TracewayEvent` (leftovers of the 1.x report format), the unused `uuid` dependency, and the `replay.maskAllInputs` and `buffer.replayMaxBytes` settings, which were read and never applied.
 
 ## 1.0.9 — 2026-06-16
 

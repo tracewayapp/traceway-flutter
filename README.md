@@ -40,10 +40,10 @@ Error tracking, session context and screen recording for Flutter apps, built on 
 ## Installation
 
 ```bash
-flutter pub add 'traceway:{"git":{"url":"https://github.com/tracewayapp/traceway-flutter.git","ref":"v2-session-capture"}}'
+flutter pub add 'traceway:^2.0.0-beta.1'
 ```
 
-`flutter pub add traceway` without a version installs the newest stable release, 1.x.
+`flutter pub add traceway` without a version installs the newest stable release, 1.x. An app that installed the preview from Git (`ref: v2-session-capture`) replaces that dependency with the version above.
 
 ## Quick Start
 
@@ -122,7 +122,7 @@ The built-in trigger fires on every exception: it uploads the buffered breadcrum
 
 The SDK polls the server over [OpAMP](https://opentelemetry.io/docs/specs/opamp/) (plain HTTP: at start, every 5 minutes by default, when the app returns to the foreground, and about 2 seconds after `Traceway.setAttribute` or a new session, so a rule targeting an attribute applies soon) and applies the collection settings you define under **Project → Data Collection** in the dashboard: signal modes and sample rates, buffer sizes, extra triggers (for example "flush when `checkout_failed` happens twice in a minute") and on-demand captures of one user or device.
 
-- The options you pass to `Traceway.run` are **ceilings**. Remote settings can lower what is collected but never raise it: with `captureNetwork: false` no rule can turn network capture on, and without `screenCapture: true` nothing is recorded.
+- The `capture*` options, `screenCapture` and `sessions` are **ceilings**. Remote settings can lower what is collected but never raise it: with `captureNetwork: false` no rule can turn network capture on, and without `screenCapture: true` nothing is recorded. `sampleRate`, `baselineSampleRate` and `recordAllSessions` are defaults: a rule can change them in either direction.
 - The last applied settings are cached, so they are in effect from the first frame of the next start.
 - Set `remoteConfig: false` to never poll. Standalone (no connection string) the SDK never polls either.
 

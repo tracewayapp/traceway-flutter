@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart' hide matches;
 import 'package:traceway/src/core/control_state.dart';
 import 'package:traceway/src/core/endpoints.dart';
@@ -7,10 +9,19 @@ import 'package:traceway/src/core/merge.dart';
 import 'package:traceway/src/core/ring_buffer.dart';
 import 'package:traceway/src/core/settings.dart';
 import 'package:traceway/src/core/trigger_engine.dart';
+import 'package:traceway/src/sdk_version.dart';
 
 FieldLookup lookupOf(Map<String, Object?> values) => (key) => values[key];
 
 void main() {
+  // The release tooling bumps both; a release by hand must too.
+  test('the SDK reports the version in pubspec.yaml', () {
+    final version = RegExp(r'^version: (\S+)$', multiLine: true)
+        .firstMatch(File('pubspec.yaml').readAsStringSync())!
+        .group(1);
+    expect(tracewaySdkVersion, version);
+  });
+
   group('resolveEndpoints', () {
     test('accepts the bare url and the 1.x report url', () {
       for (final url in [

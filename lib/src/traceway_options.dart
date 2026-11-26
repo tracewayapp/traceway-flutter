@@ -107,8 +107,10 @@ class TracewayOptions {
   /// are sent continuously instead of only around errors.
   final double baselineSampleRate;
 
-  /// Poll the server over OpAMP for collection settings. The options above
-  /// are ceilings: remote settings can lower them but never raise them.
+  /// Poll the server over OpAMP for collection settings. The `capture*`
+  /// options, [screenCapture] and [sessions] are ceilings: remote settings
+  /// can lower them but never raise them. [sampleRate], [baselineSampleRate]
+  /// and [recordAllSessions] are defaults a rule can change either way.
   final bool remoteConfig;
 
   /// How long finished records wait before they are sent as one batch.

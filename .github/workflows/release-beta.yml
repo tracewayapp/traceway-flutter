@@ -1,0 +1,108 @@
+name: Release beta (tag + publish)
+
+# Releases the prerelease that pubspec.yaml names, on the branch it is started
+# on. Started by hand only: when the version is a prerelease (2.0.0-beta.1)
+# that has no tag yet, this checks it, tags it and starts the publish
+# workflow, which uploads it to pub.dev and creates the GitHub prerelease.
+# Stable versions are left to the "Release (bump + tag)" workflow.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release-beta
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find a beta to release
+        id: plan
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[a-zA-Z0-9.]+$ ]]; then
+            echo "::notice::$VERSION is not a prerelease: nothing to release here."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 0: the tag exists, 2: it does not, anything else: the lookup failed.
+          RC=0
+          git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null || RC=$?
+          if [ "$RC" = "0" ]; then
+            echo "::notice::v$VERSION is already tagged: nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$RC" != "2" ]; then
+            echo "Could not look up the tag v$VERSION (git ls-remote exited $RC)"
+            exit 1
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "Releasing traceway $VERSION"
+
+      - name: Check the version the SDK reports and the changelog
+        if: steps.plan.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          REPORTED=$(sed -n "s/^const String tracewaySdkVersion = '\(.*\)';/\1/p" lib/src/sdk_version.dart)
+          if [ "$REPORTED" != "$VERSION" ]; then
+            echo "Version mismatch: lib/src/sdk_version.dart=$REPORTED vs pubspec.yaml=$VERSION"
+            exit 1
+          fi
+          NOTES=$(awk -v ver="$VERSION" '
+            /^## / {
+              if (found) exit
+              if ($2 == ver) { found=1; next }
+            }
+            found
+          ' CHANGELOG.md)
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            echo "CHANGELOG.md has no entry for $VERSION (expected a '## $VERSION — <date>' heading with notes)"
+            exit 1
+          fi
+
+      - uses: subosito/flutter-action@v2
+        if: steps.plan.outputs.release == 'true'
+        with:
+          channel: stable
+
+      - name: Install dependencies
+        if: steps.plan.outputs.release == 'true'
+        run: flutter pub get
+
+      # Infos (deprecations in a newer Flutter) are reported, not fatal.
+      - name: Analyze
+        if: steps.plan.outputs.release == 'true'
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        if: steps.plan.outputs.release == 'true'
+        run: flutter test
+
+      - name: Tag and push
+        if: steps.plan.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+
+      # Nothing publishes on a pushed tag: the publish workflow is started
+      # on the tag here.
+      - name: Trigger publish workflow
+        if: steps.plan.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: gh workflow run publish.yml --ref "v$VERSION"

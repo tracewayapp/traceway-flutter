@@ -1,9 +1,10 @@
 name: Publish to pub.dev
 
+# Never starts on its own: the release workflows create the version tag and
+# start this on it ("gh workflow run publish.yml --ref v<version>"). Started
+# on a branch it stops at the version check.
+
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+*'
   workflow_dispatch:
 
 permissions:
@@ -31,6 +32,11 @@ jobs:
           PUBSPEC=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
           if [ "$PUBSPEC" != "$VERSION" ]; then
             echo "Version mismatch: pubspec.yaml=$PUBSPEC vs tag=$VERSION"
+            exit 1
+          fi
+          REPORTED=$(sed -n "s/^const String tracewaySdkVersion = '\(.*\)';/\1/p" lib/src/sdk_version.dart)
+          if [ "$REPORTED" != "$VERSION" ]; then
+            echo "Version mismatch: lib/src/sdk_version.dart=$REPORTED vs tag=$VERSION"
             exit 1
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
