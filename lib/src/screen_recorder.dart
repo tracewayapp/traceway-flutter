@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_quick_video_encoder/flutter_quick_video_encoder.dart';
@@ -12,7 +12,9 @@ import 'package:path_provider/path_provider.dart';
 
 import 'circular_buffer.dart';
 import 'models/session_recording_payload.dart';
+import 'replay/replay_controller.dart';
 import 'traceway_mask_mode.dart';
+import 'traceway_privacy_mask.dart';
 
 class CapturedFrame {
   final Uint8List pngBytes;
@@ -32,7 +34,70 @@ class CapturedFrame {
   });
 }
 
-class ScreenRecorder with WidgetsBindingObserver {
+/// Turns RGBA frames into an MP4 file. The platform implementation uses the
+/// device's hardware H.264 encoder.
+abstract class VideoEncoder {
+  Future<void> setup({
+    required int width,
+    required int height,
+    required int fps,
+    required String filepath,
+    required bool debug,
+  });
+  Future<void> appendFrame(Uint8List rgba);
+  Future<void> finish();
+}
+
+class PlatformVideoEncoder implements VideoEncoder {
+  const PlatformVideoEncoder();
+
+  @override
+  Future<void> setup({
+    required int width,
+    required int height,
+    required int fps,
+    required String filepath,
+    required bool debug,
+  }) async {
+    // Standard verbosity prints twice per frame into the app's breadcrumb buffer.
+    await FlutterQuickVideoEncoder.setLogLevel(
+      debug ? LogLevel.error : LogLevel.none,
+    );
+    await FlutterQuickVideoEncoder.setup(
+      width: width,
+      height: height,
+      fps: fps,
+      videoBitrate: 2000000,
+      profileLevel: ProfileLevel.baselineAutoLevel,
+      audioChannels: 0,
+      audioBitrate: 0,
+      sampleRate: 0,
+      filepath: filepath,
+    );
+  }
+
+  @override
+  Future<void> appendFrame(Uint8List rgba) =>
+      FlutterQuickVideoEncoder.appendVideoFrame(rgba);
+
+  @override
+  Future<void> finish() => FlutterQuickVideoEncoder.finish();
+}
+
+class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
+  /// Replaces the platform encoder, for platforms it does not support and
+  /// for tests.
+  @visibleForTesting
+  static VideoEncoder? encoderOverride;
+
+  /// Whether clips can be encoded here: the hardware encoder exists on
+  /// Android, iOS and macOS. Elsewhere the SDK records no frames at all.
+  static bool get isVideoSupported {
+    if (encoderOverride != null) return true;
+    if (kIsWeb) return false;
+    return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+  }
+
   final GlobalKey repaintBoundaryKey;
   final double pixelRatio;
   final int fps;
@@ -52,9 +117,6 @@ class ScreenRecorder with WidgetsBindingObserver {
   // Touch tracking (logical coordinates)
   Offset? _touchPosition;
 
-  // Privacy mask tracking (logical coordinates, relative to RepaintBoundary)
-  final Map<Key, MaskRegion> _maskRegions = {};
-
   ScreenRecorder({
     required this.repaintBoundaryKey,
     required int maxFrames,
@@ -71,15 +133,16 @@ class ScreenRecorder with WidgetsBindingObserver {
     _touchPosition = null;
   }
 
-  void addMaskRegion(Key key, Rect rect, TracewayMaskMode mode) {
-    _maskRegions[key] = MaskRegion(key: key, rect: rect, mode: mode);
-  }
+  @override
+  bool get isRunning => _captureTimer != null;
 
-  void removeMaskRegion(Key key) {
-    _maskRegions.remove(key);
-  }
+  /// Forgets every buffered frame, e.g. when replay is switched off remotely.
+  @override
+  void clearBuffer() => _buffer.clear();
 
+  @override
   void start() {
+    if (_captureTimer != null) return;
     WidgetsBinding.instance.addObserver(this);
     _captureTimer = Timer.periodic(
       Duration(milliseconds: _captureIntervalMs),
@@ -90,6 +153,7 @@ class ScreenRecorder with WidgetsBindingObserver {
     }
   }
 
+  @override
   void stop() {
     _captureTimer?.cancel();
     _captureTimer = null;
@@ -112,6 +176,9 @@ class ScreenRecorder with WidgetsBindingObserver {
 
     _isCapturing = true;
     try {
+      // Read in the same turn as the picture is taken, so every mask is
+      // where its widget is in this frame.
+      final maskRegions = maskRegionsIn(boundary);
       final image = await boundary.toImage(pixelRatio: pixelRatio);
       final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       final width = image.width;
@@ -125,7 +192,7 @@ class ScreenRecorder with WidgetsBindingObserver {
           height: height,
           timestamp: DateTime.now(),
           touchPosition: _touchPosition,
-          maskRegions: _maskRegions.values.toList(),
+          maskRegions: maskRegions,
         ));
       }
     } catch (e) {
@@ -193,14 +260,21 @@ class ScreenRecorder with WidgetsBindingObserver {
     }
   }
 
+  /// The pixels of a frame a logical rectangle covers: left, top, right and
+  /// bottom, the last two exclusive. Rounded outwards, so a mask never ends
+  /// short of its widget; empty when the rectangle is outside the frame.
+  (int, int, int, int) _pixelRect(Rect logicalRect, int width, int height) => (
+        (logicalRect.left * pixelRatio).floor().clamp(0, width),
+        (logicalRect.top * pixelRatio).floor().clamp(0, height),
+        (logicalRect.right * pixelRatio).ceil().clamp(0, width),
+        (logicalRect.bottom * pixelRatio).ceil().clamp(0, height),
+      );
+
   /// Pixelates a rectangular region by averaging NxN blocks of pixels.
   void _applyPixelation(
     Uint8List pixels, int width, int height, Rect logicalRect, double ratio,
   ) {
-    final left = (logicalRect.left * pixelRatio).round().clamp(0, width - 1);
-    final top = (logicalRect.top * pixelRatio).round().clamp(0, height - 1);
-    final right = (logicalRect.right * pixelRatio).round().clamp(0, width);
-    final bottom = (logicalRect.bottom * pixelRatio).round().clamp(0, height);
+    final (left, top, right, bottom) = _pixelRect(logicalRect, width, height);
 
     final blockSize = max(2, (ratio * 20).round());
 
@@ -244,10 +318,7 @@ class ScreenRecorder with WidgetsBindingObserver {
   void _applyBlank(
     Uint8List pixels, int width, int height, Rect logicalRect, ui.Color color,
   ) {
-    final left = (logicalRect.left * pixelRatio).round().clamp(0, width - 1);
-    final top = (logicalRect.top * pixelRatio).round().clamp(0, height - 1);
-    final right = (logicalRect.right * pixelRatio).round().clamp(0, width);
-    final bottom = (logicalRect.bottom * pixelRatio).round().clamp(0, height);
+    final (left, top, right, bottom) = _pixelRect(logicalRect, width, height);
 
     final r = (color.r * 255.0).round().clamp(0, 255);
     final g = (color.g * 255.0).round().clamp(0, 255);
@@ -265,10 +336,29 @@ class ScreenRecorder with WidgetsBindingObserver {
     }
   }
 
+  /// Number of frames currently held; never more than the buffer capacity.
+  int get bufferedFrameCount => _buffer.length;
+
+  static bool _inWindow(CapturedFrame frame, DateTime? since, DateTime? until) =>
+      (since == null || !frame.timestamp.isBefore(since)) &&
+      (until == null || frame.timestamp.isBefore(until));
+
+  @override
+  bool hasFrames({DateTime? since, DateTime? until}) =>
+      _buffer.readAll().any((f) => _inWindow(f, since, until));
+
+  /// Encodes the buffered frames captured at or after [since] and before
+  /// [until] to MP4. The clip can never be longer than the frame ring buffer.
+  /// The frames are chosen when this is called, before it waits for an
+  /// earlier encode to finish.
+  @override
   Future<SessionRecordingPayload?> captureRecording(
-    String exceptionId,
-  ) async {
-    final frames = _buffer.readAll();
+    String clipId, {
+    DateTime? since,
+    DateTime? until,
+  }) async {
+    final frames =
+        _buffer.readAll().where((f) => _inWindow(f, since, until)).toList();
     if (frames.isEmpty) return null;
 
     final previous = _encodingLock;
@@ -276,6 +366,7 @@ class ScreenRecorder with WidgetsBindingObserver {
     _encodingLock = completer.future;
     await previous;
 
+    File? videoFile;
     try {
       // Find max dimensions across all frames so the encoder can handle
       // screen size changes (rotation, keyboard, navigation bar).
@@ -293,22 +384,16 @@ class ScreenRecorder with WidgetsBindingObserver {
       final durationSeconds = frames.length * _captureIntervalMs / 1000.0;
 
       final tempDir = await getTemporaryDirectory();
-      final outputPath = '${tempDir.path}/traceway_$exceptionId.mp4';
+      final outputPath = '${tempDir.path}/traceway_$clipId.mp4';
+      videoFile = File(outputPath);
 
-      await FlutterQuickVideoEncoder.setLogLevel(
-        debug ? LogLevel.standard : LogLevel.none,
-      );
-
-      await FlutterQuickVideoEncoder.setup(
+      final encoder = encoderOverride ?? const PlatformVideoEncoder();
+      await encoder.setup(
         width: maxWidth,
         height: maxHeight,
         fps: fps,
-        videoBitrate: 2000000,
-        profileLevel: ProfileLevel.baselineAutoLevel,
-        audioChannels: 0,
-        audioBitrate: 0,
-        sampleRate: 0,
         filepath: outputPath,
+        debug: debug,
       );
 
       // Decode each PNG → RGBA, apply masks, draw touch circle, feed to encoder.
@@ -352,16 +437,13 @@ class ScreenRecorder with WidgetsBindingObserver {
           }
         }
 
-        await FlutterQuickVideoEncoder.appendVideoFrame(output);
+        await encoder.appendFrame(output);
       }
 
-      await FlutterQuickVideoEncoder.finish();
+      await encoder.finish();
 
-      final videoFile = File(outputPath);
       final videoBytes = await videoFile.readAsBytes();
       final base64Video = base64Encode(videoBytes);
-
-      await videoFile.delete();
 
       if (debug) {
         final bufferKB = frames.fold<int>(0, (sum, f) => sum + f.pngBytes.length) ~/ 1024;
@@ -369,7 +451,7 @@ class ScreenRecorder with WidgetsBindingObserver {
       }
 
       return SessionRecordingPayload(
-        exceptionId: exceptionId,
+        clipId: clipId,
         events: [
           {
             'type': 'flutter_video',
@@ -388,6 +470,13 @@ class ScreenRecorder with WidgetsBindingObserver {
       }
       return null;
     } finally {
+      // Also after an encode that failed half way: the file is not left in
+      // the app's temporary directory.
+      try {
+        if (videoFile != null && await videoFile.exists()) {
+          await videoFile.delete();
+        }
+      } catch (_) {}
       completer.complete();
     }
   }

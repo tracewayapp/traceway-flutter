@@ -1,7 +1,5 @@
 import 'dart:ui' show Color, Rect;
 
-import 'package:flutter/foundation.dart' show Key;
-
 sealed class TracewayMaskMode {
   const TracewayMaskMode();
   const factory TracewayMaskMode.blur({double ratio}) = TracewayMaskBlur;
@@ -21,14 +19,11 @@ class TracewayMaskBlank extends TracewayMaskMode {
   const TracewayMaskBlank({this.color = const Color(0xFF000000)});
 }
 
+/// Where a mask was when a frame was captured, in the logical coordinates
+/// of the recorded area.
 class MaskRegion {
-  final Key key;
   final Rect rect;
   final TracewayMaskMode mode;
 
-  const MaskRegion({
-    required this.key,
-    required this.rect,
-    required this.mode,
-  });
+  const MaskRegion({required this.rect, required this.mode});
 }

@@ -1,16 +1,18 @@
+import 'dart:ui' show ErrorCallback;
+
 import 'package:flutter/foundation.dart';
 
-import 'models/exception_stack_trace.dart';
-import 'stack_trace_formatter.dart';
 import 'traceway_client.dart';
 
 class ErrorHandler {
   FlutterExceptionHandler? _previousFlutterErrorHandler;
+  ErrorCallback? _previousPlatformErrorHandler;
 
   void install() {
     _previousFlutterErrorHandler = FlutterError.onError;
     FlutterError.onError = _handleFlutterError;
 
+    _previousPlatformErrorHandler = PlatformDispatcher.instance.onError;
     PlatformDispatcher.instance.onError = _handlePlatformError;
   }
 
@@ -27,32 +29,25 @@ class ErrorHandler {
 
   bool _handlePlatformError(Object error, StackTrace stackTrace) {
     _captureError(error, stackTrace);
-    return true;
+    return _previousPlatformErrorHandler?.call(error, stackTrace) ?? true;
   }
 
   void handleZoneError(Object error, StackTrace stackTrace) {
+    if (TracewayClient.instance == null) {
+      // The SDK did not start (or was shut down): the app's zone still
+      // guards its errors, and they must not vanish.
+      FlutterError.reportError(
+          FlutterErrorDetails(exception: error, stack: stackTrace));
+      return;
+    }
     _captureError(error, stackTrace);
   }
 
   void _captureError(Object error, StackTrace? stackTrace) {
-    final client = TracewayClient.instance;
-    if (client == null) return;
-
-    final formatted = formatFlutterError(error, stackTrace);
-
-    Map<String, String>? attributes;
-    if (stackTrace != null) {
-      final buildId = extractBuildId(stackTrace.toString());
-      if (buildId != null) {
-        attributes = {'flutter.build_id': buildId};
-      }
+    try {
+      TracewayClient.instance?.captureUnhandledException(error, stackTrace);
+    } catch (_) {
+      // Reporting an error must never raise another one.
     }
-
-    client.addException(ExceptionStackTrace(
-      stackTrace: formatted,
-      recordedAt: DateTime.now(),
-      isMessage: false,
-      attributes: attributes,
-    ));
   }
 }

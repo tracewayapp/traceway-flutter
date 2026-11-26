@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/widgets.dart';
 
 import 'error_handler.dart';
 import 'events/log_capture.dart';
 import 'events/network_capture.dart';
+import 'events/traceway_event.dart';
 import 'events/traceway_navigator_observer.dart';
 import 'screen_recorder.dart';
 import 'traceway_client.dart';
@@ -36,8 +38,58 @@ class Traceway extends StatefulWidget {
     );
   }
 
+  /// Emits a named product event; see [TracewayClient.track].
+  static void track(String eventName, [Map<String, Object>? attributes]) {
+    TracewayClient.instance?.track(eventName, attributes);
+  }
+
+  /// Sets an attribute attached to every later record, e.g. `user.id`.
+  static void setAttribute(String key, String value) {
+    TracewayClient.instance?.setAttribute(key, value);
+  }
+
+  /// Records that the app arrived at [path], for routers that do not report
+  /// to a [NavigatorObserver] (e.g. a `go_router` listener:
+  /// `router.routerDelegate.addListener(() => Traceway.recordNavigation(
+  /// router.routerDelegate.currentConfiguration.uri.path))`). Navigation
+  /// steps of recording triggers match [path].
+  static void recordNavigation(String path,
+      {String? from, String action = 'push'}) {
+    final client = TracewayClient.instance;
+    if (client == null || !client.options.captureNavigation) return;
+    client.recordNavigationEvent(NavigationEvent(
+      action: action,
+      from: from ?? client.currentScreen,
+      to: path,
+    ));
+  }
+
+  /// The screen on top shows everything it loads (data fetched, images
+  /// decoded): ends its time to full display, charted next to the time to
+  /// its first frame.
+  static void reportFullyDisplayed() =>
+      TracewayClient.instance?.reportFullyDisplayed();
+
+  /// Observes [value] of an app-defined metric, e.g.
+  /// `Traceway.metric('checkout.duration', ms, {'plan': 'pro'})`. Charted as
+  /// percentiles; see [TracewayClient.recordMetric] for the naming rules.
+  static void metric(String name, double value, [Map<String, Object>? dims]) =>
+      TracewayClient.instance?.recordMetric(name, value, dims);
+
+  /// Adds [n] to an app-defined counter, e.g. `Traceway.count('cart.add')`.
+  static void count(String name, [double n = 1, Map<String, Object>? dims]) =>
+      TracewayClient.instance?.recordCount(name, n, dims);
+
+  /// Sets a dimension on every metric from now on, e.g. an experiment arm;
+  /// null removes it. At most two.
+  static void setMetricDimension(String key, String? value) =>
+      TracewayClient.instance?.setMetricDimension(key, value);
+
+  /// Starts the SDK and runs [child]. [connectionString]
+  /// (`<token>@<server>`) connects it to Traceway; leave it out to run
+  /// standalone with [TracewayOptions.telemetry] as the only destination.
   static void run({
-    required String connectionString,
+    String? connectionString,
     required Widget child,
     TracewayOptions options = const TracewayOptions(),
   }) {
@@ -54,10 +106,21 @@ class Traceway extends StatefulWidget {
     runZonedGuarded(
       () {
         WidgetsFlutterBinding.ensureInitialized();
-        final client = TracewayClient.initialize(connectionString, options);
-        client.collectSyncDeviceInfo();
-        client.collectDeviceInfo();
-        client.loadPendingFromDisk();
+        try {
+          TracewayClient.initialize(connectionString, options);
+        } catch (error, stack) {
+          // A malformed connection string or telemetry destination must not
+          // take the app down with it: report it and run without the SDK.
+          FlutterError.reportError(FlutterErrorDetails(
+            exception: error,
+            stack: stack,
+            library: 'traceway',
+            context: ErrorDescription('while starting the Traceway SDK; '
+                'the app runs without it'),
+          ));
+          runApp(child);
+          return;
+        }
         errorHandler.install();
         runApp(Traceway(child: child));
       },
@@ -78,17 +141,17 @@ class _TracewayState extends State<Traceway> {
   void initState() {
     super.initState();
     final client = TracewayClient.instance;
-    if (client != null && client.options.screenCapture) {
+    if (client != null && client.recordsScreen) {
       _screenRecorder = ScreenRecorder(
         repaintBoundaryKey: _repaintBoundaryKey,
-        maxFrames: client.options.maxBufferFrames,
+        maxFrames: client.options.maxBufferFrames.clamp(1, 100000),
         pixelRatio: client.options.capturePixelRatio,
-        fps: client.options.fps,
+        fps: client.options.fps.clamp(1, 59),
         debug: client.debug,
       );
-      client.screenRecorder = _screenRecorder;
+      // The client starts and stops the recorder as the replay mode allows.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _screenRecorder!.start();
+        if (mounted) client.screenRecorder = _screenRecorder;
       });
     }
   }
@@ -103,32 +166,71 @@ class _TracewayState extends State<Traceway> {
     super.dispose();
   }
 
+  /// Pointers that went down and may still become a tap.
+  final Map<int, PointerDownEvent> _downs = {};
+
   void _onPointerDown(PointerDownEvent event) {
+    TracewayClient.instance?.markActivity();
     _screenRecorder?.setTouchPosition(event.localPosition);
+    final primary = event.kind != PointerDeviceKind.mouse ||
+        event.buttons & kPrimaryButton != 0;
+    if (primary) _downs[event.pointer] = event;
   }
 
   void _onPointerMove(PointerMoveEvent event) {
     _screenRecorder?.setTouchPosition(event.localPosition);
+    final down = _downs[event.pointer];
+    if (down != null &&
+        (event.position - down.position).distance > _slop(down.kind)) {
+      _downs.remove(event.pointer);
+    }
   }
 
+  /// A pointer that comes up where it went down is a tap: it is recorded
+  /// before the app's own tap handlers run, so the tap comes first in the
+  /// session, before whatever it causes.
   void _onPointerUp(PointerUpEvent event) {
     _screenRecorder?.clearTouchPosition();
+    final down = _downs.remove(event.pointer);
+    if (down == null) return;
+    if ((event.position - down.position).distance > _slop(down.kind)) return;
+    try {
+      TracewayClient.instance?.recordTap(down.position, viewId: down.viewId);
+    } catch (_) {
+      // Recording a tap must never break the tap.
+    }
   }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    _downs.remove(event.pointer);
+    _screenRecorder?.clearTouchPosition();
+  }
+
+  void _onPointerHover(PointerHoverEvent event) {
+    if (event.kind != PointerDeviceKind.mouse) return;
+    try {
+      TracewayClient.instance
+          ?.recordHover(event.position, viewId: event.viewId);
+    } catch (_) {}
+  }
+
+  static double _slop(PointerDeviceKind kind) =>
+      kind == PointerDeviceKind.mouse ? kPrecisePointerHitSlop * 4 : kTouchSlop;
 
   @override
   Widget build(BuildContext context) {
     final client = TracewayClient.instance;
-    if (client != null && client.options.screenCapture) {
-      return RepaintBoundary(
-        key: _repaintBoundaryKey,
-        child: Listener(
-          onPointerDown: _onPointerDown,
-          onPointerMove: _onPointerMove,
-          onPointerUp: _onPointerUp,
-          child: widget.child,
-        ),
-      );
+    final listener = Listener(
+      onPointerDown: _onPointerDown,
+      onPointerMove: _onPointerMove,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
+      onPointerHover: _onPointerHover,
+      child: widget.child,
+    );
+    if (client != null && client.recordsScreen) {
+      return RepaintBoundary(key: _repaintBoundaryKey, child: listener);
     }
-    return widget.child;
+    return listener;
   }
 }

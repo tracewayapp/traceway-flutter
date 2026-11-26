@@ -43,35 +43,49 @@ jobs:
           fi
           echo "Bumping $CURRENT → $INPUT_VERSION"
 
-      - name: Bump pubspec.yaml
+      - name: Bump pubspec.yaml and the version the SDK reports
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           sed -i.bak "s/^version: .*/version: $INPUT_VERSION/" pubspec.yaml
-          rm -f pubspec.yaml.bak
+          sed -i.bak "s/^const String tracewaySdkVersion = .*/const String tracewaySdkVersion = '$INPUT_VERSION';/" lib/src/sdk_version.dart
+          rm -f pubspec.yaml.bak lib/src/sdk_version.dart.bak
           grep '^version:' pubspec.yaml
+          grep "^const String tracewaySdkVersion = '$INPUT_VERSION';" lib/src/sdk_version.dart
 
-      - name: Prepend entry to CHANGELOG.md
+      - name: Add entry to CHANGELOG.md
         env:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_NOTES: ${{ inputs.release_notes }}
         run: |
-          DATE=$(date +%Y-%m-%d)
-          {
-            echo "## $INPUT_VERSION — $DATE"
-            echo ""
-            printf '%s\n' "$INPUT_NOTES"
-            echo ""
-            cat CHANGELOG.md
-          } > CHANGELOG.md.new
+          export HEADING="## $INPUT_VERSION — $(date +%Y-%m-%d)"
+          if grep -q '^## Unreleased' CHANGELOG.md; then
+            # Notes collected under "Unreleased" belong to this release.
+            awk '
+              !done && /^## Unreleased/ {
+                print ENVIRON["HEADING"]; print ""; print ENVIRON["INPUT_NOTES"]
+                done = 1; next
+              }
+              { print }
+            ' CHANGELOG.md > CHANGELOG.md.new
+          else
+            {
+              echo "$HEADING"
+              echo ""
+              printf '%s\n' "$INPUT_NOTES"
+              echo ""
+              cat CHANGELOG.md
+            } > CHANGELOG.md.new
+          fi
           mv CHANGELOG.md.new CHANGELOG.md
           head -30 CHANGELOG.md
 
       - name: Install dependencies
         run: flutter pub get
 
+      # Infos (deprecations in a newer Flutter) are reported, not fatal.
       - name: Analyze
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Test
         run: flutter test
@@ -84,7 +98,7 @@ jobs:
           TAG="v$INPUT_VERSION"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git add pubspec.yaml CHANGELOG.md
+          git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart
           git commit -m "v$INPUT_VERSION"
           git tag "$TAG"
           git push origin "HEAD:$BRANCH" "$TAG"

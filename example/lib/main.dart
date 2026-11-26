@@ -8,7 +8,7 @@ import 'package:traceway/traceway.dart';
 // Falls back to local dev server if not set.
 const _dsn = String.fromEnvironment('TRACEWAY_DSN');
 String get _fallbackDsn =>
-    'frontend-dev-token@http://${Platform.isAndroid ? '10.0.2.2' : 'localhost'}:8082/api/report';
+    'flutter-dev-token@http://${Platform.isAndroid ? '10.0.2.2' : 'localhost'}:8082/api/report';
 
 void main() {
   Traceway.run(
@@ -67,8 +67,7 @@ class _HomePageState extends State<HomePage> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: ListView(
           children: [
             TracewayPrivacyMask(
               child: Text(
@@ -273,7 +272,8 @@ class _HomePageState extends State<HomePage> {
             Text('Event Log',
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
-            Expanded(
+            SizedBox(
+              height: 160,
               child: Container(
                 decoration: BoxDecoration(
                   color: Colors.grey.shade100,
@@ -289,6 +289,7 @@ class _HomePageState extends State<HomePage> {
                         ),
                       )
                     : ListView.builder(
+                        primary: false,
                         padding: const EdgeInsets.all(8),
                         itemCount: _log.length,
                         itemBuilder: (_, i) => Padding(

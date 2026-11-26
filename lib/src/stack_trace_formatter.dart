@@ -41,14 +41,3 @@ String formatException(Object error, StackTrace stackTrace) {
 
   return buffer.toString().trimRight();
 }
-
-String formatFlutterError(Object error, StackTrace? stackTrace) {
-  if (stackTrace == null) {
-    return '${error.runtimeType}: $error';
-  }
-  final raw = stackTrace.toString();
-  if (isNonSymbolicTrace(raw)) {
-    return '$error\n$raw';
-  }
-  return formatException(error, stackTrace);
-}
