@@ -197,7 +197,13 @@ class TelemetryRouter {
   void routeSpan(Span span) {
     final item = SpanItem(span);
     final timeMs = (span.endTime ?? DateTime.now()).millisecondsSinceEpoch;
-    final routed = _decide('network', item, timeMs, () => true);
+    // A failed interaction goes with the exception that failed it, as the
+    // browser SDK sends it, so the issue links to its trace.
+    final failedInteraction =
+        span.attributes.toMap()['traceway.interaction']?.value == true &&
+            span.status == SpanStatusCode.Error;
+    final routed = _decide('network', item, timeMs, () => true,
+        forceStream: failedInteraction);
     _observeAndSend(ObservedRecord(
       signal: 'network',
       timeMs: timeMs,
@@ -274,8 +280,9 @@ class TelemetryRouter {
     String signal,
     TelemetryItem item,
     int timeMs,
-    bool Function() accept,
-  ) {
+    bool Function() accept, {
+    bool forceStream = false,
+  }) {
     if (signal == signalControl) {
       return control.enabled ? Routed.stream : Routed.off;
     }
@@ -291,7 +298,8 @@ class TelemetryRouter {
         sessionId != null &&
         unitHash(sessionId) < control.settings.baselineSampleRate &&
         control.canExport(signal);
-    if (mode == Mode.stream || baselineSampled) return Routed.stream;
+    final forced = forceStream && control.canExport(signal);
+    if (mode == Mode.stream || baselineSampled || forced) return Routed.stream;
     buffer.push(BufferEntry(
       timeMs: timeMs,
       signal: signal,

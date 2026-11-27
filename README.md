@@ -97,6 +97,34 @@ Traceway.setAttribute('user.id', user.id);
 await TracewayClient.instance?.flush();
 ```
 
+### Interactions
+
+An interaction traces one user action from start to end: a span named after it (`traceway.interaction: true`). Requests made inside its `run` are its child spans, and exceptions, messages and logs recorded there carry its trace id. A failed interaction is sent with its exception, so the issue links to its trace; one that succeeds waits in the buffer like other spans. One started inside another's `run` is its child.
+
+```dart
+final checkout = Traceway.startInteraction('checkout', attributes: {'cart.items': 3});
+try {
+  await checkout.run(() => api.placeOrder(cart));
+} catch (e, st) {
+  checkout.captureException(e, st);
+} finally {
+  checkout.end();
+}
+```
+
+### Errors you don't want
+
+By default, network failures are not reported: a `SocketException`, a `ClientException`, a TLS handshake failure, a lost or refused connection, a timeout, or a 4xx status (`defaultIgnoreErrors`). `ignoreErrors` replaces that list. A `String` matches if it occurs in the first line of the error's `Type: message`, and a `RegExp` if it matches that line; the stack is never matched. An empty list reports everything. `beforeCapture` sees every exception and message that is not ignored and can drop it:
+
+```dart
+TracewayOptions(
+  ignoreErrors: [...defaultIgnoreErrors, 'PlatformException(camera_denied'],
+  beforeCapture: (captured) => !(captured.error is PaymentDeclined),
+)
+```
+
+An ignored unhandled error is not counted as a crash either.
+
 ## How collection works
 
 Every record is an OpenTelemetry log record or span and belongs to a *signal*. Each signal has a mode:
@@ -215,12 +243,23 @@ A navigation step matches the path the observer reports for the route on top:
 
 Dialogs, bottom sheets, menus and dropdowns are recorded as navigations with `navigation.overlay: true`, but the screen under them stays the current screen, for issues, taps and screen metrics.
 
-A router that does not report to a `NavigatorObserver` can report its location itself:
+A router that does not report to a `NavigatorObserver` can report its location itself, with its route template when it knows it:
 
 ```dart
 final router = GoRouter(routes: [...]);
-router.routerDelegate.addListener(() => Traceway.recordNavigation(
-    router.routerDelegate.currentConfiguration.uri.path));
+router.routerDelegate.addListener(() {
+  final match = router.routerDelegate.currentConfiguration;
+  Traceway.recordNavigation(match.uri.path, route: match.fullPath);
+});
+```
+
+#### Route templates
+
+A route template (`/orders/:id`) names a screen the way metrics should group it. Screen metrics use it, and issues on the screen carry it as `app.screen.route`. Without one, ids in the path are replaced (`/orders/8841` becomes `/orders/:id`). Give it with `recordNavigation(..., route:)`, or name the current screen with `Traceway.setRoute`, which lasts until the next screen. For a router that hands out parameters but not the pattern, `routeFromParams` rebuilds the template:
+
+```dart
+Traceway.setRoute(routeFromParams('/teams/acme/users/42', {'team': 'acme', 'id': '42'}));
+// '/teams/:team/users/:id'
 ```
 
 ## App performance metrics
@@ -233,7 +272,7 @@ The SDK measures the app on the device and uploads the numbers as OTLP metrics: 
 | `app.screen.ttid` (`screen`) | Time to initial display: from the navigation to the end of the first frame that built the route |
 | `app.screen.ttfd` (`screen`) | Time to full display: from the navigation until the app calls `Traceway.reportFullyDisplayed()` |
 | `app.frames.slow`, `app.frames.frozen` (with `.total`, by `screen`) | From the engine's frame timings: slow when the UI or raster thread took longer than the display's frame budget, frozen at 700 ms or more |
-| `app.hang`, `app.hang.duration` | The UI isolate ran no timer for 2 s or more while the app was in the foreground |
+| `app.hang`, `app.hang.duration` | The UI isolate ran no timer for 2 s or more while the app was in the foreground. Not in debug builds, where a breakpoint or a hot reload looks the same, unless `reportHangsInDebug: true` |
 | `app.crash` | Errors nothing caught (`FlutterError.onError`, `PlatformDispatcher.onError`, the `Traceway.run` zone). They do not end a Flutter app, so the dashboard calls them unhandled errors |
 | `app.session`, `app.user`, `app.user.affected` (`issue`) | Sessions; users counted once a day per installation, and once a day per problem they met (crash, hang, slow start, frozen frames, failed request), so no id leaves the device |
 | `app.memory.peak` | The process's peak RSS, once per session |
@@ -369,6 +408,10 @@ A `telemetry` URL that is not HTTP(S) or carries credentials, a query or a fragm
 | `remoteConfig` | `true` | Poll the server for collection settings over OpAMP |
 | `exportDelayMs` | `1000` | How long finished records wait to be sent as one batch |
 | `propagateTraceHeaderUrls` | `[]` | URLs (`String` prefixes or `RegExp`s) whose requests carry a W3C `traceparent` header (see [Connect requests to backend traces](#connect-requests-to-backend-traces)) |
+| `ignoreErrors` | network failures | Exceptions and messages not to report (see [Errors you don't want](#errors-you-dont-want)); `[]` reports everything |
+| `beforeCapture` | — | Called before an exception or message is recorded; return `false` to drop it |
+| `captureDeviceInfo` | `true` | Describe the device (model, name, local IP, locale, screen, Dart runtime); `false` keeps only `os.name` and `os.version` |
+| `reportHangsInDebug` | `false` | Report hangs in debug builds too |
 | `telemetry` | — | Send logs, spans and metrics to another OTLP/HTTP receiver: `TracewayTelemetry(url:, headers:, logs:, traces:, metrics:)` (see [Setups](#setups)) |
 
 ## Screen Recording

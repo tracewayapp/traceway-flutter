@@ -67,6 +67,89 @@ ReadableLogRecord _record(String? eventName) => SDKLogRecord(
       body: eventName ?? 'console line',
     );
 
+const _traces =
+    OtlpDestination('https://traceway.test/api/otel/v1/traces', {});
+
+/// An outbox for logs and traces whose stored batches [control] gates as
+/// the client does, and the requests it posted.
+(Outbox, List<http.Request>) _gated(ControlState control) {
+  final dir = Directory.systemTemp.createTempSync('traceway_delivery');
+  addTearDown(() => dir.deleteSync(recursive: true));
+  final requests = <http.Request>[];
+  final outbox = Outbox(
+    directory: dir,
+    destinations: {'logs': _logs, 'traces': _traces},
+    httpClient: MockClient((request) async {
+      requests.add(request);
+      return http.Response('', 200);
+    }),
+    admitLog: (eventName) => canExportLog(control, eventName),
+    admitSpans: () => control.canExport('network'),
+  )..claim();
+  addTearDown(outbox.dispose);
+  return (outbox, requests);
+}
+
+/// A stored logs batch with a scope for each list of records. A record is
+/// named by the `eventName` field, or with an `attr:` prefix by the
+/// `event.name` attribute; null is a console line. Its body is its name.
+List<int> _storedLogs(List<List<String?>> scopes) =>
+    proto.ExportLogsServiceRequest(resourceLogs: [
+      proto.ResourceLogs(
+        resource: proto.Resource(attributes: [
+          proto.KeyValue(
+              key: 'service.name', value: proto.AnyValue(stringValue: 'app')),
+        ]),
+        scopeLogs: [
+          for (final (i, names) in scopes.indexed)
+            proto.ScopeLogs(
+              scope: proto.InstrumentationScope(name: 'scope $i'),
+              logRecords: [for (final name in names) _storedRecord(name)],
+            ),
+        ],
+      ),
+    ]).writeToBuffer();
+
+proto.LogRecord _storedRecord(String? name) {
+  final attribute = name != null && name.startsWith('attr:');
+  final eventName = attribute ? name.substring(5) : name;
+  return proto.LogRecord(
+    eventName: attribute ? null : eventName,
+    body: proto.AnyValue(stringValue: name ?? 'console line'),
+    attributes: [
+      if (attribute)
+        proto.KeyValue(
+            key: 'event.name', value: proto.AnyValue(stringValue: eventName)),
+    ],
+  );
+}
+
+List<int> _storedSpans() => proto.ExportTraceServiceRequest(resourceSpans: [
+      proto.ResourceSpans(scopeSpans: [
+        proto.ScopeSpans(spans: [
+          proto.Span(
+              name: 'GET',
+              traceId: List.filled(16, 1),
+              spanId: List.filled(8, 2)),
+        ]),
+      ]),
+    ]).writeToBuffer();
+
+/// The bodies of the log records [request] posted, by scope.
+List<List<String>> _postedLogs(http.Request request) => [
+      for (final resourceLogs in proto.ExportLogsServiceRequest.fromBuffer(
+              otlpBody(request))
+          .resourceLogs)
+        for (final scopeLogs in resourceLogs.scopeLogs)
+          [for (final record in scopeLogs.logRecords) record.body.stringValue],
+    ];
+
+/// The batches still on disk.
+List<File> _stored(Outbox outbox) => [
+      for (final file in outbox.directory!.listSync().whereType<File>())
+        if (file.path.endsWith('.pb')) file,
+    ];
+
 void main() {
   group('outbox', () {
     test('a batch that keeps failing does not hold back the ones after it',
@@ -252,6 +335,93 @@ void main() {
       control.applyRemote(parseSettingsDocument('{"enabled":false}'));
       await exporter.export([span]);
       expect(requests, hasLength(1));
+    });
+  });
+
+  group('stored batches', () {
+    test('a stored logs batch sends only the records a rule still lets leave',
+        () async {
+      final control = ControlState(defaultSettings(), ceilingsFrom());
+      final (outbox, requests) = _gated(control);
+      expect(
+          outbox.add(
+              'logs',
+              _storedLogs([
+                [eventException, null, 'attr:$eventMessage'],
+                ['attr:browser.console', null],
+              ])),
+          isTrue);
+      control.applyRemote(
+          parseSettingsDocument('{"signals":{"console":{"mode":"off"}}}'));
+      await outbox.drain();
+      expect(_postedLogs(requests.single), [
+        [eventException, 'attr:$eventMessage'],
+      ]);
+      final posted = proto.ExportLogsServiceRequest.fromBuffer(
+          otlpBody(requests.single));
+      expect(posted.resourceLogs.single.resource.attributes.single.key,
+          'service.name');
+      expect(posted.resourceLogs.single.scopeLogs.single.scope.name, 'scope 0');
+      expect(_stored(outbox), isEmpty);
+    });
+
+    test('a stored logs batch with nothing left to send is deleted unsent',
+        () async {
+      final control = ControlState(defaultSettings(), ceilingsFrom());
+      final (outbox, requests) = _gated(control);
+      // An issue written before it was sent, and a session's control record.
+      outbox.add('logs', _storedLogs([[eventException]]));
+      outbox.add('logs', _storedLogs([[eventSessionEnd, null]]));
+      control.applyRemote(parseSettingsDocument('{"enabled":false}'));
+      await outbox.drain();
+      expect(requests, isEmpty);
+      expect(_stored(outbox), isEmpty);
+    });
+
+    test('a stored traces batch is deleted unsent while network is off',
+        () async {
+      final control = ControlState(defaultSettings(), ceilingsFrom());
+      final (outbox, requests) = _gated(control);
+      outbox.add('traces', _storedSpans());
+      outbox.add('logs', _storedLogs([[eventException]]));
+      control.applyRemote(
+          parseSettingsDocument('{"signals":{"network":{"mode":"off"}}}'));
+      await outbox.drain();
+      expect(requests.map((r) => r.url.path), ['/api/otel/v1/logs']);
+      expect(_stored(outbox), isEmpty);
+    });
+
+    test('a stored batch the gate lets through whole goes out as stored',
+        () async {
+      final control = ControlState(defaultSettings(), ceilingsFrom());
+      final (outbox, requests) = _gated(control);
+      final logs = _storedLogs([
+        [eventException, null],
+        ['attr:browser.console'],
+      ]);
+      final spans = _storedSpans();
+      outbox.add('logs', logs);
+      outbox.add('traces', spans);
+      await outbox.drain();
+      expect(requests.map((r) => r.url.path),
+          ['/api/otel/v1/logs', '/api/otel/v1/traces']);
+      expect(otlpBody(requests[0]), logs);
+      expect(otlpBody(requests[1]), spans);
+      expect(_stored(outbox), isEmpty);
+    });
+
+    test('a stored logs batch that does not decode is dropped unsent',
+        () async {
+      final control = ControlState(defaultSettings(), ceilingsFrom());
+      final (outbox, requests) = _gated(control);
+      // Says it holds five bytes and has one.
+      outbox.add('logs', [0x0a, 0x05, 0x01]);
+      outbox.add('logs', _storedLogs([[eventException]]));
+      await outbox.drain();
+      expect(_postedLogs(requests.single), [
+        [eventException],
+      ]);
+      expect(_stored(outbox), isEmpty);
     });
   });
 

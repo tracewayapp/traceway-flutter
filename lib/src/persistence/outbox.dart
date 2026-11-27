@@ -76,6 +76,8 @@ class Outbox {
     required this.directory,
     required this.destinations,
     http.Client? httpClient,
+    this.admitLog,
+    this.admitSpans,
   }) : _http = httpClient ?? http.Client();
 
   final Directory? directory;
@@ -83,6 +85,15 @@ class Outbox {
   /// By kind: `logs`, `traces`.
   final Map<String, OtlpDestination> destinations;
   final http.Client _http;
+
+  /// Whether a stored log record, by its event name, may still leave,
+  /// checked when its batch is sent: the kill switch or a rule may have
+  /// turned its signal off since the batch was stored. Null sends every
+  /// record.
+  final bool Function(String? eventName)? admitLog;
+
+  /// Whether stored spans may still leave; see [admitLog].
+  final bool Function()? admitSpans;
   int _sequence = 0;
   bool _claimed = false;
   Timer? _timer;
@@ -290,8 +301,18 @@ class Outbox {
       }
       final kind = file.path.endsWith('.traces.pb') ? 'traces' : 'logs';
       final destination = destinations[kind];
-      final status =
-          destination == null ? 400 : await postOtlp(_http, destination, body);
+      final admitted = _admitted(kind, body);
+      if (admitted == null) {
+        // Nothing in it may leave any more: done without sending.
+        _failed.remove(file.path);
+        try {
+          await file.delete();
+        } catch (_) {}
+        continue;
+      }
+      final status = destination == null
+          ? 400
+          : await postOtlp(_http, destination, admitted);
       if (!isTransientFailure(status)) {
         // Delivered, or rejected for good: either way it is done.
         answered = answered || destination != null;
@@ -328,6 +349,23 @@ class Outbox {
       _attempts = 0;
     }
     return answered || !stopped;
+  }
+
+  /// What of a stored batch [admitLog] and [admitSpans] still let leave:
+  /// the batch as it was stored when all of it may, null when none of it
+  /// may.
+  List<int>? _admitted(String kind, List<int> body) {
+    if (kind == 'traces') return admitSpans?.call() == false ? null : body;
+    final admit = admitLog;
+    if (admit == null) return body;
+    try {
+      return _admitLogs(body, admit);
+    } catch (_) {
+      // A batch that does not decode is corrupt: the server would refuse
+      // it too, and nothing tells whether its records may still leave. It
+      // is dropped, as the browser SDK drops one.
+      return null;
+    }
   }
 
   void dispose() {
@@ -527,4 +565,39 @@ class RoutingLogExporter implements LogRecordExporter {
     ownCount == 0 ? null : own.writeToBuffer(),
     restCount == 0 ? null : rest.writeToBuffer(),
   );
+}
+
+/// The records of an OTLP logs request that [admit] lets leave, by their
+/// event name: [body] itself when it lets all of them, null when it lets
+/// none. Throws when [body] does not decode.
+List<int>? _admitLogs(List<int> body, bool Function(String? eventName) admit) {
+  final request = proto.ExportLogsServiceRequest.fromBuffer(body);
+  var kept = 0, dropped = 0;
+  for (final resourceLogs in request.resourceLogs) {
+    for (final scopeLogs in resourceLogs.scopeLogs) {
+      final records = scopeLogs.logRecords;
+      final count = records.length;
+      records.retainWhere((record) => admit(_eventName(record)));
+      kept += records.length;
+      dropped += count - records.length;
+    }
+    resourceLogs.scopeLogs.removeWhere((scope) => scope.logRecords.isEmpty);
+  }
+  if (dropped == 0) return body;
+  if (kept == 0) return null;
+  request.resourceLogs.removeWhere((resource) => resource.scopeLogs.isEmpty);
+  return request.writeToBuffer();
+}
+
+/// A stored record's event name: the field this SDK writes, or else the
+/// `event.name` attribute older conventions use.
+String? _eventName(proto.LogRecord record) {
+  if (record.eventName.isNotEmpty) return record.eventName;
+  for (final attribute in record.attributes) {
+    if (attribute.key == 'event.name' &&
+        attribute.value.stringValue.isNotEmpty) {
+      return attribute.value.stringValue;
+    }
+  }
+  return null;
 }

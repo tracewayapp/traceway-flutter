@@ -37,6 +37,10 @@ abstract class ReplaySource {
 ///
 /// The session's segments never overlap: each starts where the previous one
 /// uploaded for the session ended, so the dashboard plays them in a row.
+///
+/// A clip that fails to encode while the app is away is tried again once
+/// when it comes back: iOS invalidates the hardware encoder in the
+/// background, and the frames are still in the recorder's ring then.
 class ReplayController {
   ReplayController({
     required this.transport,
@@ -70,11 +74,25 @@ class ReplayController {
   /// The end of the last frames uploaded as part of the current session.
   DateTime? _sessionCursor;
 
+  /// Whether the app left the foreground (inactive, then paused) and has not
+  /// come back yet.
+  bool _away = false;
+
+  /// The clips whose encode failed while the app was away, oldest first,
+  /// each to be tried once more when it comes back. Replay is kept in memory
+  /// only: when the app is killed in the background they are lost.
+  final List<_Retry> _retries = [];
+
+  /// How many failed clips wait for the app to come back, the newest kept.
+  static const int maxRetries = 3;
+
   Mode get mode => _mode;
 
   void attach(ReplaySource? source) {
     final previous = _source;
     if (previous != null && !identical(previous, source)) previous.stop();
+    // Frames another recorder captured are not this one's to encode.
+    if (!identical(previous, source)) _retries.clear();
     if (source == null) _stopTimer();
     _source = source;
     _sync();
@@ -113,6 +131,7 @@ class ReplayController {
       if (source.isRunning) source.stop();
       source.clearBuffer();
       transport.discard();
+      _retries.clear();
       _sessionCursor = null;
       return;
     }
@@ -201,23 +220,49 @@ class ReplayController {
     _encode(since: since, until: until, session: id, index: nextSegmentIndex());
   }
 
+  /// [retry] is a clip that failed while the app was away, tried again under
+  /// the session, index and budget it was first made for.
   void _encode({
     required DateTime since,
     required DateTime until,
     String? exceptionId,
     String? session,
     int? index,
+    _Retry? retry,
   }) {
     final source = _source!;
     final clipId = exceptionId ?? '${session}_$index';
     // An exception's clip outside the session still counts against the
     // budget of the session it happened in.
-    final budgetSession = session ?? sessionId();
+    final budgetSession =
+        retry == null ? session ?? sessionId() : retry.budgetSession;
     final recording = source.captureRecording(clipId, since: since, until: until);
     final future = () async {
       try {
-        final clip = await recording;
-        if (clip == null || clip.events.isEmpty || _mode == Mode.off) return;
+        SessionRecordingPayload? clip;
+        try {
+          clip = await recording;
+        } catch (_) {
+          // Failed like a clip that came back empty.
+        }
+        if (_mode == Mode.off) return;
+        if (clip == null) {
+          // The platform encoder may not work in the background: tried
+          // again once the app is back, while the frames are in the ring.
+          if (_away && retry == null) {
+            _retries.add((
+              since: since,
+              until: until,
+              exceptionId: exceptionId,
+              session: session,
+              index: index,
+              budgetSession: budgetSession,
+            ));
+            if (_retries.length > maxRetries) _retries.removeAt(0);
+          }
+          return;
+        }
+        if (clip.events.isEmpty) return;
         final segment = RecordingSegment(
           exceptionId: exceptionId,
           sessionId: session,
@@ -233,7 +278,7 @@ class ReplayController {
         }
         transport.send([segment]);
       } catch (_) {
-        // A failed encode loses the clip, never the app.
+        // Anything else that fails loses the clip, never the app.
       }
     }();
     _encodings[future] = budgetSession;
@@ -241,9 +286,12 @@ class ReplayController {
   }
 
   /// Whether [sessionId] has replay: uploaded, or a clip charged to it
-  /// still being encoded, which goes up in the mode it was recorded in.
+  /// still being encoded or waiting for the app to come back to be tried
+  /// again, which goes up in the mode it was recorded in.
   bool hasReplayFor(String sessionId) =>
-      _encodings.containsValue(sessionId) || budget.hasUploaded(sessionId);
+      _encodings.containsValue(sessionId) ||
+      _retries.any((retry) => retry.budgetSession == sessionId) ||
+      budget.hasUploaded(sessionId);
 
   /// The session ended: a streaming one uploads its last segment under the
   /// session it belongs to.
@@ -256,11 +304,44 @@ class ReplayController {
     _sessionCursor = _mode == Mode.stream ? _now() : null;
   }
 
-  /// The app went to the background and may be killed there: a streaming
-  /// session uploads what it has.
-  void onPaused() => _cutSegment();
+  /// The app is leaving the foreground: a streaming session cuts its
+  /// segment now, while the platform encoder still works. Inactive comes
+  /// before hidden and paused; one that passes (the control centre) only
+  /// makes a shorter segment.
+  void onInactive() {
+    _away = true;
+    _cutSegment();
+  }
 
-  /// Waits for clips being encoded and for their upload.
+  /// The app went to the background and may be killed there: a streaming
+  /// session uploads what it has. After [onInactive] nothing new was
+  /// captured, and nothing is encoded.
+  void onPaused() {
+    _away = true;
+    _cutSegment();
+  }
+
+  /// The app is back: the clips that failed to encode while it was away are
+  /// tried once more, from the frames still in the ring.
+  void onResumed() {
+    _away = false;
+    final retries = List.of(_retries);
+    _retries.clear();
+    if (_source == null || _mode == Mode.off) return;
+    for (final retry in retries) {
+      _encode(
+        since: retry.since,
+        until: retry.until,
+        exceptionId: retry.exceptionId,
+        session: retry.session,
+        index: retry.index,
+        retry: retry,
+      );
+    }
+  }
+
+  /// Waits for clips being encoded and for their upload. Clips waiting for
+  /// the app to come back are not waited for.
   Future<void> drain() async {
     await Future.wait(List.of(_encodings.keys));
     await transport.flush();
@@ -268,6 +349,18 @@ class ReplayController {
 
   void stop() {
     _stopTimer();
+    _retries.clear();
     _source?.stop();
   }
 }
+
+/// A clip that failed to encode while the app was away: its window, what it
+/// belongs to, and the session its budget is charged to.
+typedef _Retry = ({
+  DateTime since,
+  DateTime until,
+  String? exceptionId,
+  String? session,
+  int? index,
+  String? budgetSession,
+});

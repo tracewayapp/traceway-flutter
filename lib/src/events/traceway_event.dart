@@ -44,6 +44,11 @@ class NavigationEvent extends TracewayEvent {
   /// one closing: the screen under it stays the current screen.
   final bool overlay;
 
+  /// The route template of [to] (`/orders/:id`) when the router knows it,
+  /// e.g. go_router's `state.fullPath`: metrics group by it, and issues on
+  /// the screen carry it (`app.screen.route`).
+  final String? route;
+
   /// The route [to] had already drawn its first frame when this was
   /// reported, so its time to initial display ends now. Otherwise it ends
   /// with the next frame.
@@ -55,6 +60,7 @@ class NavigationEvent extends TracewayEvent {
     this.to,
     this.overlay = false,
     this.displayed = false,
+    this.route,
     super.timestamp,
   });
 }

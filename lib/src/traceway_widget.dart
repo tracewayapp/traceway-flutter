@@ -13,6 +13,7 @@ import 'events/traceway_navigator_observer.dart';
 import 'replay/replay_controller.dart';
 import 'screen_recorder.dart';
 import 'traceway_client.dart';
+import 'traceway_interaction.dart';
 import 'traceway_log_level.dart';
 import 'traceway_options.dart';
 import 'traceway_screen_capture_mode.dart';
@@ -70,20 +71,45 @@ class Traceway extends StatefulWidget {
           attributes: attributes);
 
   /// Records that the app arrived at [path], for routers that do not report
-  /// to a [NavigatorObserver] (e.g. a `go_router` listener:
-  /// `router.routerDelegate.addListener(() => Traceway.recordNavigation(
-  /// router.routerDelegate.currentConfiguration.uri.path))`). Navigation
-  /// steps of recording triggers match [path].
+  /// to a [NavigatorObserver]. [route] is its route template when the
+  /// router knows it, so metrics group by route and issues carry it. With
+  /// `go_router`:
+  ///
+  /// ```dart
+  /// router.routerDelegate.addListener(() {
+  ///   final match = router.routerDelegate.currentConfiguration;
+  ///   Traceway.recordNavigation(match.uri.path, route: match.fullPath);
+  /// });
+  /// ```
+  ///
+  /// Navigation steps of recording triggers match [path].
   static void recordNavigation(String path,
-      {String? from, String action = 'push'}) {
+      {String? from, String action = 'push', String? route}) {
     final client = TracewayClient.instance;
     if (client == null || !client.options.captureNavigation) return;
     client.recordNavigationEvent(NavigationEvent(
       action: action,
       from: from ?? client.currentScreen,
       to: path,
+      route: route,
     ));
   }
+
+  /// Names the current screen by its route template (`/orders/:id`), so
+  /// metrics group by route and issues carry it (`app.screen.route`), until
+  /// the next screen. For a router that names its routes by path, e.g.
+  /// `Traceway.setRoute(routeFromParams(path, params))`.
+  static void setRoute(String? template) =>
+      TracewayClient.instance?.setRoute(template);
+
+  /// Starts an interaction: one user action traced from start to end. See
+  /// [TracewayInteraction]. Before the SDK has started it records nothing.
+  static TracewayInteraction startInteraction(String name,
+          {Map<String, Object>? attributes}) =>
+      TracewayClient.instance
+          ?.startInteraction(name, attributes: attributes) ??
+      TracewayInteraction.internal(null,
+          captureException: (error, stackTrace, attributes) {});
 
   /// The screen on top shows everything it loads (data fetched, images
   /// decoded): ends its time to full display, charted next to the time to

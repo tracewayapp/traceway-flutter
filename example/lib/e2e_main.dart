@@ -127,6 +127,8 @@ Future<void> main() async {
       propagateTraceHeaderUrls: [if (echo != null) '$echo/checkout'],
       screenCapture: true,
       debug: true,
+      // A debug build: the harness checks that a blocked isolate is a hang.
+      reportHangsInDebug: true,
       version: 'e2e-1.0.0',
       serviceName: 'traceway-flutter-e2e',
       environment: 'e2e',

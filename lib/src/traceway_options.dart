@@ -1,3 +1,4 @@
+import 'traceway_captured_error.dart';
 import 'traceway_screen_capture_mode.dart';
 import 'traceway_telemetry.dart';
 
@@ -157,6 +158,35 @@ class TracewayOptions {
   /// ```
   final List<Pattern> propagateTraceHeaderUrls;
 
+  /// Exceptions and messages not to report, matched against the first line
+  /// of their `Type: message` (never the stack, so a frame named like a
+  /// pattern silences nothing): a [String] if it occurs in it, a [RegExp]
+  /// if it matches. An ignored unhandled error is not counted as a crash. Null (the default) ignores [defaultIgnoreErrors], network
+  /// failures such as a `SocketException` or a timeout; an empty list
+  /// reports everything.
+  ///
+  /// ```dart
+  /// ignoreErrors: [...defaultIgnoreErrors, 'PlatformException(camera_denied'],
+  /// ```
+  final List<Pattern>? ignoreErrors;
+
+  /// Called for every exception and message that is not ignored, before it
+  /// is recorded: return false to drop it. An exception it throws is
+  /// ignored and the record kept.
+  final bool Function(TracewayCapturedError captured)? beforeCapture;
+
+  /// Describe the device on every record: model, manufacturer, name, local
+  /// IP address, locale, screen and Dart runtime (`device.*`, `screen.*`,
+  /// `runtime.version`). False keeps only the operating system (`os.name`,
+  /// `os.version`).
+  final bool captureDeviceInfo;
+
+  /// Report hangs (`app.hang`) in debug builds too. Off by default: a
+  /// breakpoint, a hot reload or a slow first compile stops the app exactly
+  /// like a hang does, and there is no telling them apart. Turn it on to
+  /// test hang reporting with a debug build.
+  final bool reportHangsInDebug;
+
   const TracewayOptions({
     this.sampleRate = 1.0,
     this.screenCapture = false,
@@ -185,5 +215,9 @@ class TracewayOptions {
     this.exportDelayMs = 1000,
     this.telemetry,
     this.propagateTraceHeaderUrls = const [],
+    this.ignoreErrors,
+    this.beforeCapture,
+    this.captureDeviceInfo = true,
+    this.reportHangsInDebug = false,
   }) : assert(fps >= 1 && fps < 60, 'fps must be >= 1 and < 60');
 }

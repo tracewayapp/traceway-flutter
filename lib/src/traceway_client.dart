@@ -40,6 +40,8 @@ import 'screen_recorder.dart';
 import 'session/session_manager.dart';
 import 'stack_trace_formatter.dart';
 import 'sdk_version.dart';
+import 'traceway_captured_error.dart';
+import 'traceway_interaction.dart';
 import 'traceway_log_level.dart';
 import 'traceway_options.dart';
 import 'traceway_screen_capture_mode.dart';
@@ -193,7 +195,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       dimensions: _options.metricDimensions,
       deferUntilStart: true,
     );
-    _vitals = AppVitals(_metrics, currentScreen: () => _metricsScreen);
+    _vitals = AppVitals(
+      _metrics,
+      currentScreen: () => _metricsScreen,
+      // A breakpoint or a hot reload stops a debug build like a hang does.
+      reportHangs: !kDebugMode || _options.reportHangsInDebug,
+    );
     if (_options.captureMetrics && (_overrides?.appVitals ?? true)) {
       _vitals.watchColdStart(
         sdkStartMs: _sdkStartMs,
@@ -285,6 +292,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// The path of the route on top, as the last navigation reported it.
   /// Popups over it do not change it.
   String? _currentScreen;
+
+  /// The current screen's route template, when the app or its router gave
+  /// one.
+  String? _currentRoute;
 
   /// The screen before [_currentScreen], and when the current one came.
   String? _previousScreen;
@@ -633,12 +644,23 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final attrs = _resourceAttributes;
     final overrides = _overrides;
     if (overrides != null) {
-      attrs.addAll(overrides.deviceAttributes);
+      attrs.addAll(_options.captureDeviceInfo
+          ? overrides.deviceAttributes
+          : {
+              for (final MapEntry(:key, :value)
+                  in overrides.deviceAttributes.entries)
+                if (key.startsWith('os.')) key: value,
+            });
     } else {
       try {
-        attrs.addAll(DeviceInfoCollector.collectSync());
-        attrs.addAll(await DeviceInfoCollector.collectAsync()
-            .timeout(const Duration(seconds: 2), onTimeout: () => {}));
+        if (_options.captureDeviceInfo) {
+          attrs.addAll(DeviceInfoCollector.collectSync());
+          attrs.addAll(await DeviceInfoCollector.collectAsync()
+              .timeout(const Duration(seconds: 2), onTimeout: () => {}));
+        } else {
+          // The operating system only: no model, name, address or locale.
+          attrs.addAll(DeviceInfoCollector.collectOs());
+        }
       } catch (_) {}
     }
     attrs['service.name'] = _serviceName;
@@ -692,6 +714,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     Directory? dir(String name) => stateDir == null
         ? null
         : Directory('${stateDir.path}${Platform.pathSeparator}$name');
+    // Records and batches, queued or stored on disk, whose signal a rule or
+    // the kill switch turned off are not sent.
+    bool admitLog(String? eventName) => canExportLog(_control, eventName);
+    bool admitSpans() => _control.canExport('network');
     final routes = _routes;
     final endpoints = _endpoints;
     // Batches queued for Traceway stay in `outbox`, as before; batches for
@@ -705,6 +731,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
               'traces': OtlpDestination(endpoints.traces, _tracewayAuth),
             },
             httpClient: _http,
+            admitLog: admitLog,
+            admitSpans: admitSpans,
           );
     final external = routes.logs.external || routes.traces.external;
     final externalName = external
@@ -716,6 +744,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
             directory: dir(externalName ?? 'outbox'),
             destinations: {'logs': routes.logs, 'traces': routes.traces},
             httpClient: _http,
+            admitLog: admitLog,
+            admitSpans: admitSpans,
           );
     _outbox = outbox;
     // Drained too when it is not the live one, so what an earlier run left
@@ -729,9 +759,6 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         milliseconds:
             _options.exportDelayMs < 50 ? 50 : _options.exportDelayMs);
 
-    // Records queued in a batch when a rule or the kill switch turned their
-    // signal off are not sent.
-    bool admitLog(String? eventName) => canExportLog(_control, eventName);
     LogRecordExporter logExporter = _overrides?.logExporter ??
         OtlpLogExporter(routes.logs, outbox, _http, admit: admitLog);
     final tracewayLogs = routes.traceway;
@@ -742,8 +769,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       );
     }
     final spanExporter = _overrides?.spanExporter ??
-        OtlpSpanExporter(routes.traces, outbox, _http,
-            admit: () => _control.canExport('network'));
+        OtlpSpanExporter(routes.traces, outbox, _http, admit: admitSpans);
     _logExporter = logExporter;
     _spanExporter = spanExporter;
     final logSink = BatchLogRecordProcessor(
@@ -828,6 +854,15 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   ]) {
     final attrs = <String, Object>{..._screenContext(), ...?attributes};
     final message = error.toString();
+    if (!_reports(TracewayCapturedError(
+      error: error,
+      stackTrace: stackTrace,
+      type: error.runtimeType.toString(),
+      message: message,
+      attributes: Map.unmodifiable(attrs),
+    ))) {
+      return;
+    }
     final raw = stackTrace?.toString();
     final obfuscated = raw != null && isNonSymbolicTrace(raw);
     // An obfuscated build renames classes on every build, so its type name
@@ -854,22 +889,93 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// An error nothing in the app caught: reported like [captureException]
   /// and counted as an unhandled error (`app.crash`).
   void captureUnhandledException(Object error, [StackTrace? stackTrace]) {
-    if (_options.captureMetrics) _metrics.crash();
+    // An ignored error (a dropped connection) is not a crash either.
+    if (_options.captureMetrics &&
+        !_ignored('${error.runtimeType}: $error')) {
+      _metrics.crash();
+    }
     captureException(error, stackTrace);
   }
 
   void captureMessage(String message, [Map<String, String>? attributes]) {
+    final attrs = <String, Object>{..._screenContext(), ...?attributes};
+    if (!_reports(TracewayCapturedError(
+      message: message,
+      isMessage: true,
+      attributes: Map.unmodifiable(attrs),
+    ))) {
+      return;
+    }
     _emit(
       eventName: eventMessage,
       severity: Severity.INFO,
       severityText: 'INFO',
       body: message,
-      attributes: {
-        ..._screenContext(),
-        ...?attributes,
-        attrExceptionId: uuidv4(),
-      },
+      attributes: {...attrs, attrExceptionId: uuidv4()},
     );
+  }
+
+  /// Whether [captured] is reported: not matched by
+  /// [TracewayOptions.ignoreErrors] and not dropped by
+  /// [TracewayOptions.beforeCapture].
+  bool _reports(TracewayCapturedError captured) {
+    final type = captured.type;
+    // `error.toString()` usually starts with the type already.
+    final line = type == null || captured.message.startsWith(type)
+        ? captured.message
+        : '$type: ${captured.message}';
+    if (_ignored(line)) return false;
+    final before = _options.beforeCapture;
+    if (before == null) return true;
+    try {
+      return before(captured);
+    } catch (e) {
+      _log('beforeCapture threw, the record is kept: $e');
+      return true;
+    }
+  }
+
+  /// Starts an interaction named [name] (`checkout`, `search`): a span the
+  /// requests made in its [TracewayInteraction.run] are children of, and
+  /// that the exceptions and logs recorded there point to. Call
+  /// [TracewayInteraction.end] when the action is over. One started inside
+  /// another's `run` is its child. Before the SDK has started (see
+  /// [ready]) it records nothing.
+  TracewayInteraction startInteraction(String name,
+      {Map<String, Object>? attributes}) {
+    final tracer = _tracer;
+    Span? span;
+    if (tracer != null && _ready && !_shutdown && name.isNotEmpty) {
+      try {
+        final parent = currentInteraction?.context;
+        span = tracer.startSpan(
+          name,
+          kind: SpanKind.internal,
+          context: parent,
+          root: parent == null,
+          attributes: OTel.attributesFromMap(
+              {...?attributes, 'traceway.interaction': true}),
+        );
+      } catch (e) {
+        _log('interaction failed: $e');
+      }
+    }
+    return TracewayInteraction.internal(span,
+        captureException: captureException);
+  }
+
+  /// Patterns match the `Type: message` line only: matching the stack would
+  /// let a function named like a pattern silence every error through it.
+  bool _ignored(String line) {
+    final first = line.split('\n').first;
+    for (final pattern in _options.ignoreErrors ?? defaultIgnoreErrors) {
+      if (pattern is String
+          ? first.contains(pattern)
+          : pattern.allMatches(first).isNotEmpty) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Where the app was when an issue happened: the screen on top (popups
@@ -893,6 +999,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
     return {
       if (screen != null && screen.isNotEmpty) 'app.screen.name': screen,
+      if (_currentRoute != null) 'app.screen.route': _currentRoute!,
       if (_previousScreen != null && _previousScreen!.isNotEmpty)
         'app.screen.previous': _previousScreen!,
       if (screen != null && since != null)
@@ -1009,7 +1116,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       return;
     }
     if (_shutdown) return;
-    _printed.add((line, DateTime.now()));
+    _printed.add((line, DateTime.now(), Context.current));
     _endTurnLater();
   }
 
@@ -1017,7 +1124,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// `package:logging` records published in this turn of the event loop.
   /// A line waits at most until the turn ends, or until anything else is
   /// recorded: an error thrown right after it still comes after it.
-  final List<(String, DateTime)> _printed = [];
+  final List<(String, DateTime, Context)> _printed = [];
   final List<String> _loggedThisTurn = [];
   bool _turnEnding = false;
   StreamSubscription<logging.LogRecord>? _loggingSubscription;
@@ -1040,10 +1147,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (_printed.isEmpty) return;
     final lines = List.of(_printed);
     _printed.clear();
-    for (final (line, time) in lines) {
+    for (final (line, time, context) in lines) {
       if (_loggedThisTurn.any((message) => _echoes(line, message))) continue;
       _emitLog(line, TracewayLogLevel.info,
-          time: time, attributes: const {'log.source': 'print'});
+          time: time,
+          context: context,
+          attributes: const {'log.source': 'print'});
     }
   }
 
@@ -1121,6 +1230,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     String message,
     TracewayLogLevel level, {
     DateTime? time,
+    Context? context,
     Object? error,
     StackTrace? stackTrace,
     Map<String, Object> attributes = const {},
@@ -1130,6 +1240,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       severityText: level.severityText,
       body: message,
       time: time,
+      context: context,
       attributes: {
         ...attributes,
         if (error != null) ...{
@@ -1153,14 +1264,20 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     // A popup (a dialog, a sheet, a menu) shows over the screen: the screen
     // stays current, and so does its visit, which a loading dialog closing
     // must not end before the screen reports it is fully displayed.
-    if (!event.overlay && to != null && to.isNotEmpty && to != _currentScreen) {
-      _previousScreen = _currentScreen;
-      _currentScreen = to;
-      _screenSinceMs = event.timestamp.millisecondsSinceEpoch;
+    final route = _template(event.route);
+    if (!event.overlay && to != null && to.isNotEmpty) {
+      if (to != _currentScreen) {
+        _previousScreen = _currentScreen;
+        _currentScreen = to;
+        _screenSinceMs = event.timestamp.millisecondsSinceEpoch;
+        _currentRoute = route;
+      } else if (route != null) {
+        _currentRoute = route;
+      }
     }
     if (_options.captureMetrics && arrived && !event.overlay) {
       _vitals.navigated(
-        to == null || to.isEmpty ? null : normalizePath(to),
+        to == null || to.isEmpty ? null : route ?? normalizePath(to),
         event.action,
         event.timestamp,
         displayed: event.displayed,
@@ -1179,6 +1296,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         if (to != null) 'navigation.to': to,
         if (event.overlay) 'navigation.overlay': true,
         if (_currentScreen != null) 'app.screen.name': _currentScreen!,
+        if (_currentRoute != null) 'app.screen.route': _currentRoute!,
       },
     );
   }
@@ -1186,12 +1304,45 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// The path of the route on top, as the last navigation reported it.
   String? get currentScreen => _currentScreen;
 
-  /// The current screen as a metrics dimension: `/orders/8841` is
-  /// `/orders/:id`, so every order is one series.
-  String? get _metricsScreen {
-    final screen = _currentScreen;
-    return screen == null || screen.isEmpty ? null : normalizePath(screen);
+  /// The route template of the current screen, from [setRoute] or the
+  /// navigation that reached it, or null.
+  String? get currentRoute => _currentRoute;
+
+  /// Names the current screen by its route template (`/orders/:id`), so
+  /// metrics group by route and issues carry it (`app.screen.route`). Lasts
+  /// until the next screen; null removes it. Without one, ids in the path
+  /// are replaced (`/orders/8841` is `/orders/:id`).
+  void setRoute(String? template) {
+    final route = _template(template);
+    _currentRoute = route;
+    if (route != null && _options.captureMetrics) _vitals.routeNamed(route);
   }
+
+  static String? _template(String? template) {
+    final trimmed = template?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    final route = trimmed.startsWith('/') ? trimmed : '/$trimmed';
+    return route.length > 64 ? route.substring(0, 64) : route;
+  }
+
+  /// The current screen as a metrics dimension: its route template, or its
+  /// path with ids replaced (`/orders/8841` is `/orders/:id`), so every
+  /// order is one series.
+  String? get _metricsScreen {
+    final route = _currentRoute;
+    if (route != null) return route;
+    final screen = _currentScreen;
+    if (screen == null || screen.isEmpty) return null;
+    // Read on every frame: the path is normalized once per screen.
+    if (!identical(screen, _normalizedFor)) {
+      _normalizedFor = screen;
+      _normalized = normalizePath(screen);
+    }
+    return _normalized;
+  }
+
+  String? _normalizedFor;
+  String? _normalized;
 
   // ---------------------------------------------------------------- metrics
 
@@ -1426,10 +1577,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       return null;
     }
     try {
+      final parent = currentInteraction?.context;
       final span = tracer.startSpan(
         method.toUpperCase(),
         kind: SpanKind.client,
-        root: true,
+        context: parent,
+        root: parent == null,
         startTime: startTime ?? DateTime.now(),
       );
       final context = span.spanContext;
@@ -1487,10 +1640,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       if (open != null) {
         span = open..addAttributes(OTel.attributesFromMap(attrs));
       } else {
+        // A request made inside an interaction's `run` is part of it.
+        final parent = currentInteraction?.context;
         span = tracer.startSpan(
           event.method,
           kind: SpanKind.client,
-          root: true,
+          context: parent,
+          root: parent == null,
           attributes: OTel.attributesFromMap(attrs),
           startTime: end.subtract(event.duration),
         );
@@ -1622,9 +1778,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     Object? body,
     Map<String, Object> attributes = const {},
     DateTime? time,
+    Context? context,
   }) {
     if (_shutdown) return;
     final timestamp = time ?? DateTime.now();
+    // An interaction's trace, when this was recorded inside its `run`.
+    final traced = context ?? Context.current;
     // Lines printed before this record are recorded before it.
     if (_printed.isNotEmpty) _recordPrinted();
     if (!_ready) {
@@ -1636,6 +1795,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
                 body: body,
                 attributes: attributes,
                 time: timestamp,
+                context: traced,
               ),
           keep: _keptBeforeReady.contains(eventName));
       return;
@@ -1646,6 +1806,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     try {
       logger.emit(
         timeStamp: timestamp,
+        context: traced,
         severityNumber: severity,
         severityText: severityText,
         body: body,
@@ -2368,11 +2529,17 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (_shutdown) return;
     if (_options.captureMetrics) _vitals.lifecycleChanged(state);
     if (state == AppLifecycleState.resumed) {
+      // Clips that failed to encode while the app was away are made now.
+      _replay.onResumed();
       _sessions?.markActivity();
       unawaited(_opamp?.pollIfDue());
       unawaited(_legacyReports?.drain());
       unawaited(_outbox?.drain());
       unawaited(_tracewayOutbox?.drain());
+    } else if (state == AppLifecycleState.inactive) {
+      // About to leave: the last segment is cut while the app is still in
+      // the foreground, where the platform's video encoder works.
+      _replay.onInactive();
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       _replay.onPaused();

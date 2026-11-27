@@ -6,11 +6,15 @@ import 'package:device_info_plus/device_info_plus.dart';
 class DeviceInfoCollector {
   const DeviceInfoCollector._();
 
-  static Map<String, String> collectSync() {
-    final info = <String, String>{};
+  /// The operating system only (`os.name`, `os.version`): what is left
+  /// when `captureDeviceInfo` is off.
+  static Map<String, String> collectOs() => {
+        'os.name': Platform.operatingSystem,
+        'os.version': Platform.operatingSystemVersion,
+      };
 
-    info['os.name'] = Platform.operatingSystem;
-    info['os.version'] = Platform.operatingSystemVersion;
+  static Map<String, String> collectSync() {
+    final info = collectOs();
     info['device.locale'] = Platform.localeName;
     info['runtime.version'] = Platform.version;
 
