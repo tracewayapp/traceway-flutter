@@ -9,6 +9,7 @@ import '../core/ids.dart';
 import '../core/matcher.dart';
 import '../core/ring_buffer.dart';
 import '../core/settings.dart';
+import '../guarded.dart';
 import 'events.dart';
 
 /// A record waiting in the ring buffer or on its way to an exporter.
@@ -192,8 +193,11 @@ class TelemetryRouter {
   /// batch processor copies it there and later attributes would be lost. A
   /// buffered record is already in the buffer at that point, so a flush it
   /// triggers includes it; a streamed one follows the flushed breadcrumbs.
+  ///
+  /// A failure in the triggers costs what they would have done, never the
+  /// record that ran them.
   void _observeAndSend(ObservedRecord observed) {
-    hooks.observe(observed);
+    guarded('triggers', () => hooks.observe(observed));
     if (observed.routed == Routed.stream) _send(observed.item);
   }
 
@@ -424,11 +428,8 @@ class ControlLogProcessor implements LogRecordProcessor {
 
   @override
   Future<void> onEmit(ReadWriteLogRecord logRecord, Context? context) async {
-    try {
-      _router()?.routeLog(logRecord);
-    } catch (_) {
-      // Telemetry must never break the app that produced it.
-    }
+    // Telemetry must never break the app that produced it.
+    guarded('log routing', () => _router()?.routeLog(logRecord));
   }
 
   @override
@@ -455,20 +456,12 @@ class ControlSpanProcessor implements SpanProcessor {
 
   @override
   Future<void> onStart(Span span, Context? parentContext) async {
-    try {
-      _router()?.stampSpan(span);
-    } catch (_) {
-      // ignore
-    }
+    guarded('span stamp', () => _router()?.stampSpan(span));
   }
 
   @override
   Future<void> onEnd(Span span) async {
-    try {
-      _router()?.routeSpan(span);
-    } catch (_) {
-      // ignore
-    }
+    guarded('span routing', () => _router()?.routeSpan(span));
   }
 
   @override

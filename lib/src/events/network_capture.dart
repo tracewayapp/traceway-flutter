@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
+import '../guarded.dart';
 import '../traceway_client.dart';
 import 'traceway_event.dart';
 
@@ -18,16 +19,43 @@ const Object recordedByTracewayHttpClient = #tracewayRecordedRequest;
 /// dart:io HttpClient. A request a `TracewayHttpClient` already records is
 /// left to it, so it is recorded once. A request is over when its response
 /// body is: see [ObservedResponseBody].
+///
+/// Everything else is the app's previous override's, or dart:io's default:
+/// proxies ([findProxyFromEnvironment]), certificates and the client the
+/// previous override creates.
 class TracewayHttpOverrides extends HttpOverrides {
   TracewayHttpOverrides(this._previous);
 
   final HttpOverrides? _previous;
+
+  @visibleForTesting
+  HttpOverrides? get previousForTest => _previous;
+
+  static bool _installed = false;
+
+  /// Makes this the global override, wrapping the current one; once per
+  /// process, so a request is never recorded twice.
+  static void install() {
+    if (_installed) return;
+    _installed = true;
+    HttpOverrides.global = TracewayHttpOverrides(HttpOverrides.current);
+  }
 
   @override
   HttpClient createHttpClient(SecurityContext? context) {
     final inner =
         _previous?.createHttpClient(context) ?? super.createHttpClient(context);
     return _TracewayHttpClient(inner);
+  }
+
+  /// dart:io asks the current override which proxy a request takes: the
+  /// app's previous one still decides.
+  @override
+  String findProxyFromEnvironment(Uri url, Map<String, String>? environment) {
+    final previous = _previous;
+    return previous != null
+        ? previous.findProxyFromEnvironment(url, environment)
+        : super.findProxyFromEnvironment(url, environment);
   }
 }
 
@@ -320,7 +348,7 @@ class _TracewayHttpClient implements HttpClient {
       }
       return _TracewayHttpClientRequest(req, method, url, start, traceparent);
     } catch (e) {
-      _emit(method: method, url: url, start: start, error: e.toString());
+      _emit(method: method, url: url, start: start, error: safeToString(e));
       rethrow;
     }
   }
@@ -551,12 +579,12 @@ class _TracewayHttpClientRequest implements HttpClientRequest {
             end: end,
             statusCode: res.statusCode,
             responseBytes: responseBytes,
-            error: error?.toString(),
+            error: error == null ? null : safeToString(error),
           ),
         ),
       );
     } catch (e) {
-      _emitOnce(error: e.toString());
+      _emitOnce(error: safeToString(e));
       rethrow;
     }
   }
@@ -566,7 +594,7 @@ class _TracewayHttpClientRequest implements HttpClientRequest {
 
   @override
   void abort([Object? exception, StackTrace? stackTrace]) {
-    _emitOnce(error: (exception ?? 'aborted').toString());
+    _emitOnce(error: safeToString(exception ?? 'aborted'));
     _inner.abort(exception, stackTrace);
   }
 

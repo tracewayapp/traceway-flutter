@@ -103,6 +103,12 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   final CircularBuffer<CapturedFrame> _buffer;
   final bool debug;
 
+  /// Pixelates what is typed into text fields, as the wireframe masks it
+  /// and rrweb's `maskAllInputs` does; the settings turn it off
+  /// (`replay.maskAllInputs`). Obscured and read-only fields are left as
+  /// they are drawn.
+  bool maskAllInputs = true;
+
   late final int _captureIntervalMs = 1000 ~/ fps;
 
   /// The longest video a clip makes, in seconds. Every frame is shown for
@@ -198,7 +204,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
     try {
       // Read in the same turn as the picture is taken, so every mask is
       // where its widget is in this frame.
-      final maskRegions = maskRegionsIn(context);
+      final maskRegions = maskRegionsIn(context, maskAllInputs: maskAllInputs);
       final image = await boundary.toImage(pixelRatio: pixelRatio);
       final width = image.width;
       final height = image.height;
@@ -374,35 +380,46 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   void addFrame(CapturedFrame frame) => _buffer.push(frame);
 
   /// How many encoder frames each of [frames] is shown for, so the video
-  /// plays at the app's speed: a frame until the next one was taken, the
-  /// last one until [end], each at least once. Counted from the first
-  /// frame, so rounding does not add up along the clip.
+  /// plays at the app's speed: encoder frame k, at k / [fps] after the
+  /// first frame, shows the frame taken nearest to that time. A frame
+  /// replaced before its encoder frame came up is left out (held 0 times).
+  /// The clip fills whole encoder frames up to [end] and never runs past
+  /// it, so the next clip of the session starts where this one ends; a
+  /// timer that captures a little faster than [fps] cannot push it ahead.
+  /// Without [end] the last frame is shown once.
   ///
   /// A clip is at most [_maxEncodedFrames] long. Over that, the last frame
   /// is held for less, then the earliest frames are left out: the frames
   /// captured last, nearest to what asked for the clip, are kept. Returns
-  /// the index of the first frame encoded and the holds of it and of every
-  /// frame after it.
-  (int, List<int>) _holds(List<CapturedFrame> frames, DateTime end) {
-    final frameMs = 1000 / fps;
+  /// the index of the first frame encoded, the holds of it and of every
+  /// frame after it, and the time the clip starts at.
+  (int, List<int>, DateTime) _holds(List<CapturedFrame> frames, DateTime? end) {
     final origin = frames.first.timestamp;
-    final holds = <int>[];
-    var encoded = 0;
-    for (var i = 0; i < frames.length; i++) {
-      final shownUntil =
-          i + 1 < frames.length ? frames[i + 1].timestamp : end;
-      final at = (shownUntil.difference(origin).inMilliseconds / frameMs).round();
-      final hold = max(1, at - encoded);
-      holds.add(hold);
-      encoded += hold;
-    }
+    // In encoder frames since the first frame; whole microseconds times
+    // fps, so a window of whole frames ends on a whole frame.
+    double slot(DateTime t) =>
+        t.difference(origin).inMicroseconds * fps / Duration.microsecondsPerSecond;
+    final total = end == null
+        ? slot(frames.last.timestamp).round() + 1
+        : max(1, slot(end).floor());
+    final starts = [
+      for (var i = 0; i < frames.length; i++)
+        i == 0 ? 0 : min(slot(frames[i].timestamp).round(), total - 1),
+    ];
+    final holds = [
+      for (var i = 0; i < frames.length; i++)
+        (i + 1 < frames.length ? starts[i + 1] : total) - starts[i],
+    ];
     var first = 0;
-    var beforeLast = encoded - holds.last;
+    var beforeLast = total - holds.last;
     while (first < frames.length - 1 && beforeLast + 1 > _maxEncodedFrames) {
       beforeLast -= holds[first++];
     }
     holds.last = min(holds.last, _maxEncodedFrames - beforeLast);
-    return (first, holds.sublist(first));
+    final startedAt = origin.add(Duration(
+        microseconds:
+            (starts[first] * Duration.microsecondsPerSecond / fps).round()));
+    return (first, holds.sublist(first), startedAt);
   }
 
   static bool _inWindow(CapturedFrame frame, DateTime? since, DateTime? until) =>
@@ -416,7 +433,8 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   /// Encodes the buffered frames captured at or after [since] and before
   /// [until] to MP4. The clip can never hold more frames than the frame
   /// ring buffer; each is shown for as long as it was on screen, the last
-  /// one until [until], so the video keeps the session's time.
+  /// one until [until] and never past it, so the video keeps the session's
+  /// time.
   /// The frames are chosen when this is called, before it waits for an
   /// earlier encode to finish.
   @override
@@ -428,11 +446,10 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
     final window =
         _buffer.readAll().where((f) => _inWindow(f, since, until)).toList();
     if (window.isEmpty) return null;
-    final (first, holds) = _holds(window, until ?? window.last.timestamp);
+    final (first, holds, startedAt) = _holds(window, until);
     final frames = window.sublist(first);
     final encodedFrames = holds.fold<int>(0, (sum, n) => sum + n);
     final durationSeconds = encodedFrames / fps;
-    final startedAt = frames.first.timestamp;
     final endedAt = startedAt
         .add(Duration(microseconds: (durationSeconds * 1000000).round()));
 
@@ -473,6 +490,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
       // Frames smaller than maxWidth×maxHeight are padded with dark grey.
       final canvasSize = maxWidth * maxHeight * 4;
       for (var i = 0; i < frames.length; i++) {
+        if (holds[i] == 0) continue;
         final frame = frames[i];
         final rgba = await _decodePngToRgba(frame.pngBytes, frame.width, frame.height);
 

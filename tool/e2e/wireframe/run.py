@@ -484,6 +484,10 @@ def evaluate_visual(check, visual, baseline, args, run):
 
 
 def check_sizes(check, sizes, baseline, args):
+    # In a subset run the first scenario also holds the recording's opening
+    # snapshot, which a whole run counts under its first scenario.
+    if args.only:
+        return
     known = baseline.get('scenarios', {})
     for sid, size in sizes.items():
         base = (known.get(sid) or {}).get('bytes')
@@ -683,9 +687,10 @@ def main():
                     continue
                 shutil.copy(os.path.join(out, 'replay', f'{name}.png'), os.path.join(baseline_dir, f'{name}.png'))
                 merged[name] = {'fidelity': v.get('fidelity')}
-            scen = dict(baseline.get('scenarios', {})) if args.only else {}
-            scen.update({sid: {'bytes': s['bytes']} for sid, s in sizes.items()})
+            # A subset run's sizes are not comparable (check_sizes): it keeps the baseline's.
+            scen = dict(baseline.get('scenarios', {}))
             if not args.only:
+                scen = {sid: {'bytes': s['bytes']} for sid, s in sizes.items()}
                 for f in os.listdir(baseline_dir):
                     if f.endswith('.png') and f[:-4] not in merged:
                         os.remove(os.path.join(baseline_dir, f))

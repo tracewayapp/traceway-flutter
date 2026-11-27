@@ -53,26 +53,35 @@ class WireframeGlyphs {
   /// Every glyph seen so far.
   Iterable<Glyph> get all => _glyphs.values;
 
+  /// Nothing awaits it: whatever fails in it (a box of no finite size, a
+  /// style the painter rejects) stays in it.
   Future<void> _draw(Glyph glyph, InlineSpan span, Size size,
       TextDirection direction, TextScaler scaler) async {
-    final width = (size.width * pixelRatio).ceil();
-    final height = (size.height * pixelRatio).ceil();
-    if (width <= 0 || height <= 0 || width > 512 || height > 512) return;
-    // Only the shape matters, opaque: the color comes from the page. An
-    // icon's style does not inherit, so the color is replaced on it.
-    final opaque = span is TextSpan && span.style?.foreground == null
-        ? TextSpan(
-            text: span.text,
-            children: span.children,
-            style: (span.style ?? const TextStyle())
-                .copyWith(color: const Color(0xFF000000)),
-          )
-        : span;
-    final painter = TextPainter(
-      text: opaque,
-      textDirection: direction,
-      textScaler: scaler,
-    );
+    final TextPainter painter;
+    final int width, height;
+    try {
+      if (!size.isFinite) return;
+      width = (size.width * pixelRatio).ceil();
+      height = (size.height * pixelRatio).ceil();
+      if (width <= 0 || height <= 0 || width > 512 || height > 512) return;
+      // Only the shape matters, opaque: the color comes from the page. An
+      // icon's style does not inherit, so the color is replaced on it.
+      final opaque = span is TextSpan && span.style?.foreground == null
+          ? TextSpan(
+              text: span.text,
+              children: span.children,
+              style: (span.style ?? const TextStyle())
+                  .copyWith(color: const Color(0xFF000000)),
+            )
+          : span;
+      painter = TextPainter(
+        text: opaque,
+        textDirection: direction,
+        textScaler: scaler,
+      );
+    } catch (_) {
+      return;
+    }
     try {
       painter.layout();
       final recorder = ui.PictureRecorder();

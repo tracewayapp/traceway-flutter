@@ -320,9 +320,18 @@ void main() {
 
     test('an uncaught async error is reported and printed, once', () async {
       final h = await startHarness();
-      final handler = ErrorHandler();
-      printing(() =>
-          handler.handleZoneError(StateError('async boom'), StackTrace.current));
+      PlatformDispatcher.instance.onError = null;
+      final handler = ErrorHandler()..install();
+      // The zone hands the error on to the root zone, whose errors the
+      // engine gives to PlatformDispatcher.onError: with no app handler
+      // there, the SDK prints it.
+      printing(() => runZonedGuarded(
+            () => runZonedGuarded(
+                () => scheduleMicrotask(() => throw StateError('async boom')),
+                handler.handleZoneError),
+            (error, stack) => PlatformDispatcher.instance.onError!(error, stack),
+          ));
+      await Future<void>.delayed(Duration.zero);
       await h.client.flush();
 
       expect(h.named(eventException).map((r) => attr(r, 'exception.message')),

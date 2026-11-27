@@ -101,6 +101,42 @@ void main() {
       expect(clip.endedAt, at(1000));
     });
 
+    test('a clip never runs past the end of its window', () async {
+      // The 66 ms capture timer takes frames a little faster than 15 fps
+      // plays them.
+      final recorder = ScreenRecorder(
+          repaintBoundaryKey: GlobalKey(), maxFrames: 300, pixelRatio: 1, fps: 15);
+      for (var ms = 0; ms < 16000; ms += 66) {
+        recorder.addFrame(frame(ms));
+      }
+      final first = (await recorder.captureRecording('a',
+          since: t0, until: at(8000)))!;
+      final second = (await recorder.captureRecording('b',
+          since: at(8000), until: at(16000)))!;
+      expect(first.startedAt, t0);
+      expect(first.endedAt!.isAfter(at(8000)), isFalse,
+          reason: 'ended at ${first.endedAt}');
+      expect(second.startedAt!.isBefore(first.endedAt!), isFalse,
+          reason: '${second.startedAt} starts before ${first.endedAt}');
+      expect(second.endedAt!.isAfter(at(16000)), isFalse,
+          reason: 'ended at ${second.endedAt}');
+      expect(first.events.single['durationSeconds'], closeTo(8.0, 1 / 15));
+    });
+
+    test('a frame taken right before the end does not lengthen the clip',
+        () async {
+      final recorder = ScreenRecorder(
+          repaintBoundaryKey: GlobalKey(), maxFrames: 20, pixelRatio: 1, fps: 10);
+      for (final ms in [0, 100, 200, 300, 390]) {
+        recorder.addFrame(frame(ms));
+      }
+      final clip = (await recorder.captureRecording('c',
+          since: t0, until: at(400)))!;
+      expect(clip.events.single['durationSeconds'], 0.4);
+      expect(clip.endedAt, at(400));
+      expect(encoder.frames, hasLength(4));
+    });
+
     test('without an end the last frame is shown once', () async {
       final recorder = ScreenRecorder(
           repaintBoundaryKey: GlobalKey(), maxFrames: 10, pixelRatio: 1, fps: 10);

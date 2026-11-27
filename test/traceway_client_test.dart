@@ -123,7 +123,8 @@ void main() {
           startsWith('FormatException: '));
       expect(attr(record, 'traceway.exception.id'), matches(_uuid));
       expect(attr(record, 'session.id'), matches(_uuid));
-      expect(attr(record, 'traceway.session.started_at'), isA<int>());
+      expect(attr(record, 'traceway.session.started_at'), isNull,
+          reason: 'only session events carry the start, as in the browser SDK');
       expect(attr(record, 'user.id'), 'u-42');
       expect(attr(record, 'k'), 'v');
       expect(attr(record, 'traceway.replay.status'), 'disabled');
@@ -903,6 +904,29 @@ void main() {
               .map((r) => attr(r, 'traceway.error.suppressed_total')),
           [2, 3]);
       expect(h.named('traceway.session.update'), hasLength(1));
+    });
+
+    test('session events carry the errors held back so far', () async {
+      final h = await startHarness(collectionHealthDelayMs: 50);
+      await h.client.flush();
+      expect(
+          attr(h.named('session.start').single,
+              'traceway.error.suppressed_total'),
+          0);
+      for (var i = 0; i < 3; i++) {
+        h.client.captureException(StateError('same'));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await h.client.flush();
+      expect(
+          attr(h.named('traceway.session.update').single,
+              'traceway.error.suppressed_total'),
+          2);
+      await h.client.shutdown();
+      expect(
+          attr(h.named('session.end').single,
+              'traceway.error.suppressed_total'),
+          2);
     });
 
     test('replay segments the server refuses are reported', () async {

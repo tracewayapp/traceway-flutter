@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../core/ids.dart';
+import '../guarded.dart';
 import 'messages.dart';
 
 /// Result of applying a remote config; `null` [errorMessage] means applied.
@@ -17,6 +18,7 @@ class ApplyResult {
 const int _minPollIntervalMs = 30000;
 const int _maxBackoffMs = 30 * 60000;
 const int _firstBackoffMs = 30000;
+const int _maxHeartbeatSeconds = 24 * 60 * 60;
 
 bool _sameBytes(Uint8List? a, Uint8List? b) {
   if (a == null || b == null || a.length != b.length) return false;
@@ -101,7 +103,7 @@ class OpampHttpClient {
   void start() {
     if (!_stopped) return;
     _stopped = false;
-    unawaited(poll());
+    unawaited(guardedAsync('config poll', poll));
   }
 
   void stop() {
@@ -147,7 +149,7 @@ class OpampHttpClient {
     _timer?.cancel();
     _timer = Timer(Duration(milliseconds: delayMs), () {
       _timer = null;
-      unawaited(poll());
+      unawaited(guardedAsync('config poll', poll));
     });
   }
 
@@ -219,11 +221,16 @@ class OpampHttpClient {
     final newUid = message.newInstanceUid;
     if (newUid != null && newUid.length == 16) {
       _uid = newUid;
-      onInstanceUidChange?.call(newUid);
+      guarded('instance id', () => onInstanceUidChange?.call(newUid));
     }
     final heartbeat = message.heartbeatIntervalSeconds;
     if (heartbeat != null && heartbeat > 0) {
-      final next = heartbeat * 1000;
+      // At most a day: more would overflow the timer's microseconds, and a
+      // negative delay polls at once, in a loop.
+      final next = (heartbeat > _maxHeartbeatSeconds
+              ? _maxHeartbeatSeconds
+              : heartbeat) *
+          1000;
       _intervalMs = next < _minIntervalMs ? _minIntervalMs : next;
     }
 

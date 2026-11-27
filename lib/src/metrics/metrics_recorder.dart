@@ -7,6 +7,7 @@ import 'package:fixnum/fixnum.dart';
 
 import '../core/control_state.dart';
 import '../core/ids.dart';
+import '../guarded.dart';
 import '../persistence/state_store.dart';
 import 'aggregator.dart';
 import 'otlp.dart';
@@ -379,7 +380,7 @@ class MetricsRecorder {
     final keys = dims.keys.toList()..sort();
     return {
       for (final key in keys.take(_maxCustomDimensions))
-        _clip(key): _clip('${dims[key]}'),
+        _clip(key): _clip(safeToString(dims[key])),
     };
   }
 
@@ -403,9 +404,11 @@ class MetricsRecorder {
     return Future.wait(List.of(_uploads));
   }
 
+  /// What fails in an upload stays in it: nothing else awaits it.
   void _track(Future<void> upload) {
-    _uploads.add(upload);
-    upload.whenComplete(() => _uploads.remove(upload));
+    final contained = guardedAsync('metrics upload', () => upload);
+    _uploads.add(contained);
+    contained.whenComplete(() => _uploads.remove(contained));
   }
 
   Future<void> _upload(bool final_) async {
@@ -481,7 +484,10 @@ class MetricsRecorder {
   /// sent, whatever the answer will be.
   void _resend() {
     if (control.metrics == null) return;
-    for (final entry in _pending.take(_inFlight)) {
+    final pending =
+        guardedOr('metrics resend', const <PendingPayload>[],
+            () => _pending.take(_inFlight));
+    for (final entry in pending) {
       try {
         final request =
             proto.ExportMetricsServiceRequest.fromBuffer(entry.body);

@@ -2,10 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show FrameTiming, PlatformDispatcher;
 
-import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
+import '../guarded.dart';
 import 'metrics_recorder.dart';
 
 /// A cold start this slow counts the user as affected (Android vitals'
@@ -91,6 +92,18 @@ class AppVitals {
   final bool reportHangs;
 
   bool _started = false;
+
+  /// The instance the persistent frame callback samples for. A persistent
+  /// callback cannot be removed, so there is one per process, and it holds
+  /// no instance that has stopped (or the client behind it).
+  static AppVitals? _sampling;
+  static bool _frameCallbackAdded = false;
+
+  /// How many persistent frame callbacks were added in this process.
+  @visibleForTesting
+  static int frameCallbacksAdded = 0;
+
+
   AppLifecycleState? _state;
   bool _backgrounded = false;
   bool _backgroundedBeforeFirstFrame = false;
@@ -98,7 +111,6 @@ class AppVitals {
   _Visit? _visit;
   Timer? _watchdog;
   final Stopwatch _clock = Stopwatch();
-  bool _frameCallbackAdded = false;
   final List<_ScreenSince> _screens = [];
 
   /// Call as early as possible, when the SDK is initialized: the first
@@ -121,12 +133,14 @@ class AppVitals {
     }
     _started = true;
     _state = binding.lifecycleState;
-    binding.addTimingsCallback(onTimings);
-    // A persistent callback cannot be removed: it is added once, and does
-    // nothing while stopped.
+    binding.addTimingsCallback(_timings);
+    _sampling = this;
+    // A persistent callback cannot be removed: it is added once per
+    // process, and does nothing while no instance runs.
     if (!_frameCallbackAdded) {
       _frameCallbackAdded = true;
-      binding.addPersistentFrameCallback(_sampleScreen);
+      frameCallbacksAdded++;
+      binding.addPersistentFrameCallback(_sampleCurrent);
     }
     if (_foreground) _startWatchdog();
   }
@@ -134,8 +148,9 @@ class AppVitals {
   void stop() {
     if (!_started) return;
     _started = false;
+    if (identical(_sampling, this)) _sampling = null;
     try {
-      WidgetsBinding.instance.removeTimingsCallback(onTimings);
+      WidgetsBinding.instance.removeTimingsCallback(_timings);
     } catch (_) {}
     _screens.clear();
     _stopWatchdog();
@@ -191,7 +206,8 @@ class AppVitals {
             sdkStartMs - processStartMs < 30000
         ? processStartMs
         : sdkStartMs;
-    unawaited(binding.waitUntilFirstFrameRasterized.then((_) {
+    unawaited(binding.waitUntilFirstFrameRasterized
+        .then((_) => guarded('cold start', () {
       _firstFrameDone = true;
       if (!coldStartCounts(
           _backgroundedBeforeFirstFrame, binding.lifecycleState)) {
@@ -200,19 +216,19 @@ class AppVitals {
       final ms = _nowUs() / 1000 - startMs;
       if (ms <= 0 || ms > _maxStartMs) return;
       _recorder.appStart(ms, 'cold', slow: ms >= slowColdStartMs);
-    }));
+    })));
   }
 
   void _measureHotStart() {
     final atUs = _nowUs();
     try {
       final scheduler = SchedulerBinding.instance;
-      scheduler.addPostFrameCallback((_) {
-        if (!_started) return;
-        final ms = (_nowUs() - atUs) / 1000;
-        if (ms < 0 || ms > _maxStartMs) return;
-        _recorder.appStart(ms, 'hot', slow: ms >= slowHotStartMs);
-      });
+      scheduler.addPostFrameCallback((_) => guarded('hot start', () {
+            if (!_started) return;
+            final ms = (_nowUs() - atUs) / 1000;
+            if (ms < 0 || ms > _maxStartMs) return;
+            _recorder.appStart(ms, 'hot', slow: ms >= slowHotStartMs);
+          }));
       scheduler.ensureVisualUpdate();
     } catch (_) {}
   }
@@ -275,7 +291,7 @@ class AppVitals {
       // Reported during a frame's post-frame callbacks (a splash screen
       // replacing itself once drawn), the route is built by the next frame:
       // a callback added now runs after that one.
-      scheduler.addPostFrameCallback((_) => done());
+      scheduler.addPostFrameCallback((_) => guarded('screen display', done));
       // A navigation always rebuilds; this only makes sure a router that
       // reports before scheduling its frame is not measured against some
       // later, unrelated one.
@@ -326,7 +342,12 @@ class AppVitals {
   /// Notes, during each frame, the screen it is built on when that changed:
   /// the engine reports a frame's timings later, in release builds in
   /// batches about once a second, by when the app may show another screen.
-  void _sampleScreen(Duration _) {
+  static void _sampleCurrent(Duration _) {
+    final sampling = _sampling;
+    if (sampling != null) guarded('frame screen', sampling._sampleScreen);
+  }
+
+  void _sampleScreen() {
     if (!_started) return;
     final frame = _frameNumber();
     if (frame < 0) return;
@@ -350,6 +371,9 @@ class AppVitals {
     }
     return current;
   }
+
+  void _timings(List<FrameTiming> timings) =>
+      guarded('frame timings', () => onTimings(timings));
 
   @visibleForTesting
   void onTimings(List<FrameTiming> timings) {
@@ -399,7 +423,8 @@ class AppVitals {
       final elapsed = _clock.elapsedMilliseconds;
       final blocked = elapsed - previousMs - watchdogIntervalMs;
       if (blocked >= hangThresholdMs && _foreground) {
-        _recorder.hang(blocked.toDouble(), currentScreen());
+        guarded('hang',
+            () => _recorder.hang(blocked.toDouble(), currentScreen()));
       }
       if (_watchdog != null) _tick(elapsed);
     });

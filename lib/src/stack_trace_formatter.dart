@@ -16,9 +16,10 @@ bool isNonSymbolicTrace(String raw) => _nonSymbolicFramePattern.hasMatch(raw);
 String? extractBuildId(String raw) =>
     _buildIdPattern.firstMatch(raw)?.group(1)?.toLowerCase();
 
-String formatException(Object error, StackTrace stackTrace) {
+String formatException(Object error, StackTrace stackTrace,
+    {String? message}) {
   final errorType = error.runtimeType.toString();
-  final errorMessage = error.toString();
+  final errorMessage = message ?? error.toString();
 
   final buffer = StringBuffer();
   buffer.writeln('$errorType: $errorMessage');

@@ -21,6 +21,7 @@ import 'core/settings.dart';
 import 'core/trigger_engine.dart';
 import 'device_info_collector.dart';
 import 'events/traceway_event.dart';
+import 'guarded.dart';
 import 'interaction/tap_target.dart';
 import 'interaction/widget_selector.dart';
 import 'metrics/app_vitals.dart';
@@ -65,6 +66,12 @@ const Set<String> _keptBeforeReady = {
   eventSessionEnd,
   eventSessionUpdate,
 };
+
+/// The running client, or null: set as [TracewayClient.instance] changes, so
+/// the `Traceway` widget follows a client started after another was shut
+/// down.
+final ValueNotifier<TracewayClient?> tracewayClientChanges =
+    ValueNotifier(null);
 
 /// Replaces the parts of the SDK that touch the platform or the network, so
 /// tests can run it against in-memory exporters and a fake server.
@@ -112,6 +119,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     this._options,
     this._overrides,
   ) : _standalone = connectionString == null {
+    guardedDebugLogging = _options.debug;
     if (connectionString != null) {
       final parsed = parseConnectionString(connectionString);
       _token = parsed.token;
@@ -124,7 +132,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _globalAttributes.addAll(_options.attributes);
     if (_options.captureLogs) {
       _loggingSubscription = logging.Logger.root.onRecord.listen(
-        _onLoggingRecord,
+        (record) => guarded('logging record', () => _onLoggingRecord(record)),
         onError: (Object _) {},
       );
     }
@@ -223,6 +231,11 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   static TracewayClient? _instance;
   static TracewayClient? get instance => _instance;
 
+  static void _setInstance(TracewayClient? client) {
+    _instance = client;
+    guarded('client change', () => tracewayClientChanges.value = client);
+  }
+
   final TracewayOptions _options;
   final TracewayTestOverrides? _overrides;
 
@@ -292,7 +305,6 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   Timer? _refreshTimer;
   bool _ready = false;
   bool _shutdown = false;
-  bool _ownsOTel = false;
   LoggerProvider? _privateLoggerProvider;
   TracerProvider? _privateTracerProvider;
 
@@ -431,12 +443,18 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   ReplaySource? get screenRecorder => _screenRecorder;
   set screenRecorder(ReplaySource? recorder) {
     _screenRecorder = recorder;
-    if (recorder is WireframeRecorder) {
-      recorder.maskAllInputs = _control.settings.replayMaskAllInputs;
-      recorder.networkImages =
-          _control.settings.replayImages != TracewayImagePolicy.off;
-    }
+    _configureRecorder(recorder, _control.settings);
     _replay.attach(recorder);
+  }
+
+  /// What the settings say about privacy, for the recorder of either kind.
+  static void _configureRecorder(ReplaySource? recorder, Settings settings) {
+    if (recorder is WireframeRecorder) {
+      recorder.maskAllInputs = settings.replayMaskAllInputs;
+      recorder.networkImages = settings.replayImages != TracewayImagePolicy.off;
+    } else if (recorder is ScreenRecorder) {
+      recorder.maskAllInputs = settings.replayMaskAllInputs;
+    }
   }
 
   /// Uses [source] instead of the screen recorder as the origin of clips.
@@ -456,7 +474,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       return existing;
     }
     final client = TracewayClient._(connectionString, options, null);
-    _instance = client;
+    _setInstance(client);
     unawaited(client._start());
     return client;
   }
@@ -470,7 +488,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     await resetForTest();
     final client = TracewayClient._(
         connectionString, options, overrides ?? TracewayTestOverrides());
-    _instance = client;
+    _setInstance(client);
     await client._start();
     return client;
   }
@@ -478,7 +496,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   @visibleForTesting
   static Future<void> resetForTest() async {
     final existing = _instance;
-    _instance = null;
+    _setInstance(null);
     if (existing != null) await existing.shutdown();
     // ignore: invalid_use_of_visible_for_testing_member
     await OTel.reset();
@@ -526,8 +544,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
               'Invalid 1.x connection string; legacy reports will expire on device.');
         }
       }
-      _legacyReports = LegacyReports(legacyDirectory, target, _http);
-      unawaited(_legacyReports!.drain());
+      final legacy =
+          _legacyReports = LegacyReports(legacyDirectory, target, _http);
+      unawaited(guardedAsync('legacy reports', legacy.drain));
     }
 
     final storedUid = _store.get('instanceUid');
@@ -612,20 +631,25 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       )..start();
     }
     _started = true;
+    // Each step on its own: one that fails must not leave the ones after it
+    // undone for the whole run.
     if (_options.captureMetrics) {
-      _metrics.start();
-      if (_overrides?.appVitals ?? true) _vitals.start();
+      guarded('metrics start', _metrics.start);
+      if (_overrides?.appVitals ?? true) guarded('vitals start', _vitals.start);
     }
-    _restoreLocalCaptures();
-    _onSettingsChanged(_control.settings);
+    guarded('local captures restore', _restoreLocalCaptures);
+    guarded('settings apply', () => _onSettingsChanged(_control.settings));
     final opamp = _opamp;
     if (opamp == null) {
-      _confirmCaptures();
+      guarded('captures confirm', _confirmCaptures);
     } else {
-      unawaited(opamp.poll().whenComplete(_confirmCaptures));
+      unawaited(guardedAsync('first poll', opamp.poll).whenComplete(
+          () => guarded('captures confirm', _confirmCaptures)));
     }
-    _outbox?.schedule(const Duration(seconds: 2));
-    _tracewayOutbox?.schedule(const Duration(seconds: 2));
+    guarded('outbox schedule', () {
+      _outbox?.schedule(const Duration(seconds: 2));
+      _tracewayOutbox?.schedule(const Duration(seconds: 2));
+    });
     _log('started, instance ${bytesToUuid(_instanceUid)}');
   }
 
@@ -640,12 +664,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     try {
       final resource =
           OTel.resource(OTel.attributesFromMap(_resourceAttributes));
-      final logs = _privateLoggerProvider ??
-          (_ownsOTel ? OTel.loggerProvider() : null);
-      final traces = _privateTracerProvider ??
-          (_ownsOTel ? OTel.tracerProvider() : null);
-      logs?.resource = resource;
-      traces?.resource = resource;
+      _privateLoggerProvider?.resource = resource;
+      _privateTracerProvider?.resource = resource;
     } catch (e) {
       _log('could not apply the new instance id: $e');
     }
@@ -819,29 +839,11 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final spanProcessor = ControlSpanProcessor(() => _router, spanSink);
     // The OpenTelemetry SDK prints its own diagnostics, export failures
     // included; an app should only see them when it asked for debug output.
-    final factory = OTelFactory.otelFactory;
-    if (factory is OTelSDKFactory) {
-      // Private providers keep this installation's resource and lifetime
-      // independent of the app's exporters and processors.
-      final resource =
-          OTel.resource(OTel.attributesFromMap(_resourceAttributes));
-      _privateLoggerProvider = factory.loggerProvider(
-        endpoint: routes.logs.url,
-        serviceName: _serviceName,
-        serviceVersion: _serviceVersion,
-        resource: resource,
-      ) as LoggerProvider;
-      _privateTracerProvider = factory.tracerProvider(
-        endpoint: routes.traces.url,
-        serviceName: _serviceName,
-        serviceVersion: _serviceVersion,
-        resource: resource,
-      ) as TracerProvider;
-      _privateLoggerProvider!.addLogRecordProcessor(logProcessor);
-      _privateTracerProvider!
-        ..sampler = ParentBasedSampler(const AlwaysOnSampler())
-        ..addSpanProcessor(spanProcessor);
-    } else {
+    if (OTelFactory.otelFactory is! OTelSDKFactory) {
+      // The app has not set OpenTelemetry up (yet). The SDK needs a factory
+      // installed, but one the app's own `OTel.initialize` may replace
+      // later instead of failing, and global providers that send nothing:
+      // the app's spans are not Traceway's.
       OTelLog.logFunction =
           _options.debug ? (message) => debugPrint('Traceway: $message') : null;
       await OTel.initialize(
@@ -849,19 +851,36 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         serviceVersion: _serviceVersion,
         tracerName: tracewaySdkName,
         tracerVersion: tracewaySdkVersion,
-        resourceAttributes: OTel.attributesFromMap(_resourceAttributes),
-        spanProcessor: spanProcessor,
-        logRecordProcessor: logProcessor,
+        spanProcessor: _NoSpans(),
+        logRecordProcessor: _NoLogs(),
         enableMetrics: false,
         detectPlatformResources: false,
-        spanKind: SpanKind.client,
+        oTelFactoryCreationFunction: _ReplaceableOTelFactory.create,
       );
-      _ownsOTel = true;
     }
-    _logger = (_privateLoggerProvider ?? OTel.loggerProvider())
-        .getLogger(tracewaySdkName, version: tracewaySdkVersion);
-    _tracer = (_privateTracerProvider ?? OTel.tracerProvider())
-        .getTracer(tracewaySdkName, version: tracewaySdkVersion);
+    final factory = OTelFactory.otelFactory as OTelSDKFactory;
+    // Private providers keep this installation's resource and lifetime
+    // independent of the app's exporters and processors, whoever set
+    // OpenTelemetry up.
+    final resource = OTel.resource(OTel.attributesFromMap(_resourceAttributes));
+    final logs = _privateLoggerProvider = factory.loggerProvider(
+      endpoint: routes.logs.url,
+      serviceName: _serviceName,
+      serviceVersion: _serviceVersion,
+      resource: resource,
+    ) as LoggerProvider;
+    final traces = _privateTracerProvider = factory.tracerProvider(
+      endpoint: routes.traces.url,
+      serviceName: _serviceName,
+      serviceVersion: _serviceVersion,
+      resource: resource,
+    ) as TracerProvider;
+    logs.addLogRecordProcessor(logProcessor);
+    traces
+      ..sampler = ParentBasedSampler(const AlwaysOnSampler())
+      ..addSpanProcessor(spanProcessor);
+    _logger = logs.getLogger(tracewaySdkName, version: tracewaySdkVersion);
+    _tracer = traces.getTracer(tracewaySdkName, version: tracewaySdkVersion);
   }
 
   // ------------------------------------------------------------- public API
@@ -874,9 +893,19 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     Object error, [
     StackTrace? stackTrace,
     Map<String, String>? attributes,
-  ]) {
+  ]) =>
+      guarded('captureException',
+          () => _captureException(error, stackTrace, attributes));
+
+  /// The error is the app's object: its `toString` may throw, and must not
+  /// fail the call that reports it.
+  void _captureException(
+    Object error,
+    StackTrace? stackTrace,
+    Map<String, String>? attributes,
+  ) {
     final attrs = <String, Object>{..._screenContext(), ...?attributes};
-    final message = error.toString();
+    final message = safeToString(error);
     if (!_reports(TracewayCapturedError(
       error: error,
       stackTrace: stackTrace,
@@ -886,7 +915,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     ))) {
       return;
     }
-    final raw = stackTrace?.toString();
+    final raw = stackTrace == null ? null : safeToString(stackTrace);
     final obfuscated = raw != null && isNonSymbolicTrace(raw);
     // An obfuscated build renames classes on every build, so its type name
     // would split one issue into many: the message alone heads the trace,
@@ -895,8 +924,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (!obfuscated) attrs['exception.type'] = error.runtimeType.toString();
     attrs['exception.message'] = message;
     if (raw != null) {
-      attrs['exception.stacktrace'] =
-          obfuscated ? raw : formatException(error, stackTrace!);
+      attrs['exception.stacktrace'] = obfuscated
+          ? raw
+          : formatException(error, stackTrace!, message: message);
       final buildId = extractBuildId(raw);
       if (buildId != null) attrs['flutter.build_id'] = buildId;
     }
@@ -913,14 +943,19 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// and counted as an unhandled error (`app.crash`).
   void captureUnhandledException(Object error, [StackTrace? stackTrace]) {
     // An ignored error (a dropped connection) is not a crash either.
-    if (_options.captureMetrics &&
-        !_ignored('${error.runtimeType}: $error')) {
-      _metrics.crash();
-    }
+    guarded('crash count', () {
+      if (_options.captureMetrics &&
+          !_ignored('${error.runtimeType}: ${safeToString(error)}')) {
+        _metrics.crash();
+      }
+    });
     captureException(error, stackTrace);
   }
 
-  void captureMessage(String message, [Map<String, String>? attributes]) {
+  void captureMessage(String message, [Map<String, String>? attributes]) =>
+      guarded('captureMessage', () => _captureMessage(message, attributes));
+
+  void _captureMessage(String message, Map<String, String>? attributes) {
     final attrs = <String, Object>{..._screenContext(), ...?attributes};
     if (!_reports(TracewayCapturedError(
       message: message,
@@ -969,9 +1004,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final tracer = _tracer;
     Span? span;
     if (tracer != null && _ready && !_shutdown && name.isNotEmpty) {
-      try {
+      span = guardedOr<Span?>('startInteraction', null, () {
         final parent = currentInteraction?.context;
-        span = tracer.startSpan(
+        return tracer.startSpan(
           name,
           kind: SpanKind.internal,
           context: parent,
@@ -979,9 +1014,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
           attributes: OTel.attributesFromMap(
               {...?attributes, 'traceway.interaction': true}),
         );
-      } catch (e) {
-        _log('interaction failed: $e');
-      }
+      });
     }
     return TracewayInteraction.internal(span,
         captureException: captureException);
@@ -989,12 +1022,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   /// Patterns match the `Type: message` line only: matching the stack would
   /// let a function named like a pattern silence every error through it.
+  /// A pattern of the app's that throws matches nothing.
   bool _ignored(String line) {
     final first = line.split('\n').first;
     for (final pattern in _options.ignoreErrors ?? defaultIgnoreErrors) {
-      if (pattern is String
-          ? first.contains(pattern)
-          : pattern.allMatches(first).isNotEmpty) {
+      if (guardedOr(
+          'ignoreErrors pattern',
+          false,
+          () => pattern is String
+              ? first.contains(pattern)
+              : pattern.allMatches(first).isNotEmpty)) {
         return true;
       }
     }
@@ -1037,6 +1074,14 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     required String category,
     required String name,
     Map<String, dynamic>? data,
+  }) =>
+      guarded('recordAction',
+          () => _recordAction(category: category, name: name, data: data));
+
+  void _recordAction({
+    required String category,
+    required String name,
+    Map<String, dynamic>? data,
   }) {
     _sessions?.markActivity();
     String? encoded;
@@ -1044,7 +1089,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       try {
         encoded = jsonEncode(data);
       } catch (_) {
-        encoded = data.toString();
+        encoded = safeToString(data);
       }
     }
     _emit(
@@ -1060,18 +1105,22 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   /// Emits a named product event, e.g. `checkout_failed`. Triggers can match
   /// it by `event.name`.
-  void track(String eventName, [Map<String, Object>? attributes]) {
-    if (eventName.isEmpty) return;
-    _emit(
-      eventName: eventName,
-      severity: Severity.INFO,
-      attributes: {...?attributes},
-    );
-  }
+  void track(String eventName, [Map<String, Object>? attributes]) =>
+      guarded('track', () {
+        if (eventName.isEmpty) return;
+        _emit(
+          eventName: eventName,
+          severity: Severity.INFO,
+          attributes: {...?attributes},
+        );
+      });
 
   /// Sets an attribute attached to every later record and reported to the
   /// server for remote-config targeting.
-  void setAttribute(String key, String value) {
+  void setAttribute(String key, String value) =>
+      guarded('setAttribute', () => _setAttribute(key, value));
+
+  void _setAttribute(String key, String value) {
     if (key.isEmpty) return;
     if (!_globalAttributes.containsKey(key) &&
         _globalAttributes.length >= _maxGlobalAttributes) {
@@ -1083,17 +1132,17 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   }
 
   void setAttributes(Map<String, String> attributes) =>
-      attributes.forEach(setAttribute);
+      guarded('setAttributes', () => attributes.forEach(setAttribute));
 
-  void removeAttribute(String key) {
-    if (_globalAttributes.remove(key) != null) _attributesChanged();
-  }
+  void removeAttribute(String key) => guarded('removeAttribute', () {
+        if (_globalAttributes.remove(key) != null) _attributesChanged();
+      });
 
-  void clearAttributes() {
-    if (_globalAttributes.isEmpty) return;
-    _globalAttributes.clear();
-    _attributesChanged();
-  }
+  void clearAttributes() => guarded('clearAttributes', () {
+        if (_globalAttributes.isEmpty) return;
+        _globalAttributes.clear();
+        _attributesChanged();
+      });
 
   /// The server keeps a session's attributes from its session events: a
   /// `user.id` set after sign-in reaches the session now, not when it ends.
@@ -1108,29 +1157,29 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void _scheduleSessionUpdate() {
     if (_sessionUpdateScheduled) return;
     _sessionUpdateScheduled = true;
-    scheduleMicrotask(() {
-      _sessionUpdateScheduled = false;
-      final session = _sessions?.current;
-      if (_shutdown ||
-          session == null ||
-          !_reportedSessions.contains(session.id)) {
-        return;
-      }
-      _emit(
-        eventName: eventSessionUpdate,
-        severity: Severity.INFO,
-        attributes: _sessionAttributes(session),
-      );
-    });
+    scheduleMicrotask(() => guarded('session update', () {
+          _sessionUpdateScheduled = false;
+          final session = _sessions?.current;
+          if (_shutdown ||
+              session == null ||
+              !_reportedSessions.contains(session.id)) {
+            return;
+          }
+          _emit(
+            eventName: eventSessionUpdate,
+            severity: Severity.INFO,
+            attributes: _sessionAttributes(session),
+          );
+        }));
   }
 
   bool _sessionUpdateScheduled = false;
 
   /// Asks the server for collection settings now instead of at the next poll.
-  Future<void> refreshConfig() async {
-    await ready;
-    await _opamp?.refresh();
-  }
+  Future<void> refreshConfig() => guardedAsync('refreshConfig', () async {
+        await ready;
+        await _opamp?.refresh();
+      });
 
   /// A line the app printed (`print`, `debugPrint`). It has no level, so it
   /// is info. Lines are recorded once the code printing them returns, so a
@@ -1167,7 +1216,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _turnEnding = true;
     scheduleMicrotask(() {
       _turnEnding = false;
-      _recordPrinted();
+      guarded('printed lines', _recordPrinted);
       _loggedThisTurn.clear();
     });
   }
@@ -1247,13 +1296,14 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     Object? error,
     StackTrace? stackTrace,
     Map<String, String>? attributes,
-  }) {
-    if (_shutdown || !_options.captureLogs) return;
-    _emitLog(message, level,
-        error: error,
-        stackTrace: stackTrace,
-        attributes: {...?attributes, 'log.source': 'api'});
-  }
+  }) =>
+      guarded('log', () {
+        if (_shutdown || !_options.captureLogs) return;
+        _emitLog(message, level,
+            error: error,
+            stackTrace: stackTrace,
+            attributes: {...?attributes, 'log.source': 'api'});
+      });
 
   void _emitLog(
     String message,
@@ -1264,6 +1314,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     StackTrace? stackTrace,
     Map<String, Object> attributes = const {},
   }) {
+    // The error is the app's: its `toString` may throw.
+    final errorMessage = error == null ? null : safeToString(error);
     _emit(
       severity: level.severity,
       severityText: level.severityText,
@@ -1274,17 +1326,20 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         ...attributes,
         if (error != null) ...{
           'exception.type': error.runtimeType.toString(),
-          'exception.message': error.toString(),
+          'exception.message': errorMessage!,
         },
         if (stackTrace != null)
           'exception.stacktrace': error != null
-              ? formatException(error, stackTrace)
-              : stackTrace.toString(),
+              ? formatException(error, stackTrace, message: errorMessage)
+              : safeToString(stackTrace),
       },
     );
   }
 
-  void recordNavigationEvent(NavigationEvent event) {
+  void recordNavigationEvent(NavigationEvent event) =>
+      guarded('navigation', () => _recordNavigationEvent(event));
+
+  void _recordNavigationEvent(NavigationEvent event) {
     _sessions?.markActivity();
     // A removal takes a route out of the stack without the user arriving
     // anywhere: it is on the timeline, but not a navigation triggers match.
@@ -1341,11 +1396,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// metrics group by route and issues carry it (`app.screen.route`). Lasts
   /// until the next screen; null removes it. Without one, ids in the path
   /// are replaced (`/orders/8841` is `/orders/:id`).
-  void setRoute(String? template) {
-    final route = _template(template);
-    _currentRoute = route;
-    if (route != null && _options.captureMetrics) _vitals.routeNamed(route);
-  }
+  void setRoute(String? template) => guarded('setRoute', () {
+        final route = _template(template);
+        _currentRoute = route;
+        if (route != null && _options.captureMetrics) {
+          _vitals.routeNamed(route);
+        }
+      });
 
   static String? _template(String? template) {
     final trimmed = template?.trim();
@@ -1377,27 +1434,29 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   /// The screen on top shows everything it loads: ends its time to full
   /// display (`app.screen.ttfd`), measured from the navigation to it.
-  void reportFullyDisplayed() {
-    if (_options.captureMetrics) _vitals.fullyDisplayed();
-  }
+  void reportFullyDisplayed() => guarded('reportFullyDisplayed', () {
+        if (_options.captureMetrics) _vitals.fullyDisplayed();
+      });
 
   /// Observes [value] of an app-defined distribution, e.g.
   /// `checkout.duration`. Names are lowercase letters, digits, `_` and `.`,
   /// and may not start with `app.`, `browser.`, `traceway.` or `custom.`; at
   /// most two dimensions are kept.
-  void recordMetric(String name, double value, [Map<String, Object>? dims]) {
-    if (_options.captureMetrics) _metrics.metric(name, value, dims);
-  }
+  void recordMetric(String name, double value, [Map<String, Object>? dims]) =>
+      guarded('metric', () {
+        if (_options.captureMetrics) _metrics.metric(name, value, dims);
+      });
 
   /// Adds [n] to an app-defined counter; see [recordMetric] for names.
-  void recordCount(String name, [double n = 1, Map<String, Object>? dims]) {
-    if (_options.captureMetrics) _metrics.count(name, n, dims);
-  }
+  void recordCount(String name, [double n = 1, Map<String, Object>? dims]) =>
+      guarded('count', () {
+        if (_options.captureMetrics) _metrics.count(name, n, dims);
+      });
 
   /// Sets an app-defined dimension on every metric from now on (sent as
   /// `custom.<key>`); null removes it. At most two keys.
-  void setMetricDimension(String key, String? value) =>
-      _metrics.setDimension(key, value);
+  void setMetricDimension(String key, String? value) => guarded(
+      'setMetricDimension', () => _metrics.setDimension(key, value));
 
   Future<int> _sendMetrics(List<int> body) =>
       postOtlp(_http, _routes.metrics, body);
@@ -1436,8 +1495,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void _sessionMemoryStarts() {
     _maxRssAtSessionStart = _maxRss();
     _sampledRssPeak = _currentRss();
-    _rssTimer ??=
-        Timer.periodic(const Duration(seconds: 5), (_) => _sampleRss());
+    _rssTimer ??= Timer.periodic(
+        const Duration(seconds: 5),
+        (_) => guarded('memory sample', _sampleRss));
   }
 
   /// The most memory the current session used in this run.
@@ -1489,7 +1549,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// Records a tap at [position] (global logical pixels): a
   /// `browser.user_action.click` record naming the widget, and a click for
   /// recording triggers. The `Traceway` widget calls this for every tap.
-  void recordTap(Offset position, {int? viewId}) {
+  void recordTap(Offset position, {int? viewId}) =>
+      guarded('tap', () => _recordTap(position, viewId: viewId));
+
+  void _recordTap(Offset position, {int? viewId}) {
     if (_shutdown || !_options.captureUserActions) return;
     _sessions?.markActivity();
     final wantsTriggers = _ready && _sequenceKinds.contains('click');
@@ -1531,7 +1594,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// Feeds a mouse hover to recording triggers: a hover step matches when
   /// the pointer enters a matching widget, not while it moves inside it.
   /// Only runs while a trigger names a hover.
-  void recordHover(Offset position, {int? viewId}) {
+  void recordHover(Offset position, {int? viewId}) =>
+      guarded('hover', () => _recordHover(position, viewId: viewId));
+
+  void _recordHover(Offset position, {int? viewId}) {
     if (_shutdown || !_ready || !_options.captureUserActions) return;
     if (!_sequenceKinds.contains('hover')) return;
     final ElementPath? path;
@@ -1595,7 +1661,11 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// [TracewayOptions.propagateTraceHeaderUrls] does not select it. Starts
   /// the request's client span now, so the header names it; the
   /// [NetworkEvent] that carries the header back ends it.
-  String? traceparentFor(String method, Uri url, {DateTime? startTime}) {
+  String? traceparentFor(String method, Uri url, {DateTime? startTime}) =>
+      guardedOr('trace header', null,
+          () => _traceparentFor(method, url, startTime: startTime));
+
+  String? _traceparentFor(String method, Uri url, {DateTime? startTime}) {
     final tracer = _tracer;
     final patterns = _options.propagateTraceHeaderUrls;
     if (patterns.isEmpty || tracer == null || !_ready || _shutdown) {
@@ -1632,13 +1702,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// The request named by [traceparent] did not send it after all: its
   /// span is recorded from its [NetworkEvent] instead.
   void forgetRequestSpan(String traceparent) =>
-      _requestSpans.remove(traceparent);
+      guarded('trace header', () => _requestSpans.remove(traceparent));
 
   static bool _urlMatches(Pattern pattern, String url) => pattern is String
       ? url.startsWith(pattern)
       : pattern.allMatches(url).isNotEmpty;
 
-  void recordNetworkEvent(NetworkEvent event) {
+  void recordNetworkEvent(NetworkEvent event) =>
+      guarded('request', () => _recordNetworkEvent(event));
+
+  void _recordNetworkEvent(NetworkEvent event) {
     if (_isOwnRequest(event.url)) return;
     if (!_ready) {
       _queue(() => recordNetworkEvent(event));
@@ -1700,95 +1773,101 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   }
 
   /// Notes user activity so the session's inactivity timeout restarts.
-  void markActivity() => _sessions?.markActivity();
+  void markActivity() =>
+      guarded('session activity', () => _sessions?.markActivity());
 
   /// Sends everything that is ready now: queued records, replay clips being
   /// encoded and telemetry that failed earlier. Telemetry still held in the
   /// ring buffer stays there.
-  Future<void> flush([int? timeoutMs]) async {
-    final work = _flush();
-    if (timeoutMs == null) return work;
-    await work.timeout(Duration(milliseconds: timeoutMs), onTimeout: () {});
-  }
+  Future<void> flush([int? timeoutMs]) => guardedAsync('flush', () {
+        final work = _flush();
+        if (timeoutMs == null) return work;
+        return work.timeout(Duration(milliseconds: timeoutMs),
+            onTimeout: () {});
+      });
 
+  /// Each step on its own: one that fails does not keep the others from
+  /// sending.
   Future<void> _flush() async {
-    _recordPrinted();
+    guarded('printed lines', _recordPrinted);
     await ready;
     _flushTimer?.cancel();
     _flushTimer = null;
-    try {
-      await _logSink?.forceFlush();
-      await _spanSink?.forceFlush();
-      await _router?.settle();
-      // The processors hand a batch over and forget it: wait for the
-      // requests still on their way.
-      await _logExporter?.forceFlush();
-      await _spanExporter?.forceFlush();
-      await _replay.drain();
-      await _logSink?.forceFlush();
-      await _logExporter?.forceFlush();
-      await _metrics.flush();
-      await _legacyReports?.drain();
-      await _outbox?.drain();
-      await _tracewayOutbox?.drain();
-      await _persistBuffer();
-      _saveTriggerProgress(now: true);
-      await _store.flush();
-    } catch (e) {
-      _log('flush failed: $e');
-    }
+    await guardedAsync('logs flush', () => _logSink?.forceFlush());
+    await guardedAsync('spans flush', () => _spanSink?.forceFlush());
+    await guardedAsync('buffer flush', () => _router?.settle());
+    // The processors hand a batch over and forget it: wait for the
+    // requests still on their way.
+    await guardedAsync('logs export', () => _logExporter?.forceFlush());
+    await guardedAsync('spans export', () => _spanExporter?.forceFlush());
+    await guardedAsync('replay drain', _replay.drain);
+    await guardedAsync('logs flush', () => _logSink?.forceFlush());
+    await guardedAsync('logs export', () => _logExporter?.forceFlush());
+    await guardedAsync('metrics flush', _metrics.flush);
+    await guardedAsync('legacy reports', () => _legacyReports?.drain());
+    await guardedAsync('outbox drain', () => _outbox?.drain());
+    await guardedAsync('outbox drain', () => _tracewayOutbox?.drain());
+    await guardedAsync('buffer save', _persistBuffer);
+    guarded('trigger progress', () => _saveTriggerProgress(now: true));
+    await guardedAsync('state save', _store.flush);
   }
 
   /// Flushes and stops the SDK. A new [initialize] call starts it again,
   /// also while this one is still stopping.
-  Future<void> shutdown() => _stopping ??= _shutdownOnce();
+  Future<void> shutdown() =>
+      _stopping ??= guardedAsync('shutdown', _shutdownOnce);
 
   /// Set as soon as [shutdown] is called.
   Future<void>? _stopping;
 
   Future<void> _shutdownOnce() async {
     if (_shutdown) return;
-    final logging = _loggingSubscription;
-    _loggingSubscription = null;
-    await logging?.cancel();
-    await ready;
-    final sessions = _sessions;
-    final session = sessions?.current;
-    if (session != null) {
-      _emitSessionEnd(session, DateTime.now().millisecondsSinceEpoch);
+    try {
+      final logging = _loggingSubscription;
+      _loggingSubscription = null;
+      await guardedAsync('logging cancel', () => logging?.cancel());
+      await ready;
+      guarded('session end', () {
+        final session = _sessions?.current;
+        if (session != null) {
+          _emitSessionEnd(session, DateTime.now().millisecondsSinceEpoch);
+        }
+        // The session may go on after a restart: its memory is observed
+        // when it ends.
+        _rememberMemoryPeak();
+      });
+      guarded('vitals stop', _vitals.stop);
+      await _flush();
+      guarded('metrics stop', _metrics.stop);
+    } finally {
+      // Whatever failed above, the SDK stops.
+      _shutdown = true;
+      guarded('sessions stop', () => _sessions?.stop());
+      guarded('opamp stop', () => _opamp?.stop());
+      guarded('replay stop', _replay.stop);
+      guarded('stop', () {
+        _refreshTimer?.cancel();
+        _overrideTimer?.cancel();
+        _healthTimer?.cancel();
+        _progressTimer?.cancel();
+        _rssTimer?.cancel();
+        _flushTimer?.cancel();
+        WidgetsBinding.instance.removeObserver(this);
+      });
+      await guardedAsync('state save', _store.flush);
+      // The app's OpenTelemetry, if it has one, keeps running.
+      await guardedAsync(
+          'logs shutdown', () => _privateLoggerProvider?.shutdown());
+      await guardedAsync(
+          'traces shutdown', () => _privateTracerProvider?.shutdown());
+      // After the processors' last export: a batch that fails then is still
+      // queued on disk for the next start.
+      guarded('outbox dispose', () {
+        _outbox?.dispose();
+        _tracewayOutbox?.dispose();
+      });
+      if (identical(_instance, this)) _setInstance(null);
     }
-    // The session may go on after a restart: its memory is observed when it
-    // ends.
-    _rememberMemoryPeak();
-    _vitals.stop();
-    await _flush();
-    _metrics.stop();
-    _shutdown = true;
-    sessions?.stop();
-    _opamp?.stop();
-    _replay.stop();
-    _refreshTimer?.cancel();
-    _overrideTimer?.cancel();
-    _healthTimer?.cancel();
-    _progressTimer?.cancel();
-    _rssTimer?.cancel();
-    try {
-      WidgetsBinding.instance.removeObserver(this);
-    } catch (_) {}
-    await _store.flush();
-    try {
-      if (_ownsOTel) {
-        await OTel.shutdown();
-      } else {
-        await _privateLoggerProvider?.shutdown();
-        await _privateTracerProvider?.shutdown();
-      }
-    } catch (_) {}
-    // After the processors' last export: a batch that fails then is still
-    // queued on disk for the next start.
-    _outbox?.dispose();
-    _tracewayOutbox?.dispose();
-    if (identical(_instance, this)) _instance = null;
   }
 
   // ------------------------------------------------------------- emission
@@ -1876,14 +1955,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     );
   }
 
-  /// What every session event carries: the session and how much of its
-  /// diagnostic budget replay used, shown on the session page.
+  /// What every session event carries: the session, how much of its
+  /// diagnostic budget replay used and what was dropped, shown on the
+  /// session page.
   Map<String, Object> _sessionAttributes(SessionInfo session) => {
         attrSessionId: session.id,
         attrSessionStartedAt: session.startedAtMs,
         ..._replay.budget.snapshot(session.id),
         'traceway.replay.failed_segments': _recordings.failedSegments,
         'traceway.context.evicted': _buffer.evictedCount,
+        'traceway.error.suppressed_total': _suppressedTotal,
         'traceway.replay.images': replayImagePolicy.name,
       };
 
@@ -1904,21 +1985,25 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (_healthTimer != null || _shutdown) return;
     _healthTimer = Timer(Duration(milliseconds: _healthDelayMs), () {
       _healthTimer = null;
-      final session = _sessions?.current;
-      _emit(
-        eventName: eventCollectionHealth,
-        severity: Severity.INFO,
-        attributes: {
-          ..._replay.budget.snapshot(session?.id),
-          'traceway.error.suppressed_total': _suppressedTotal,
-          'traceway.context.evicted': _buffer.evictedCount,
-          'traceway.replay.failed_segments': _recordings.failedSegments,
-        },
-      );
-      if (session != null && !_healthReported) _scheduleSessionUpdate();
-      _healthReported = true;
-      _healthDelayMs = min(_healthDelayMs * 2, _maxHealthDelayMs);
+      guarded('collection health', _reportHealth);
     });
+  }
+
+  void _reportHealth() {
+    final session = _sessions?.current;
+    _emit(
+      eventName: eventCollectionHealth,
+      severity: Severity.INFO,
+      attributes: {
+        ..._replay.budget.snapshot(session?.id),
+        'traceway.error.suppressed_total': _suppressedTotal,
+        'traceway.context.evicted': _buffer.evictedCount,
+        'traceway.replay.failed_segments': _recordings.failedSegments,
+      },
+    );
+    if (session != null && !_healthReported) _scheduleSessionUpdate();
+    _healthReported = true;
+    _healthDelayMs = min(_healthDelayMs * 2, _maxHealthDelayMs);
   }
 
   void _onSessionStart(SessionInfo session, bool resumed) {
@@ -1935,12 +2020,14 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       _triggers.restoreSessionLimits(limits['limits']);
     }
     // [_sessions] is not assigned yet when the first session starts.
-    _restoreTriggerProgress(session.id);
-    _replay.onSessionStart();
+    guarded('trigger progress', () => _restoreTriggerProgress(session.id));
+    guarded('replay session', _replay.onSessionStart);
     if (_options.captureMetrics) {
-      _settleMemoryPeak(session.id);
-      _sessionMemoryStarts();
-      _metrics.sessionStarted(session.id, resumed: resumed);
+      guarded('session metrics', () {
+        _settleMemoryPeak(session.id);
+        _sessionMemoryStarts();
+        _metrics.sessionStarted(session.id, resumed: resumed);
+      });
     }
     if (_control.settings.sessionsEnabled) {
       _reportedSessions.add(session.id);
@@ -1953,13 +2040,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         attributes: _sessionAttributes(session),
       );
     }
-    _applyReplay(sessionId: session.id);
+    guarded('replay apply', () => _applyReplay(sessionId: session.id));
     _scheduleRefresh();
   }
 
   void _onSessionEnd(SessionInfo session, int endedAtMs) {
-    _replay.onSessionEnd(session.id);
-    _recordMemoryPeak(session.id);
+    guarded('replay session', () => _replay.onSessionEnd(session.id));
+    guarded('memory peak', () => _recordMemoryPeak(session.id));
     _emitSessionEnd(session, endedAtMs);
   }
 
@@ -1973,12 +2060,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   @override
   bool enrichLog(ReadWriteLogRecord record, String signal) {
+    // Only session events carry traceway.session.started_at, as in the browser SDK: the server reads the
+    // session's start from them and nothing else.
     final existing = record.attributes?.toMap() ?? const {};
-    final session = _sessions?.current;
-    if (session != null && !existing.containsKey(attrSessionStartedAt)) {
-      record.addAttribute(
-          OTel.attributeInt(attrSessionStartedAt, session.startedAtMs));
-    }
     _globalAttributes.forEach((key, value) {
       if (!existing.containsKey(key)) {
         record.addAttribute(OTel.attributeString(key, value));
@@ -2099,17 +2183,21 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   // --------------------------------------------------------------- triggers
 
+  /// Each trigger, and each of its actions, on its own: one that fails
+  /// does not keep the others from running.
   void _runFired(List<FiredTrigger> fired) {
     for (final trigger in fired) {
-      _runTrigger(trigger);
+      guarded('trigger', () => _runTrigger(trigger));
     }
-    if (fired.isNotEmpty) {
-      _store.set('triggerLimits', {
-        'sessionId': _sessions?.currentId,
-        'limits': _triggers.snapshotSessionLimits(),
-      });
-    }
-    _saveTriggerProgress();
+    guarded('trigger limits', () {
+      if (fired.isNotEmpty) {
+        _store.set('triggerLimits', {
+          'sessionId': _sessions?.currentId,
+          'limits': _triggers.snapshotSessionLimits(),
+        });
+      }
+      _saveTriggerProgress();
+    });
   }
 
   String _savedProgress = '';
@@ -2123,10 +2211,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (_triggers.progressVersion == _savedProgressVersion) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     if (!now && nowMs - _lastProgressSaveMs < 2000) {
-      _progressTimer ??= Timer(const Duration(seconds: 2), () {
-        _progressTimer = null;
-        _saveTriggerProgress(now: true);
-      });
+      _progressTimer ??= Timer(
+          const Duration(seconds: 2),
+          () => guarded('trigger progress', () {
+                _progressTimer = null;
+                _saveTriggerProgress(now: true);
+              }));
       return;
     }
     _progressTimer?.cancel();
@@ -2154,7 +2244,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final raw = fired.cause.lookup('attributes.$attrExceptionId');
     final exceptionId = raw is String ? raw : null;
     for (final action in fired.trigger.actions) {
-      _runAction(action, exceptionId: exceptionId, triggerId: fired.trigger.id);
+      guarded(
+          'trigger action',
+          () => _runAction(action,
+              exceptionId: exceptionId, triggerId: fired.trigger.id));
     }
     final wantsReplay =
         fired.trigger.actions.any((a) => a.replay || a.type == 'startReplay');
@@ -2190,14 +2283,20 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       case 'flush':
         final lookbackMs = ((action.lookbackSeconds ?? 0) * 1000).round();
         final signals = _selectorSet(action.signals);
-        _router?.flushBuffered(now - lookbackMs, signals, now);
-        _flushRestored(now - lookbackMs, signals, now);
-        if (action.replay && _replay.flush(lookbackMs, exceptionId)) {
+        guarded('buffer flush',
+            () => _router?.flushBuffered(now - lookbackMs, signals, now));
+        guarded('restored flush',
+            () => _flushRestored(now - lookbackMs, signals, now));
+        if (action.replay &&
+            guardedOr('replay flush', false,
+                () => _replay.flush(lookbackMs, exceptionId))) {
           _replayFlushes++;
         }
         // The file must not hold records that just left, or a crash before
         // the next save would send them again after a restart.
-        if (_persisted != null) unawaited(_persistBuffer());
+        if (_persisted != null) {
+          unawaited(guardedAsync('buffer save', _persistBuffer));
+        }
       case 'stream':
         _streamFor(
           action.signals ?? const ['*'],
@@ -2243,8 +2342,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         if (rest != null) outbox.add(kind, rest);
       }
     });
-    unawaited(outbox.drain());
-    if (traceway != null) unawaited(traceway.drain());
+    unawaited(guardedAsync('outbox drain', outbox.drain));
+    if (traceway != null) {
+      unawaited(guardedAsync('outbox drain', traceway.drain));
+    }
   }
 
   Future<void> _persistBuffer() async {
@@ -2287,8 +2388,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final delay = expiry - DateTime.now().millisecondsSinceEpoch;
     _overrideTimer = Timer(Duration(milliseconds: max(0, delay) + 1), () {
       _overrideTimer = null;
-      _applyReplay();
-      _scheduleOverrideExpiry();
+      guarded('override expiry', _applyReplay);
+      guarded('override expiry', _scheduleOverrideExpiry);
     });
   }
 
@@ -2298,11 +2399,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final session = sessionId ?? _sessions?.currentId;
     _updateCaptureMode(session);
     final settings = _control.settings;
-    final recorder = _screenRecorder;
-    if (recorder is WireframeRecorder) {
-      recorder.maskAllInputs = settings.replayMaskAllInputs;
-      recorder.networkImages = settings.replayImages != TracewayImagePolicy.off;
-    }
+    _configureRecorder(_screenRecorder, settings);
     _replay.apply(
       _control.replayMode,
       maxAgeMs: (settings.bufferMaxAgeSeconds * 1000).round(),
@@ -2406,8 +2503,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void _confirmCaptures() {
     if (_capturesConfirmed || _shutdown) return;
     _capturesConfirmed = true;
-    _runCaptures(_control.settings);
-    _applyReplay();
+    guarded('captures', () => _runCaptures(_control.settings));
+    guarded('replay apply', _applyReplay);
   }
 
   /// Starts the dashboard's captures aimed at this app. The lookback flush
@@ -2470,10 +2567,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   }
 
   void _onSettingsChanged(Settings settings) {
-    _runCaptures(settings);
+    guarded('captures', () => _runCaptures(settings));
     _buffer.retain((entry) => _control.canExport(entry.signal));
     _persisted?.retain(_control.canExport);
-    if (!settings.persist) unawaited(_persisted?.clear());
+    if (!settings.persist) {
+      unawaited(guardedAsync('buffer clear', () => _persisted?.clear()));
+    }
     final maxAgeMs = (settings.bufferMaxAgeSeconds * 1000).round();
     _buffer.configure(maxBytes: settings.bufferMaxBytes, maxAgeMs: maxAgeMs);
     // Triggers that were already running keep their progress: what was saved
@@ -2485,9 +2584,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         for (final step in trigger.steps) ...eventKinds(step.match),
     };
     if (!_sequenceKinds.contains('hover')) _hovered = const {};
-    _observeScreenForSequences();
-    _applyReplay();
-    _metrics.configure();
+    guarded('sequence screen', _observeScreenForSequences);
+    guarded('replay apply', _applyReplay);
+    guarded('metrics configure', _metrics.configure);
   }
 
   /// Triggers that arrive after the app reached its current screen still see
@@ -2579,7 +2678,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (_opamp == null || _refreshTimer != null) return;
     _refreshTimer = Timer(const Duration(seconds: 2), () {
       _refreshTimer = null;
-      unawaited(_opamp?.refresh());
+      unawaited(guardedAsync('config refresh', () => _opamp?.refresh()));
     });
   }
 
@@ -2590,47 +2689,121 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void _flushSoon() {
     _flushTimer ??= Timer(const Duration(milliseconds: 100), () {
       _flushTimer = null;
-      unawaited((_tracewayOutbox ?? _outbox)?.drain());
-      unawaited(_logSink?.forceFlush());
-      unawaited(_spanSink?.forceFlush());
+      _sendNow();
     });
   }
 
+  void _sendNow() {
+    unawaited(guardedAsync(
+        'outbox drain', () => (_tracewayOutbox ?? _outbox)?.drain()));
+    unawaited(guardedAsync('logs flush', () => _logSink?.forceFlush()));
+    unawaited(guardedAsync('spans flush', () => _spanSink?.forceFlush()));
+  }
+
+  /// Each step on its own: what fails in one (a recorder, a disk) leaves
+  /// the others, and the app's other observers, unaffected.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_shutdown) return;
-    if (_options.captureMetrics) _vitals.lifecycleChanged(state);
+    if (_options.captureMetrics) {
+      guarded('vitals lifecycle', () => _vitals.lifecycleChanged(state));
+    }
     if (state == AppLifecycleState.resumed) {
       // Clips that failed to encode while the app was away are made now.
-      _replay.onResumed();
-      _sessions?.markActivity();
-      unawaited(_opamp?.pollIfDue());
-      unawaited(_legacyReports?.drain());
-      unawaited(_outbox?.drain());
-      unawaited(_tracewayOutbox?.drain());
+      guarded('replay resume', _replay.onResumed);
+      guarded('session activity', () => _sessions?.markActivity());
+      unawaited(guardedAsync('config poll', () => _opamp?.pollIfDue()));
+      unawaited(guardedAsync('legacy reports', () => _legacyReports?.drain()));
+      unawaited(guardedAsync('outbox drain', () => _outbox?.drain()));
+      unawaited(guardedAsync('outbox drain', () => _tracewayOutbox?.drain()));
     } else if (state == AppLifecycleState.inactive) {
       // About to leave: the last segment is cut while the app is still in
       // the foreground, where the platform's video encoder works.
-      _replay.onInactive();
+      guarded('replay inactive', _replay.onInactive);
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      _replay.onPaused();
+      guarded('replay pause', _replay.onPaused);
       if (_options.captureMetrics && _started) {
-        _rememberMemoryPeak();
+        guarded('memory peak', _rememberMemoryPeak);
         // Stored before it is sent: the process may not live to see the
         // answer.
-        unawaited(_metrics.flush(final_: true));
+        unawaited(
+            guardedAsync('metrics flush', () => _metrics.flush(final_: true)));
       }
-      _saveTriggerProgress(now: true);
-      unawaited(_persistBuffer());
-      unawaited((_tracewayOutbox ?? _outbox)?.drain());
-      unawaited(_logSink?.forceFlush());
-      unawaited(_spanSink?.forceFlush());
-      unawaited(_store.flush());
+      guarded('trigger progress', () => _saveTriggerProgress(now: true));
+      unawaited(guardedAsync('buffer save', _persistBuffer));
+      _sendNow();
+      unawaited(guardedAsync('state save', _store.flush));
     }
   }
 
   void _log(String message) {
     if (_options.debug) debugPrint('Traceway: $message');
   }
+}
+
+/// The OpenTelemetry factory the SDK installs when the app has none: the
+/// SDK's own, except that it says it may be replaced, so an
+/// `OTel.initialize` the app makes later installs the app's instead of
+/// failing. Traceway keeps its private providers made from this one.
+class _ReplaceableOTelFactory extends OTelSDKFactory {
+  _ReplaceableOTelFactory({
+    required super.apiEndpoint,
+    required super.apiServiceName,
+    required super.apiServiceVersion,
+  }) : super(factoryFactory: create);
+
+  static OTelFactory create({
+    required String apiEndpoint,
+    required String apiServiceName,
+    required String apiServiceVersion,
+  }) =>
+      _ReplaceableOTelFactory(
+        apiEndpoint: apiEndpoint,
+        apiServiceName: apiServiceName,
+        apiServiceVersion: apiServiceVersion,
+      );
+
+  @override
+  bool get isAPIFactory => true;
+}
+
+/// What the global tracer provider does with spans while the app has not
+/// set OpenTelemetry up: nothing, as without an SDK.
+class _NoSpans implements SpanProcessor {
+  @override
+  Future<void> onStart(Span span, Context? parentContext) async {}
+
+  @override
+  Future<void> onEnd(Span span) async {}
+
+  @override
+  Future<void> onNameUpdate(Span span, String newName) async {}
+
+  @override
+  Future<void> forceFlush() async {}
+
+  @override
+  Future<void> shutdown() async {}
+}
+
+/// The global logger provider's counterpart of [_NoSpans].
+class _NoLogs implements LogRecordProcessor {
+  @override
+  Future<void> onEmit(ReadWriteLogRecord logRecord, Context? context) async {}
+
+  @override
+  bool enabled({
+    Context? context,
+    InstrumentationScope? instrumentationScope,
+    Severity? severityNumber,
+    String? eventName,
+  }) =>
+      false;
+
+  @override
+  Future<void> forceFlush() async {}
+
+  @override
+  Future<void> shutdown() async {}
 }

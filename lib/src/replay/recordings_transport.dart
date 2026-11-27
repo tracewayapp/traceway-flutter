@@ -4,6 +4,8 @@ import 'dart:io' show gzip;
 
 import 'package:http/http.dart' as http;
 
+import '../guarded.dart';
+
 class RecordingSegment {
   RecordingSegment({
     this.exceptionId,
@@ -132,7 +134,7 @@ class RecordingsTransport {
     if (_timer != null) return;
     _timer = Timer(Duration(milliseconds: delayMs), () {
       _timer = null;
-      unawaited(_drain());
+      unawaited(guardedAsync('replay upload', _drain));
     });
   }
 

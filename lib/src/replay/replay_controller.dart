@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../core/settings.dart';
+import '../guarded.dart';
 import 'collection_budget.dart';
 import 'recordings_transport.dart';
 import 'replay_source.dart';
@@ -121,8 +122,8 @@ class ReplayController {
     }
     if (!source.isRunning) source.start();
     if (_mode == Mode.stream) {
-      _segmentTimer ??= Timer.periodic(
-          Duration(milliseconds: segmentMs), (_) => _cutSegment(timed: true));
+      _segmentTimer ??= Timer.periodic(Duration(milliseconds: segmentMs),
+          (_) => guarded('replay segment', () => _cutSegment(timed: true)));
     }
   }
 
@@ -220,12 +221,14 @@ class ReplayController {
     // budget of the session it happened in.
     final budgetSession =
         retry == null ? session ?? sessionId() : retry.budgetSession;
-    final recording = source.captureRecording(clipId, since: since, until: until);
     final future = () async {
       try {
         SessionRecordingPayload? clip;
         try {
-          clip = await recording;
+          // Taken now, before anything is awaited: the frames are chosen
+          // when the clip is asked for.
+          clip = await source.captureRecording(clipId,
+              since: since, until: until);
         } catch (_) {
           // Failed like a clip that came back empty.
         }
@@ -325,10 +328,16 @@ class ReplayController {
     }
   }
 
-  /// Waits for clips being encoded and for their upload. Clips waiting for
-  /// the app to come back are not waited for.
+  /// How long [drain] waits for clips being encoded: a platform encoder
+  /// that never answers must not keep `flush` or `shutdown` from
+  /// completing. Such a clip still uploads if it is ever made.
+  Duration drainTimeout = const Duration(seconds: 10);
+
+  /// Waits for clips being encoded, up to [drainTimeout], and for their
+  /// upload. Clips waiting for the app to come back are not waited for.
   Future<void> drain() async {
-    await Future.wait(List.of(_encodings.keys));
+    await Future.wait(List.of(_encodings.keys))
+        .timeout(drainTimeout, onTimeout: () => const []);
     await transport.flush();
   }
 

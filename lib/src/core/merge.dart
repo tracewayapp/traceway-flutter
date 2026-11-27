@@ -249,10 +249,15 @@ Trigger? _mergeTrigger(Trigger? base, Json raw) {
     name: raw['name'] is String ? raw['name'] as String : null,
     enabled: raw['enabled'] is bool ? raw['enabled'] as bool : null,
     sampleRate: _rate(raw['sampleRate']),
-    cooldownSeconds:
-        cooldown is num && cooldown >= 0 ? cooldown.toDouble() : null,
+    cooldownSeconds: cooldown is num && cooldown.isFinite && cooldown >= 0
+        ? cooldown.toDouble()
+        : null,
+    // `1e400` decodes as infinity, which has no int: skipped like any other
+    // value out of range, not the whole document.
     maxPerSession:
-        maxPerSession is num && maxPerSession >= 0 ? maxPerSession.toInt() : null,
+        maxPerSession is num && maxPerSession.isFinite && maxPerSession >= 0
+            ? maxPerSession.toInt()
+            : null,
   );
 }
 

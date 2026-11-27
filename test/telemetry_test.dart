@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
@@ -796,16 +797,17 @@ void main() {
     expect(routes.logs.external, isFalse);
   });
 
-  test('errors in the app zone are still reported without the SDK', () {
-    final reported = <FlutterErrorDetails>[];
-    final previous = FlutterError.onError;
-    FlutterError.onError = reported.add;
-    try {
-      ErrorHandler().handleZoneError(StateError('lost?'), StackTrace.current);
-    } finally {
-      FlutterError.onError = previous;
-    }
-    expect(reported.single.exception, isStateError);
+  test('errors in the app zone still reach the zone around it without the SDK',
+      () async {
+    final host = <Object>[];
+    runZonedGuarded(
+      () => runZonedGuarded(
+          () => scheduleMicrotask(() => throw StateError('lost?')),
+          ErrorHandler().handleZoneError),
+      (error, stack) => host.add(error),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(host.single, isStateError);
   });
 
   test('the app\'s own platform error handler keeps running', () {

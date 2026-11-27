@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
 
+import 'guarded.dart';
+
 /// Where [TracewayInteraction.run] keeps the interaction for the code it
 /// runs, async continuations included.
 const Symbol interactionZoneKey = #traceway.interaction;
@@ -70,20 +72,20 @@ class TracewayInteraction {
   }
 
   /// Sets an attribute on the interaction's span.
-  void setAttribute(String key, Object value) {
-    final span = _span;
-    if (span == null || span.isEnded || key.isEmpty) return;
-    switch (value) {
-      case bool():
-        span.setBoolAttribute(key, value);
-      case int():
-        span.setIntAttribute(key, value);
-      case double():
-        span.setDoubleAttribute(key, value);
-      default:
-        span.setStringAttribute(key, '$value');
-    }
-  }
+  void setAttribute(String key, Object value) => guarded('setAttribute', () {
+        final span = _span;
+        if (span == null || span.isEnded || key.isEmpty) return;
+        switch (value) {
+          case bool():
+            span.setBoolAttribute(key, value);
+          case int():
+            span.setIntAttribute(key, value);
+          case double():
+            span.setDoubleAttribute(key, value);
+          default:
+            span.setStringAttribute(key, safeToString(value));
+        }
+      });
 
   /// Reports [error] as an exception of this interaction and marks the
   /// interaction failed: the exception carries its trace, and the span is
@@ -101,13 +103,12 @@ class TracewayInteraction {
     _ended = true;
     final span = _span;
     if (span == null) return;
-    try {
-      span.end(
-        spanStatus:
-            _failed || failed ? SpanStatusCode.Error : SpanStatusCode.Ok,
-      );
-    } catch (_) {
-      // Ending a span must never break the app.
-    }
+    // Ending a span must never break the app.
+    guarded(
+        'interaction end',
+        () => span.end(
+              spanStatus:
+                  _failed || failed ? SpanStatusCode.Error : SpanStatusCode.Ok,
+            ));
   }
 }

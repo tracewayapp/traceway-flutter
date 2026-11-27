@@ -51,6 +51,7 @@ import urllib.error, urllib.parse, urllib.request
 
 from android import AndroidApp
 
+FPS = 15
 MAX_CLIP_SECONDS = 10.5  # 150 frames at 15 fps, plus rounding
 JOURNEY_CAPTURE_SECONDS = 30
 DEFAULT_STATE_DIR = os.path.expanduser('~/.local/share/com.example.traceway_example/traceway_v2')
@@ -486,6 +487,7 @@ def main():
 
     phases, lines = {}, []
     proc = None
+    log_dir = tempfile.mkdtemp(prefix='traceway-e2e-app-')
 
     def launch(scenario=None, extra_env=None):
         nonlocal proc
@@ -498,15 +500,18 @@ def main():
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 errors='replace', env=env)
 
-        def pump(stream):
+        def pump(stream, log):
             for line in stream:
                 lines.append(line.rstrip())
+                log.write(line)
+                log.flush()
                 if 'E2E_PHASE ' in line:
                     name = line.split('E2E_PHASE ', 1)[1].strip()
                     phases[name.split(' ')[0]] = (time.time(), name)
                     print('app: ' + name)
 
-        threading.Thread(target=pump, args=(proc.stdout,), daemon=True).start()
+        log = open(os.path.join(log_dir, f"app-{scenario or 'main'}.log"), 'a')
+        threading.Thread(target=pump, args=(proc.stdout, log), daemon=True).start()
 
     def stop():
         nonlocal proc
@@ -597,7 +602,10 @@ def main():
             clip, codec, frames, duration, stream = probe(events[0]['data'])
             print(f"        clip: {clip}  {codec} {stream.get('width')}x{stream.get('height')}  {frames} frames  {duration:.2f}s")
             check(codec == 'h264', 'clip is a playable H.264 MP4')
-            check(30 <= frames <= 150, 'clip holds real frames, never more than the 150-frame buffer', f'{frames}')
+            # A frame stays on screen until the next one is captured, so a ring of 150 frames taken slower than
+            # 15 fps encodes to more video frames: the bound is the clip's length, not the ring's size.
+            check(30 <= frames <= MAX_CLIP_SECONDS * FPS, f'clip holds real frames, at most {MAX_CLIP_SECONDS:.1f}s at {FPS} fps',
+                  f'{frames}')
             check(0 < duration <= MAX_CLIP_SECONDS, f'clip is not longer than {MAX_CLIP_SECONDS:.1f}s', f'{duration:.2f}s')
 
         until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)).isoformat()
@@ -805,6 +813,7 @@ def main():
         if android:
             android.close()
 
+    print(f'\napp output: {log_dir}')
     print(f"\n{'ALL CHECKS PASSED' if not check.failed else str(check.failed) + ' CHECK(S) FAILED'}")
     sys.exit(1 if check.failed else 0)
 

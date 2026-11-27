@@ -56,7 +56,7 @@ A metric may fall at most `--tolerance` (0.03) below its baseline value. Areas a
 
 ## The baseline
 
-`baseline/<platform>-<size>/` holds the accepted rendering of every checkpoint and its metrics. A run compares against it; `--update-baseline` accepts a run as the new baseline. With `--only`, only those checkpoints are updated. Review `report.html` before accepting a run.
+`baseline/<platform>-<size>/` holds the accepted rendering of every checkpoint and its metrics. A run compares against it; `--update-baseline` accepts a run as the new baseline. With `--only`, only those checkpoints are updated, and scenario sizes are neither checked nor updated (the first scenario of a subset also holds the recording's opening snapshot). Review `report.html` before accepting a run.
 
 Renderings depend on the fonts of the machine and the Chromium build. Generate the baseline where the suite runs, for example a CI image.
 

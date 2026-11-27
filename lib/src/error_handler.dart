@@ -2,13 +2,31 @@ import 'dart:ui' show ErrorCallback;
 
 import 'package:flutter/foundation.dart';
 
+import 'guarded.dart';
 import 'traceway_client.dart';
 
 class ErrorHandler {
   FlutterExceptionHandler? _previousFlutterErrorHandler;
   ErrorCallback? _previousPlatformErrorHandler;
+  bool _installed = false;
 
+  /// The handler [Traceway.run] installed: one per process, however often
+  /// `run` is called, so an error is recorded once.
+  static ErrorHandler? _current;
+  static ErrorHandler get current => _current ??= ErrorHandler();
+
+  /// Uncaught errors of the `Traceway.run` zone handed on to the zone `run`
+  /// was called in. From the root zone they come back through
+  /// [PlatformDispatcher.onError]: recorded already, they are only passed on
+  /// from there.
+  final List<Object> _handedOn = [];
+
+  /// Chains onto the app's `FlutterError.onError` and
+  /// `PlatformDispatcher.onError`; once only, so a second call cannot make
+  /// the handler its own predecessor.
   void install() {
+    if (_installed) return;
+    _installed = true;
     _previousFlutterErrorHandler = FlutterError.onError;
     FlutterError.onError = _handleFlutterError;
 
@@ -26,14 +44,15 @@ class ErrorHandler {
     // The dump is the exception just reported, not lines the app logged.
     _quietly(() {
       if (client != null && client.debug) {
-        FlutterError.dumpErrorToConsole(details);
+        guarded('FlutterError dump',
+            () => FlutterError.dumpErrorToConsole(details));
       }
       _previousFlutterErrorHandler?.call(details);
     });
   }
 
   bool _handlePlatformError(Object error, StackTrace stackTrace) {
-    _captureError(error, stackTrace);
+    if (!_wasHandedOn(error)) _captureError(error, stackTrace);
     final previous = _previousPlatformErrorHandler;
     if (previous != null) return previous(error, stackTrace);
     // Unhandled, the engine would have printed it.
@@ -41,31 +60,47 @@ class ErrorHandler {
     return true;
   }
 
+  /// The uncaught-error handler of the `Traceway.run` zone: records the
+  /// error, then hands the same error and stack to the zone `run` was
+  /// called in (rethrown from a `runZonedGuarded` handler, it goes to the
+  /// parent zone's handler), so the app's own handling is what it would be
+  /// without Traceway: an enclosing `runZonedGuarded` gets it, and from the
+  /// root zone `PlatformDispatcher.onError` (Crashlytics, say) does, or the
+  /// engine prints it.
   void handleZoneError(Object error, StackTrace stackTrace) {
-    if (TracewayClient.instance == null) {
-      // The SDK did not start (or was shut down): the app's zone still
-      // guards its errors, and they must not vanish.
-      FlutterError.reportError(
-          FlutterErrorDetails(exception: error, stack: stackTrace));
-      return;
+    if (TracewayClient.instance != null) {
+      _captureError(error, stackTrace);
+      guarded('zone error', () {
+        _handedOn.add(error);
+        if (_handedOn.length > 8) _handedOn.removeAt(0);
+      });
     }
-    _captureError(error, stackTrace);
-    // Outside the zone the error would be printed: in `flutter run`, and in
-    // the device log, whether or not it could be sent.
-    _print(error, stackTrace);
+    Error.throwWithStackTrace(error, stackTrace);
+  }
+
+  bool _wasHandedOn(Object error) {
+    for (var i = 0; i < _handedOn.length; i++) {
+      if (identical(_handedOn[i], error)) {
+        _handedOn.removeAt(i);
+        return true;
+      }
+    }
+    return false;
   }
 
   static void _print(Object error, StackTrace stackTrace) {
-    try {
+    guarded('error print', () {
       _quietly(() => FlutterError.dumpErrorToConsole(FlutterErrorDetails(
             exception: error,
             stack: stackTrace,
             library: 'Traceway',
             context: ErrorDescription('while running the app (uncaught)'),
           )));
-    } catch (_) {}
+    });
   }
 
+  /// Runs [body], the app's handler among it, without recording what it
+  /// prints. What [body] throws is the app's: it goes on.
   static void _quietly(void Function() body) {
     final client = TracewayClient.instance;
     if (client == null) {
@@ -76,10 +111,10 @@ class ErrorHandler {
   }
 
   void _captureError(Object error, StackTrace? stackTrace) {
-    try {
-      TracewayClient.instance?.captureUnhandledException(error, stackTrace);
-    } catch (_) {
-      // Reporting an error must never raise another one.
-    }
+    // Reporting an error must never raise another one.
+    guarded(
+        'unhandled error capture',
+        () => TracewayClient.instance
+            ?.captureUnhandledException(error, stackTrace));
   }
 }

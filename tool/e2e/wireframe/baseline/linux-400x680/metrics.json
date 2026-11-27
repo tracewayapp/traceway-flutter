@@ -592,14 +592,14 @@
    "fidelity": {
     "color": 0.7129,
     "edges": 0.7593,
-    "ssim": 0.6863
+    "ssim": 0.6683
    }
   },
   "privacy-scrolled": {
    "fidelity": {
     "color": 0.7062,
     "edges": 0.755,
-    "ssim": 0.6731
+    "ssim": 0.6551
    }
   },
   "slivers": {

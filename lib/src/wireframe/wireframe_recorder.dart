@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
+import '../guarded.dart';
 import '../replay/replay_source.dart';
 import 'vnode.dart';
 import 'wireframe_capture.dart';
@@ -159,18 +160,19 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
       state == AppLifecycleState.detached;
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    final paused = _away(state);
-    if (paused == _paused) return;
-    _paused = paused;
-    if (paused) {
-      _timer?.cancel();
-      _timer = null;
-      _pushBlank();
-    } else {
-      _schedule(immediately: true);
-    }
-  }
+  void didChangeAppLifecycleState(AppLifecycleState state) =>
+      guarded('wireframe lifecycle', () {
+        final paused = _away(state);
+        if (paused == _paused) return;
+        _paused = paused;
+        if (paused) {
+          _timer?.cancel();
+          _timer = null;
+          _pushBlank();
+        } else {
+          _schedule(immediately: true);
+        }
+      });
 
   // ---- capturing ----------------------------------------------------------
 
@@ -181,7 +183,7 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     SchedulerBinding.instance.addPostFrameCallback((_) {
       _armed = false;
       if (!_running) return;
-      _schedule();
+      guarded('wireframe schedule', _schedule);
       _arm();
     });
   }
@@ -190,7 +192,8 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     if (_timer != null || !_running || _paused) return;
     final now = _now().millisecondsSinceEpoch;
     final wait = immediately ? 0 : _lastCaptureMs + _intervalMs - now;
-    _timer = Timer(Duration(milliseconds: wait < 0 ? 0 : wait), _captureNow);
+    _timer = Timer(Duration(milliseconds: wait < 0 ? 0 : wait),
+        () => guarded('wireframe capture', _captureNow));
   }
 
   void _captureNow() {

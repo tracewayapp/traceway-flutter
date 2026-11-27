@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../core/ids.dart';
+import '../guarded.dart';
 import '../persistence/state_store.dart';
 
 const int defaultInactivityMs = 15 * 60 * 1000;
@@ -45,7 +46,8 @@ class SessionManager {
   void start() {
     if (_timer != null) return;
     _open();
-    _timer ??= Timer.periodic(const Duration(seconds: 30), (_) => check());
+    _timer ??= Timer.periodic(
+        const Duration(seconds: 30), (_) => guarded('session check', check));
   }
 
   void stop() {

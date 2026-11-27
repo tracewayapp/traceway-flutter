@@ -11,6 +11,7 @@ import '../otel/events.dart';
 import '../sdk_version.dart';
 
 const int _maxBatches = 200;
+const int _pruneEvery = 16;
 const Duration _maxAge = Duration(hours: 24);
 const int _maxBatchBytes = 4 * 1024 * 1024;
 
@@ -95,6 +96,9 @@ class Outbox {
   /// Whether stored spans may still leave; see [admitLog].
   final bool Function()? admitSpans;
   int _sequence = 0;
+
+  /// Batches added since the queue was last pruned.
+  int _addedSincePrune = 0;
   bool _claimed = false;
   Timer? _timer;
   Future<bool>? _draining;
@@ -182,15 +186,23 @@ class Outbox {
           '$destinationKey-${DateTime.now().microsecondsSinceEpoch}-${_sequence++}.$kind.pb';
       final file = File('${dir.path}/$name');
       final tmp = File('${file.path}.tmp');
-      tmp.writeAsBytesSync(body, flush: true);
+      // Written while the app waits (an exception being reported, inside
+      // a build): no fsync. In the system's cache the batch outlives the
+      // app's process, which is what it must survive; only a power loss
+      // can take it.
+      tmp.writeAsBytesSync(body);
       tmp.renameSync(file.path);
     } on FileSystemException {
       return false;
     }
-    try {
-      _prune();
-    } on FileSystemException {
-      // The batch is already durable. Pruning also runs on drain.
+    // Listing the queue costs more than writing a batch: pruning waits for
+    // the drain, or for a burst of batches the network does not take.
+    if (++_addedSincePrune >= _pruneEvery) {
+      try {
+        _prune();
+      } on FileSystemException {
+        // The batch is written. Pruning also runs on drain.
+      }
     }
     schedule(Duration(seconds: _backoffSeconds()));
     return true;
@@ -216,6 +228,7 @@ class Outbox {
   }
 
   void _prune() {
+    _addedSincePrune = 0;
     final files = _files();
     final cutoff = DateTime.now().subtract(_maxAge);
     final keep = <File>[];
@@ -262,7 +275,9 @@ class Outbox {
   }
 
   Future<bool> _pass() {
-    final future = _drain().onError<FileSystemException>((error, stack) {
+    // Nothing awaits most drains: whatever fails (a disk, a batch that
+    // does not parse) waits for the next one.
+    final future = _drain().onError<Object>((error, stack) {
       if (!_disposed) schedule(Duration(seconds: _backoffSeconds()));
       return false;
     }).whenComplete(() => _draining = null);

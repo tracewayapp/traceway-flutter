@@ -1,6 +1,7 @@
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
+import '../guarded.dart';
 import '../traceway_client.dart';
 import 'traceway_event.dart';
 
@@ -41,18 +42,19 @@ class TracewayNavigatorObserver extends NavigatorObserver {
     _record('remove', from: route, to: previousRoute);
   }
 
-  void _record(String action, {Route<dynamic>? from, Route<dynamic>? to}) {
-    final client = TracewayClient.instance;
-    if (client == null) return;
-    if (!client.options.captureNavigation) return;
-    try {
-      final at = DateTime.now();
-      final fromPath = from == null ? null : routePath(from) ?? fallbackPath(from);
-      // A popup opening, or closing back to the screen under it.
-      final overlay = to is PopupRoute ||
-          ((action == 'pop' || action == 'remove') && from is PopupRoute);
-      void emit(String? toPath, {required bool displayed}) {
-        try {
+  /// Never lets recording break navigation.
+  void _record(String action, {Route<dynamic>? from, Route<dynamic>? to}) =>
+      guarded('navigation', () {
+        final client = TracewayClient.instance;
+        if (client == null) return;
+        if (!client.options.captureNavigation) return;
+        final at = DateTime.now();
+        final fromPath =
+            from == null ? null : routePath(from) ?? fallbackPath(from);
+        // A popup opening, or closing back to the screen under it.
+        final overlay = to is PopupRoute ||
+            ((action == 'pop' || action == 'remove') && from is PopupRoute);
+        void emit(String? toPath, {required bool displayed}) {
           client.recordNavigationEvent(NavigationEvent(
             action: action,
             from: fromPath,
@@ -61,21 +63,17 @@ class TracewayNavigatorObserver extends NavigatorObserver {
             displayed: displayed,
             timestamp: at,
           ));
-        } catch (_) {}
-      }
+        }
 
-      final toPath = to == null ? null : routePath(to);
-      if (to == null || toPath != null) {
-        emit(toPath, displayed: false);
-        return;
-      }
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        emit(routePath(to) ?? fallbackPath(to), displayed: true);
+        final toPath = to == null ? null : routePath(to);
+        if (to == null || toPath != null) {
+          emit(toPath, displayed: false);
+          return;
+        }
+        SchedulerBinding.instance.addPostFrameCallback((_) => guarded(
+            'navigation',
+            () => emit(routePath(to) ?? fallbackPath(to), displayed: true)));
       });
-    } catch (_) {
-      // Never let event recording break navigation.
-    }
-  }
 
   static final Expando<String> _pages = Expando('traceway.page');
 

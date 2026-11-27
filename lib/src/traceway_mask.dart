@@ -1,3 +1,4 @@
+import 'package:flutter/rendering.dart' show RenderEditable;
 import 'package:flutter/widgets.dart';
 
 import 'traceway_mask_mode.dart';
@@ -56,30 +57,44 @@ bool isMaskMarker(Key? key) =>
 
 /// Where every mask under [root] is right now, in the coordinates of the
 /// render box [root] paints into: [TracewayMask] widgets and widgets with a
-/// marker key, in tree order. Read from the render tree when a frame is
+/// marker key, in tree order, and with [maskAllInputs] every text field the
+/// user types into (blurred). Read from the render tree when a frame is
 /// captured, so a mask stays on its widget while that scrolls, animates or
 /// is transformed: the rectangle is the bounds of the widget as it was last
 /// painted. Nothing under a blank mask is listed, its box already covers it.
-List<MaskRegion> maskRegionsIn(BuildContext root) {
+List<MaskRegion> maskRegionsIn(BuildContext root,
+    {bool maskAllInputs = false}) {
   final boundary = root.findRenderObject();
   if (boundary is! RenderBox) return const [];
   final regions = <MaskRegion>[];
+  void add(RenderObject? box, TracewayMaskMode mode) {
+    if (box is! RenderBox || !box.attached || !box.hasSize) return;
+    try {
+      final transform = box.getTransformTo(boundary);
+      regions.add(MaskRegion(
+        rect: MatrixUtils.transformRect(transform, Offset.zero & box.size),
+        mode: mode,
+      ));
+    } catch (_) {
+      // In another view: not part of what [boundary] paints.
+    }
+  }
+
   void visit(Element element) {
     final mode = maskModeOf(element.widget);
     if (mode != null) {
-      final box = element.findRenderObject();
-      if (box is RenderBox && box.attached && box.hasSize) {
-        try {
-          final transform = box.getTransformTo(boundary);
-          regions.add(MaskRegion(
-            rect: MatrixUtils.transformRect(transform, Offset.zero & box.size),
-            mode: mode,
-          ));
-        } catch (_) {
-          // In another view: not part of what [boundary] paints.
-        }
-      }
+      add(element.findRenderObject(), mode);
       if (mode is TracewayMaskBlank) return;
+    }
+    if (maskAllInputs && element is RenderObjectElement) {
+      final editable = element.renderObject;
+      // What is typed, not what is shown (SelectableText) or already
+      // obscured (a password).
+      if (editable is RenderEditable &&
+          !editable.readOnly &&
+          !editable.obscureText) {
+        add(editable, const TracewayMaskBlur());
+      }
     }
     element.visitChildElements(visit);
   }

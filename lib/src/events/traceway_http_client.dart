@@ -4,6 +4,7 @@ import 'dart:io' show Socket;
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart' show IOStreamedResponse;
 
+import '../guarded.dart';
 import '../traceway_client.dart';
 import 'network_capture.dart'
     show ObservedResponseBody, recordedByTracewayHttpClient;
@@ -47,7 +48,7 @@ class TracewayHttpClient extends http.BaseClient {
         request: request,
         start: start,
         requestBytes: requestBytes,
-        error: e.toString(),
+        error: safeToString(e),
         traceparent: traceparent,
       );
       rethrow;
@@ -66,7 +67,7 @@ class TracewayHttpClient extends http.BaseClient {
         statusCode: response.statusCode,
         requestBytes: requestBytes,
         responseBytes: responseBytes,
-        error: error?.toString(),
+        error: error == null ? null : safeToString(error),
         traceparent: traceparent,
       ),
     );
