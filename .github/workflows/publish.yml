@@ -3,6 +3,15 @@ name: Publish to pub.dev
 # Never starts on its own: the release workflows create the version tag and
 # start this on it ("gh workflow run publish.yml --ref v<version>"). Started
 # on a branch it stops at the version check.
+#
+# Publishes two packages at the same version: `traceway` (the repository
+# root), then the video add-on `traceway_video` (packages/traceway_video),
+# which depends on the `traceway` just published. A version that pub.dev
+# already has is skipped, so a run that failed half-way can be started again.
+# pub.dev must allow automated publishing for both packages (package admin
+# page: GitHub repository tracewayapp/traceway-flutter, tag pattern
+# v{{version}}, publishing from workflow_dispatch events enabled). A new
+# package's first version must be published by hand before that page exists.
 
 on:
   workflow_dispatch:
@@ -39,8 +48,13 @@ jobs:
             echo "Version mismatch: lib/src/sdk_version.dart=$REPORTED vs tag=$VERSION"
             exit 1
           fi
+          VIDEO=$(grep '^version:' packages/traceway_video/pubspec.yaml | sed 's/version: //' | tr -d ' ')
+          if [ "$VIDEO" != "$VERSION" ]; then
+            echo "Version mismatch: packages/traceway_video/pubspec.yaml=$VIDEO vs tag=$VERSION"
+            exit 1
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Publishing traceway $VERSION"
+          echo "Publishing traceway and traceway_video $VERSION"
 
       - name: Resolve release notes from CHANGELOG.md
         env:
@@ -59,13 +73,58 @@ jobs:
           echo "--- Release notes ---"
           cat /tmp/release_notes.md
 
+      - name: Check what pub.dev already has
+        id: published
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          for package in traceway traceway_video; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://pub.dev/api/packages/$package/versions/$VERSION")
+            if [ "$code" = 200 ]; then
+              echo "$package $VERSION is already on pub.dev: skipping it"
+              echo "$package=true" >> $GITHUB_OUTPUT
+            else
+              echo "$package=false" >> $GITHUB_OUTPUT
+            fi
+          done
+
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Publish - dry run
+      - name: Publish traceway - dry run
+        if: steps.published.outputs.traceway != 'true'
         run: dart pub publish --dry-run
 
-      - name: Publish to pub.dev
+      - name: Publish traceway to pub.dev
+        if: steps.published.outputs.traceway != 'true'
+        run: dart pub publish --force
+
+      # The add-on resolves `traceway` from pub.dev, as its users will: the
+      # path override used for development is dropped, and the step waits
+      # until pub.dev serves the version published above.
+      - name: Resolve traceway_video against the published traceway
+        if: steps.published.outputs.traceway_video != 'true'
+        working-directory: packages/traceway_video
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          rm -f pubspec_overrides.yaml
+          for attempt in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://pub.dev/api/packages/traceway/versions/$VERSION")
+            [ "$code" = 200 ] && break
+            echo "waiting for traceway $VERSION on pub.dev ($attempt/30)"
+            sleep 20
+          done
+          flutter pub get
+
+      - name: Publish traceway_video - dry run
+        if: steps.published.outputs.traceway_video != 'true'
+        working-directory: packages/traceway_video
+        run: dart pub publish --dry-run
+
+      - name: Publish traceway_video to pub.dev
+        if: steps.published.outputs.traceway_video != 'true'
+        working-directory: packages/traceway_video
         run: dart pub publish --force
 
       - name: Create GitHub release
