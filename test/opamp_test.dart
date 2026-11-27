@@ -138,6 +138,7 @@ void main() {
       ApplyResult Function(RemoteConfig)? onRemoteConfig,
       void Function(int)? onStopped,
       Uint8List? appliedConfigHash,
+      DateTime Function()? now,
     }) {
       requests = [];
       return OpampHttpClient(
@@ -150,6 +151,7 @@ void main() {
         onRemoteConfig: onRemoteConfig ?? (_) => const ApplyResult.applied(),
         onStopped: onStopped,
         appliedConfigHash: appliedConfigHash,
+        now: now,
         httpClient: MockClient((request) {
           requests.add(request);
           return respond(request, requests.length - 1);
@@ -171,6 +173,29 @@ void main() {
           ),
           200,
         );
+
+    test('a return to the foreground polls only once a poll is due',
+        () async {
+      var now = DateTime.utc(2026, 11, 27, 12);
+      final c = client(
+          (_, __) async => http.Response.bytes(
+              encodeServerToAgent(heartbeatIntervalSeconds: 300), 200),
+          now: () => now);
+      c.start();
+      await c.poll();
+      expect(requests, hasLength(1));
+      // Back from a dialog, the share sheet, a sign-in browser: no poll.
+      for (var i = 0; i < 5; i++) {
+        now = now.add(const Duration(seconds: 20));
+        await c.pollIfDue();
+      }
+      expect(requests, hasLength(1));
+      // Away longer than the server's interval.
+      now = now.add(const Duration(minutes: 4));
+      await c.pollIfDue();
+      expect(requests, hasLength(2));
+      c.stop();
+    });
 
     test('sends the protobuf headers and the instance uid', () async {
       final c = client((_, __) async => http.Response.bytes(

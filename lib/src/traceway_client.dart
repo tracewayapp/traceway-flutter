@@ -7,6 +7,7 @@ import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
+import 'package:logging/logging.dart' as logging;
 import 'package:path_provider/path_provider.dart';
 
 import 'connection_string.dart';
@@ -39,6 +40,7 @@ import 'screen_recorder.dart';
 import 'session/session_manager.dart';
 import 'stack_trace_formatter.dart';
 import 'sdk_version.dart';
+import 'traceway_log_level.dart';
 import 'traceway_options.dart';
 import 'traceway_screen_capture_mode.dart';
 import 'wireframe/wireframe_recorder.dart';
@@ -111,6 +113,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
     _routes = TelemetryRoutes.resolve(_endpoints, _token, _options.telemetry);
     _globalAttributes.addAll(_options.attributes);
+    if (_options.captureLogs) {
+      _loggingSubscription = logging.Logger.root.onRecord.listen(
+        _onLoggingRecord,
+        onError: (Object _) {},
+      );
+    }
 
     var defaults = defaultSettings(
       baselineSampleRate: _options.baselineSampleRate,
@@ -275,7 +283,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   int _savedProgressVersion = -1;
 
   /// The path of the route on top, as the last navigation reported it.
+  /// Popups over it do not change it.
   String? _currentScreen;
+
+  /// The screen before [_currentScreen], and when the current one came.
+  String? _previousScreen;
+  int? _screenSinceMs;
 
   /// Event types (`click`, `hover`, `navigation`) the triggers name.
   Set<String> _sequenceKinds = const {};
@@ -318,11 +331,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// or all wireframe, since the dashboard plays it with one player: once
   /// some of it was uploaded, a change waits for the next session. The
   /// mode is saved with the session, which may resume after a restart.
-  void _updateCaptureMode() {
+  void _updateCaptureMode(String? session) {
     if (!recordsScreen) return;
     final wanted = _wantedCaptureMode();
     var mode = wanted;
-    final session = _sessions?.currentId;
     if (session != null) {
       final saved = _store.get('captureMode');
       final savedMode = saved is Map && saved['sessionId'] == session
@@ -331,7 +343,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       if (savedMode != null &&
           savedMode != wanted &&
           (savedMode != TracewayScreenCaptureMode.video || _videoSupported) &&
-          _replay.budget.hasUploaded(session)) {
+          // A clip still being encoded counts: it uploads after a switch.
+          _replay.hasReplayFor(session)) {
         mode = savedMode;
       }
       if (savedMode != mode) {
@@ -364,10 +377,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   ControlState get control => _control;
 
   @visibleForTesting
-  int get bufferedCount => _buffer.length;
+  int get bufferedCount {
+    _recordPrinted();
+    return _buffer.length;
+  }
 
   @visibleForTesting
-  List<BufferEntry<TelemetryItem>> get bufferSnapshot => _buffer.snapshot();
+  List<BufferEntry<TelemetryItem>> get bufferSnapshot {
+    _recordPrinted();
+    return _buffer.snapshot();
+  }
 
   /// The current session, or null when sessions are off.
   String? get currentSessionId => _sessions?.currentId;
@@ -399,7 +418,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     TracewayOptions options,
   ) {
     final existing = _instance;
-    if (existing != null && !existing._shutdown) return existing;
+    if (existing != null && !existing._shutdown && existing._stopping == null) {
+      return existing;
+    }
     final client = TracewayClient._(connectionString, options, null);
     _instance = client;
     unawaited(client._start());
@@ -550,10 +571,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         describe: _describe,
         onRemoteConfig: _applyRemoteConfig,
         appliedConfigHash: appliedHash,
-        onInstanceUidChange: (uid) {
-          _instanceUid = uid;
-          _store.set('instanceUid', bytesToUuid(uid));
-        },
+        onInstanceUidChange: _changeInstanceUid,
         onStopped: (code) => _log('remote config stopped (HTTP $code)'),
         httpClient: _http,
         minPollIntervalMs: _overrides?.opampMinPollIntervalMs ?? 30000,
@@ -575,6 +593,28 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _outbox?.schedule(const Duration(seconds: 2));
     _tracewayOutbox?.schedule(const Duration(seconds: 2));
     _log('started, instance ${bytesToUuid(_instanceUid)}');
+  }
+
+  /// The server gave this installation another id (it saw the old one on
+  /// two devices, e.g. restored from a backup): records from now on carry
+  /// it, not only the next run's.
+  void _changeInstanceUid(Uint8List uid) {
+    _instanceUid = uid;
+    final id = bytesToUuid(uid);
+    _store.set('instanceUid', id);
+    _resourceAttributes['service.instance.id'] = id;
+    try {
+      final resource =
+          OTel.resource(OTel.attributesFromMap(_resourceAttributes));
+      final logs = _privateLoggerProvider ??
+          (_ownsOTel ? OTel.loggerProvider() : null);
+      final traces = _privateTracerProvider ??
+          (_ownsOTel ? OTel.tracerProvider() : null);
+      logs?.resource = resource;
+      traces?.resource = resource;
+    } catch (e) {
+      _log('could not apply the new instance id: $e');
+    }
   }
 
   Future<Directory?> _stateDirectory() async {
@@ -689,17 +729,21 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         milliseconds:
             _options.exportDelayMs < 50 ? 50 : _options.exportDelayMs);
 
-    LogRecordExporter logExporter =
-        _overrides?.logExporter ?? OtlpLogExporter(routes.logs, outbox, _http);
+    // Records queued in a batch when a rule or the kill switch turned their
+    // signal off are not sent.
+    bool admitLog(String? eventName) => canExportLog(_control, eventName);
+    LogRecordExporter logExporter = _overrides?.logExporter ??
+        OtlpLogExporter(routes.logs, outbox, _http, admit: admitLog);
     final tracewayLogs = routes.traceway;
     if (routes.splitsLogs && tracewayLogs != null && tracewayOutbox != null) {
       logExporter = RoutingLogExporter(
         logExporter,
-        OtlpLogExporter(tracewayLogs, tracewayOutbox, _http),
+        OtlpLogExporter(tracewayLogs, tracewayOutbox, _http, admit: admitLog),
       );
     }
     final spanExporter = _overrides?.spanExporter ??
-        OtlpSpanExporter(routes.traces, outbox, _http);
+        OtlpSpanExporter(routes.traces, outbox, _http,
+            admit: () => _control.canExport('network'));
     _logExporter = logExporter;
     _spanExporter = spanExporter;
     final logSink = BatchLogRecordProcessor(
@@ -782,7 +826,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     StackTrace? stackTrace,
     Map<String, String>? attributes,
   ]) {
-    final attrs = <String, Object>{...?attributes};
+    final attrs = <String, Object>{..._screenContext(), ...?attributes};
     final message = error.toString();
     final raw = stackTrace?.toString();
     final obfuscated = raw != null && isNonSymbolicTrace(raw);
@@ -820,8 +864,42 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       severity: Severity.INFO,
       severityText: 'INFO',
       body: message,
-      attributes: {...?attributes, attrExceptionId: uuidv4()},
+      attributes: {
+        ..._screenContext(),
+        ...?attributes,
+        attrExceptionId: uuidv4(),
+      },
     );
+  }
+
+  /// Where the app was when an issue happened: the screen on top (popups
+  /// over it aside), the one before it, how long it had been shown, and
+  /// the size of the window in logical pixels. Read when the issue is
+  /// captured, not when it is sent.
+  Map<String, Object> _screenContext() {
+    final screen = _currentScreen;
+    final since = _screenSinceMs;
+    String? viewport;
+    try {
+      final view = WidgetsBinding.instance.platformDispatcher.implicitView;
+      if (view != null && view.devicePixelRatio > 0) {
+        final size = view.physicalSize / view.devicePixelRatio;
+        if (!size.isEmpty) {
+          viewport = '${size.width.round()}x${size.height.round()}';
+        }
+      }
+    } catch (_) {
+      // No binding: a plain Dart test.
+    }
+    return {
+      if (screen != null && screen.isNotEmpty) 'app.screen.name': screen,
+      if (_previousScreen != null && _previousScreen!.isNotEmpty)
+        'app.screen.previous': _previousScreen!,
+      if (screen != null && since != null)
+        'app.screen.duration_ms':
+            max(0, DateTime.now().millisecondsSinceEpoch - since),
+      if (viewport != null) 'viewport': viewport,
+    };
   }
 
   /// Records a custom breadcrumb, shown on the session timeline.
@@ -869,22 +947,48 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         _globalAttributes.length >= _maxGlobalAttributes) {
       return;
     }
+    if (_globalAttributes[key] == value) return;
     _globalAttributes[key] = value;
-    _scheduleRefresh();
+    _attributesChanged();
   }
 
   void setAttributes(Map<String, String> attributes) =>
       attributes.forEach(setAttribute);
 
   void removeAttribute(String key) {
-    if (_globalAttributes.remove(key) != null) _scheduleRefresh();
+    if (_globalAttributes.remove(key) != null) _attributesChanged();
   }
 
   void clearAttributes() {
     if (_globalAttributes.isEmpty) return;
     _globalAttributes.clear();
-    _scheduleRefresh();
+    _attributesChanged();
   }
+
+  /// The server keeps a session's attributes from its session events: a
+  /// `user.id` set after sign-in reaches the session now, not when it ends.
+  /// Changes made together send one update.
+  void _attributesChanged() {
+    _scheduleRefresh();
+    if (_sessionUpdateScheduled) return;
+    _sessionUpdateScheduled = true;
+    scheduleMicrotask(() {
+      _sessionUpdateScheduled = false;
+      final session = _sessions?.current;
+      if (_shutdown ||
+          session == null ||
+          !_reportedSessions.contains(session.id)) {
+        return;
+      }
+      _emit(
+        eventName: eventSessionUpdate,
+        severity: Severity.INFO,
+        attributes: _sessionAttributes(session),
+      );
+    });
+  }
+
+  bool _sessionUpdateScheduled = false;
 
   /// Asks the server for collection settings now instead of at the next poll.
   Future<void> refreshConfig() async {
@@ -892,12 +996,152 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     await _opamp?.refresh();
   }
 
+  /// A line the app printed (`print`, `debugPrint`). It has no level, so it
+  /// is info. Lines are recorded once the code printing them returns, so a
+  /// `package:logging` record the app prints itself is recorded once, with
+  /// its level, and not again as a line.
   void recordLog(String line) {
     // The SDK's own debug output is not app telemetry. Nor is a line printed
     // while a record is emitted (OpenTelemetry's diagnostics, when the app
     // turned them on): recording it would print the next one, without end.
-    if (line.startsWith('Traceway: ') || _emitDepth > 0) return;
-    _emit(severity: Severity.INFO, severityText: 'INFO', body: line);
+    // Nor the console dump of an error the SDK captured as an exception.
+    if (line.startsWith('Traceway: ') || _emitDepth > 0 || _quietConsole > 0) {
+      return;
+    }
+    if (_shutdown) return;
+    _printed.add((line, DateTime.now()));
+    _endTurnLater();
+  }
+
+  /// Lines printed and not recorded yet, and the messages of the
+  /// `package:logging` records published in this turn of the event loop.
+  /// A line waits at most until the turn ends, or until anything else is
+  /// recorded: an error thrown right after it still comes after it.
+  final List<(String, DateTime)> _printed = [];
+  final List<String> _loggedThisTurn = [];
+  bool _turnEnding = false;
+  StreamSubscription<logging.LogRecord>? _loggingSubscription;
+
+  /// While above zero, printed lines are not recorded: see
+  /// [withoutConsoleCapture].
+  int _quietConsole = 0;
+
+  void _endTurnLater() {
+    if (_turnEnding) return;
+    _turnEnding = true;
+    scheduleMicrotask(() {
+      _turnEnding = false;
+      _recordPrinted();
+      _loggedThisTurn.clear();
+    });
+  }
+
+  void _recordPrinted() {
+    if (_printed.isEmpty) return;
+    final lines = List.of(_printed);
+    _printed.clear();
+    for (final (line, time) in lines) {
+      if (_loggedThisTurn.any((message) => _echoes(line, message))) continue;
+      _emitLog(line, TracewayLogLevel.info,
+          time: time, attributes: const {'log.source': 'print'});
+    }
+  }
+
+  /// Whether [line] is the app printing a logging record with [message]
+  /// (`'INFO: 12:00: $message'`); a message over several lines is printed
+  /// a line at a time by `debugPrint`.
+  static bool _echoes(String line, String message) {
+    if (message.isEmpty) return false;
+    if (line.contains(message)) return true;
+    final first = message.split('\n').first;
+    if (first.length >= 8 && line.contains(first)) return true;
+    final trimmed = line.trim();
+    return trimmed.length >= 8 && message.contains(trimmed);
+  }
+
+  /// Runs [body] without recording what it prints, e.g. the console dump of
+  /// an error already reported as an exception.
+  T withoutConsoleCapture<T>(T Function() body) {
+    _quietConsole++;
+    try {
+      return body();
+    } finally {
+      _quietConsole--;
+    }
+  }
+
+  void _onLoggingRecord(logging.LogRecord record) {
+    if (_shutdown) return;
+    if (record.loggerName == 'Traceway') return;
+    final message = record.message;
+    _loggedThisTurn.add(message);
+    _endTurnLater();
+    _emitLog(
+      message,
+      _levelOf(record.level),
+      time: record.time,
+      error: record.error,
+      stackTrace: record.stackTrace,
+      attributes: {
+        'log.source': 'logging',
+        if (record.loggerName.isNotEmpty) 'logger.name': record.loggerName,
+      },
+    );
+  }
+
+  static TracewayLogLevel _levelOf(logging.Level level) {
+    final value = level.value;
+    if (value < logging.Level.FINE.value) return TracewayLogLevel.trace;
+    if (value < logging.Level.CONFIG.value) return TracewayLogLevel.debug;
+    if (value < logging.Level.WARNING.value) return TracewayLogLevel.info;
+    if (value < logging.Level.SEVERE.value) return TracewayLogLevel.warn;
+    if (value < logging.Level.SHOUT.value) return TracewayLogLevel.error;
+    return TracewayLogLevel.fatal;
+  }
+
+  /// Records [message] as a log line at [level], shown on the session
+  /// timeline with that level and filtered by the console's minimum
+  /// severity in the remote settings. [error] and [stackTrace] are attached
+  /// to it; to report an issue, use [captureException].
+  void log(
+    String message, {
+    TracewayLogLevel level = TracewayLogLevel.info,
+    Object? error,
+    StackTrace? stackTrace,
+    Map<String, String>? attributes,
+  }) {
+    if (_shutdown || !_options.captureLogs) return;
+    _emitLog(message, level,
+        error: error,
+        stackTrace: stackTrace,
+        attributes: {...?attributes, 'log.source': 'api'});
+  }
+
+  void _emitLog(
+    String message,
+    TracewayLogLevel level, {
+    DateTime? time,
+    Object? error,
+    StackTrace? stackTrace,
+    Map<String, Object> attributes = const {},
+  }) {
+    _emit(
+      severity: level.severity,
+      severityText: level.severityText,
+      body: message,
+      time: time,
+      attributes: {
+        ...attributes,
+        if (error != null) ...{
+          'exception.type': error.runtimeType.toString(),
+          'exception.message': error.toString(),
+        },
+        if (stackTrace != null)
+          'exception.stacktrace': error != null
+              ? formatException(error, stackTrace)
+              : stackTrace.toString(),
+      },
+    );
   }
 
   void recordNavigationEvent(NavigationEvent event) {
@@ -906,12 +1150,20 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     // anywhere: it is on the timeline, but not a navigation triggers match.
     final arrived = event.action != 'remove';
     final to = arrived ? event.to : null;
-    if (to != null && to.isNotEmpty) _currentScreen = to;
-    if (_options.captureMetrics && arrived) {
+    // A popup (a dialog, a sheet, a menu) shows over the screen: the screen
+    // stays current, and so does its visit, which a loading dialog closing
+    // must not end before the screen reports it is fully displayed.
+    if (!event.overlay && to != null && to.isNotEmpty && to != _currentScreen) {
+      _previousScreen = _currentScreen;
+      _currentScreen = to;
+      _screenSinceMs = event.timestamp.millisecondsSinceEpoch;
+    }
+    if (_options.captureMetrics && arrived && !event.overlay) {
       _vitals.navigated(
         to == null || to.isEmpty ? null : normalizePath(to),
         event.action,
         event.timestamp,
+        displayed: event.displayed,
       );
     }
     _emit(
@@ -925,7 +1177,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         'browser.navigation.type': event.action,
         if (event.from != null) 'navigation.from': event.from!,
         if (to != null) 'navigation.to': to,
-        if (to != null && to.isNotEmpty) 'app.screen.name': to,
+        if (event.overlay) 'navigation.overlay': true,
+        if (_currentScreen != null) 'app.screen.name': _currentScreen!,
       },
     );
   }
@@ -979,6 +1232,42 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   late final String _memoryKey = 'metricsMemory:${_routes.metrics.key}';
 
+  static int _currentRss() {
+    try {
+      return ProcessInfo.currentRss;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+  /// [ProcessInfo.maxRss] never goes down: a session after another in the
+  /// same run would report the earlier one's peak. So the high-water mark
+  /// counts only when it rose during the session; otherwise the session's
+  /// own peak is the most the process used when sampled.
+  int _maxRssAtSessionStart = 0;
+  int _sampledRssPeak = 0;
+  Timer? _rssTimer;
+
+  void _sampleRss() {
+    final rss = _currentRss();
+    if (rss > _sampledRssPeak) _sampledRssPeak = rss;
+  }
+
+  void _sessionMemoryStarts() {
+    _maxRssAtSessionStart = _maxRss();
+    _sampledRssPeak = _currentRss();
+    _rssTimer ??=
+        Timer.periodic(const Duration(seconds: 5), (_) => _sampleRss());
+  }
+
+  /// The most memory the current session used in this run.
+  int _sessionRssPeak() {
+    final high = _maxRss();
+    if (high > _maxRssAtSessionStart) return high;
+    _sampleRss();
+    return _sampledRssPeak;
+  }
+
   /// The process may be killed in the background: what the session used so
   /// far is kept, and observed when the session is known to have ended.
   void _rememberMemoryPeak() {
@@ -995,7 +1284,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         record is Map && record['s'] == session && record['b'] is int
             ? record['b'] as int
             : 0;
-    return max(_maxRss(), remembered);
+    return max(_sessionRssPeak(), remembered);
   }
 
   void _recordMemoryPeak(String session) {
@@ -1238,6 +1527,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   }
 
   Future<void> _flush() async {
+    _recordPrinted();
     await ready;
     _flushTimer?.cancel();
     _flushTimer = null;
@@ -1264,9 +1554,18 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
   }
 
-  /// Flushes and stops the SDK. A new [initialize] call starts it again.
-  Future<void> shutdown() async {
+  /// Flushes and stops the SDK. A new [initialize] call starts it again,
+  /// also while this one is still stopping.
+  Future<void> shutdown() => _stopping ??= _shutdownOnce();
+
+  /// Set as soon as [shutdown] is called.
+  Future<void>? _stopping;
+
+  Future<void> _shutdownOnce() async {
     if (_shutdown) return;
+    final logging = _loggingSubscription;
+    _loggingSubscription = null;
+    await logging?.cancel();
     await ready;
     final sessions = _sessions;
     final session = sessions?.current;
@@ -1286,6 +1585,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _refreshTimer?.cancel();
     _overrideTimer?.cancel();
     _progressTimer?.cancel();
+    _rssTimer?.cancel();
     try {
       WidgetsBinding.instance.removeObserver(this);
     } catch (_) {}
@@ -1325,6 +1625,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   }) {
     if (_shutdown) return;
     final timestamp = time ?? DateTime.now();
+    // Lines printed before this record are recorded before it.
+    if (_printed.isNotEmpty) _recordPrinted();
     if (!_ready) {
       _queue(
           () => _emit(
@@ -1409,6 +1711,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _replay.onSessionStart();
     if (_options.captureMetrics) {
       _settleMemoryPeak(session.id);
+      _sessionMemoryStarts();
       _metrics.sessionStarted(session.id, resumed: resumed);
     }
     if (_control.settings.sessionsEnabled) {
@@ -1422,7 +1725,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         attributes: _sessionAttributes(session),
       );
     }
-    _applyReplay();
+    _applyReplay(sessionId: session.id);
     _scheduleRefresh();
   }
 
@@ -1713,6 +2016,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   }
 
   Future<void> _persistBuffer() async {
+    // Lines printed in this turn, before the app left, are kept too.
+    _recordPrinted();
     final persisted = _persisted;
     if (persisted == null || !_control.settings.persist || _shutdown) return;
     await persisted.save(_sessions?.currentId, _buffer.snapshot());
@@ -1755,9 +2060,11 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     });
   }
 
-  void _applyReplay() {
-    _updateCaptureMode();
-    final session = _sessions?.currentId;
+  /// [sessionId]: the session starting, which [_sessions] does not report
+  /// yet when it is the first.
+  void _applyReplay({String? sessionId}) {
+    final session = sessionId ?? _sessions?.currentId;
+    _updateCaptureMode(session);
     final settings = _control.settings;
     final recorder = _screenRecorder;
     if (recorder is WireframeRecorder) {
@@ -2062,7 +2369,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (_options.captureMetrics) _vitals.lifecycleChanged(state);
     if (state == AppLifecycleState.resumed) {
       _sessions?.markActivity();
-      unawaited(_opamp?.poll());
+      unawaited(_opamp?.pollIfDue());
       unawaited(_legacyReports?.drain());
       unawaited(_outbox?.drain());
       unawaited(_tracewayOutbox?.drain());

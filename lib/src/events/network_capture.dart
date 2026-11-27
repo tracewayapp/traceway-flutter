@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import '../traceway_client.dart';
 import 'traceway_event.dart';
 
@@ -14,7 +16,8 @@ const Object recordedByTracewayHttpClient = #tracewayRecordedRequest;
 ///
 /// Captures `package:http`, Dio, Firebase, and any other library that sits on
 /// dart:io HttpClient. A request a `TracewayHttpClient` already records is
-/// left to it, so it is recorded once.
+/// left to it, so it is recorded once. A request is over when its response
+/// body is: see [ObservedResponseBody].
 class TracewayHttpOverrides extends HttpOverrides {
   TracewayHttpOverrides(this._previous);
 
@@ -28,10 +31,12 @@ class TracewayHttpOverrides extends HttpOverrides {
   }
 }
 
+/// Records a request that ended at [end], now when not given.
 void _emit({
   required String method,
   required Uri url,
   required DateTime start,
+  DateTime? end,
   int? statusCode,
   int? requestBytes,
   int? responseBytes,
@@ -39,19 +44,254 @@ void _emit({
   String? traceparent,
 }) {
   try {
+    final at = end ?? DateTime.now();
     TracewayClient.instance?.recordNetworkEvent(NetworkEvent(
       method: method.toUpperCase(),
       url: url.toString(),
-      duration: DateTime.now().difference(start),
+      duration: at.difference(start),
       statusCode: statusCode,
       requestBytes: requestBytes,
       responseBytes: responseBytes,
       error: error,
       traceparent: traceparent,
+      timestamp: at,
     ));
   } catch (_) {
     // Never let event recording break the host app's networking.
   }
+}
+
+/// A response body, unchanged for the app, that tells [onEnd] once when its
+/// request is over:
+///
+/// * read to its end;
+/// * failed: the request failed, whatever its status, and the app still gets
+///   the error;
+/// * cancelled by the app: recorded as completed with the bytes read so far,
+///   not as a failure — the app stopped reading, the network did not fail;
+/// * never listened to within [unreadTimeout] of its headers: ended at its
+///   headers, with its Content-Length, so a body the app ignores is still
+///   recorded (as it was before bodies were watched);
+/// * or by [end] when its owner knows better (the app took the socket).
+///
+/// The size is the bytes the app read, or the Content-Length when it read
+/// none. A body the client [decoded] keeps its Content-Length: the bytes on
+/// the wire, not the decoded ones.
+class ObservedResponseBody extends Stream<List<int>> {
+  ObservedResponseBody(
+    this._source, {
+    required int? contentLength,
+    required bool decoded,
+    required bool dropUnhandledErrors,
+    required void Function(DateTime end, int? responseBytes, Object? error)
+        onEnd,
+  })  : _contentLength = contentLength,
+        _decoded = decoded,
+        _dropUnhandledErrors = dropUnhandledErrors,
+        _onEnd = onEnd {
+    _unread = Timer(unreadTimeout, () => end(at: _headersAt));
+  }
+
+  /// How long a body may wait for its first listener before its request is
+  /// ended at its headers.
+  @visibleForTesting
+  static Duration unreadTimeout = const Duration(seconds: 10);
+
+  final Stream<List<int>> _source;
+  final int? _contentLength;
+  final bool _decoded;
+
+  /// What [_source] does with an error the app has no handler for: dart:io's
+  /// response drops it, any other stream hands it to its zone.
+  final bool _dropUnhandledErrors;
+  final void Function(DateTime end, int? responseBytes, Object? error) _onEnd;
+  final DateTime _headersAt = DateTime.now();
+  Timer? _unread;
+  bool _listened = false;
+  bool _ended = false;
+  int _received = 0;
+
+  @override
+  bool get isBroadcast => _source.isBroadcast;
+
+  @override
+  StreamSubscription<List<int>> listen(void Function(List<int> event)? onData,
+      {Function? onError, void Function()? onDone, bool? cancelOnError}) {
+    if (_listened || _ended) {
+      // Nothing left to watch: a second listen fails the way the body's own
+      // does.
+      return _source.listen(onData,
+          onError: onError, onDone: onDone, cancelOnError: cancelOnError);
+    }
+    _listened = true;
+    try {
+      final subscription =
+          _BodySubscription(this, onData, onError, onDone, cancelOnError);
+      _unread?.cancel();
+      _unread = null;
+      return subscription;
+    } catch (_) {
+      _listened = false;
+      rethrow;
+    }
+  }
+
+  /// Ends the request, at [at] or now; an [error] fails it. Only once.
+  void end({DateTime? at, Object? error}) {
+    if (_ended) return;
+    _ended = true;
+    _unread?.cancel();
+    _unread = null;
+    final contentLength = _contentLength;
+    final bytes = !_listened || (_decoded && contentLength != null)
+        ? contentLength
+        : _received;
+    try {
+      _onEnd(at ?? DateTime.now(), bytes, error);
+    } catch (_) {
+      // Never let event recording break the host app's networking.
+    }
+  }
+}
+
+/// The app's subscription to an [ObservedResponseBody]: the body's own,
+/// with every event passed through as it came.
+class _BodySubscription implements StreamSubscription<List<int>> {
+  _BodySubscription(this._observed, this._onData, this._onError, this._onDone,
+      bool? cancelOnError)
+      : _dropUnhandled = _observed._dropUnhandledErrors {
+    _inner = _observed._source.listen(_data,
+        onError: _error, onDone: _done, cancelOnError: cancelOnError);
+  }
+
+  final ObservedResponseBody _observed;
+  late final StreamSubscription<List<int>> _inner;
+  void Function(List<int> data)? _onData;
+  Function? _onError;
+  void Function()? _onDone;
+  bool _dropUnhandled;
+
+  void _data(List<int> data) {
+    _observed._received += data.length;
+    _onData?.call(data);
+  }
+
+  void _error(Object error, StackTrace stackTrace) {
+    _observed.end(error: error);
+    final handler = _onError;
+    if (handler == null) {
+      if (!_dropUnhandled) Zone.current.handleUncaughtError(error, stackTrace);
+    } else if (handler is void Function(Object, StackTrace)) {
+      handler(error, stackTrace);
+    } else {
+      (handler as void Function(Object))(error);
+    }
+  }
+
+  void _done() {
+    _observed.end();
+    _onDone?.call();
+  }
+
+  @override
+  void onData(void Function(List<int> data)? handleData) =>
+      _onData = handleData;
+
+  @override
+  void onError(Function? handleError) {
+    // A handler taken away later leaves the error unhandled, on any stream.
+    _dropUnhandled = false;
+    _onError = handleError;
+  }
+
+  @override
+  void onDone(void Function()? handleDone) => _onDone = handleDone;
+
+  @override
+  void pause([Future<void>? resumeSignal]) => _inner.pause(resumeSignal);
+
+  @override
+  void resume() => _inner.resume();
+
+  @override
+  bool get isPaused => _inner.isPaused;
+
+  @override
+  Future<void> cancel() {
+    _observed.end();
+    return _inner.cancel();
+  }
+
+  /// As a stream's own: it takes over the done and error handlers, and an
+  /// error cancels the subscription.
+  @override
+  Future<E> asFuture<E>([E? futureValue]) {
+    if (futureValue == null && null is! E) {
+      throw ArgumentError.notNull('futureValue');
+    }
+    final result = Completer<E>();
+    _onDone = () => result.complete(futureValue as E);
+    _onError = (Object error, StackTrace stackTrace) =>
+        cancel().whenComplete(() => result.completeError(error, stackTrace));
+    return result.future;
+  }
+}
+
+/// The [HttpClientResponse] dart:io gave, its body an [ObservedResponseBody].
+class _ObservedHttpClientResponse extends StreamView<List<int>>
+    implements HttpClientResponse {
+  _ObservedHttpClientResponse(this._inner, ObservedResponseBody body)
+      : _body = body,
+        super(body);
+
+  final HttpClientResponse _inner;
+  final ObservedResponseBody _body;
+
+  @override
+  int get statusCode => _inner.statusCode;
+
+  @override
+  String get reasonPhrase => _inner.reasonPhrase;
+
+  @override
+  int get contentLength => _inner.contentLength;
+
+  @override
+  HttpClientResponseCompressionState get compressionState =>
+      _inner.compressionState;
+
+  @override
+  bool get persistentConnection => _inner.persistentConnection;
+
+  @override
+  bool get isRedirect => _inner.isRedirect;
+
+  @override
+  List<RedirectInfo> get redirects => _inner.redirects;
+
+  @override
+  Future<HttpClientResponse> redirect(
+          [String? method, Uri? url, bool? followLoops]) =>
+      _inner.redirect(method, url, followLoops);
+
+  @override
+  HttpHeaders get headers => _inner.headers;
+
+  /// The app takes the socket: the HTTP exchange is over.
+  @override
+  Future<Socket> detachSocket() {
+    _body.end();
+    return _inner.detachSocket();
+  }
+
+  @override
+  List<Cookie> get cookies => _inner.cookies;
+
+  @override
+  X509Certificate? get certificate => _inner.certificate;
+
+  @override
+  HttpConnectionInfo? get connectionInfo => _inner.connectionInfo;
 }
 
 class _TracewayHttpClient implements HttpClient {
@@ -258,6 +498,7 @@ class _TracewayHttpClientRequest implements HttpClientRequest {
   }
 
   void _emitOnce({
+    DateTime? end,
     int? statusCode,
     int? responseBytes,
     String? error,
@@ -268,6 +509,7 @@ class _TracewayHttpClientRequest implements HttpClientRequest {
       method: _method,
       url: _url,
       start: _start,
+      end: end,
       traceparent: _traceparent,
       statusCode: statusCode,
       requestBytes: _bytesWritten > 0 ? _bytesWritten : null,
@@ -276,14 +518,43 @@ class _TracewayHttpClientRequest implements HttpClientRequest {
     );
   }
 
+  /// The response [close] gave, which [done] gives too.
+  Future<HttpClientResponse>? _response;
+
   @override
-  Future<HttpClientResponse> close() async {
+  Future<HttpClientResponse> close() {
     _yieldToAppTraceparent();
+    final response = _inner.close();
+    final observed = _response;
+    if (observed != null) {
+      // Closed again: the response is the one already given.
+      response.ignore();
+      return observed;
+    }
+    return _response = _observe(response);
+  }
+
+  /// The request ends with its response body, not its headers.
+  Future<HttpClientResponse> _observe(
+      Future<HttpClientResponse> response) async {
     try {
-      final res = await _inner.close();
-      final responseBytes = res.contentLength >= 0 ? res.contentLength : null;
-      _emitOnce(statusCode: res.statusCode, responseBytes: responseBytes);
-      return res;
+      final res = await response;
+      return _ObservedHttpClientResponse(
+        res,
+        ObservedResponseBody(
+          res,
+          contentLength: res.contentLength >= 0 ? res.contentLength : null,
+          decoded: res.compressionState ==
+              HttpClientResponseCompressionState.decompressed,
+          dropUnhandledErrors: true,
+          onEnd: (end, responseBytes, error) => _emitOnce(
+            end: end,
+            statusCode: res.statusCode,
+            responseBytes: responseBytes,
+            error: error?.toString(),
+          ),
+        ),
+      );
     } catch (e) {
       _emitOnce(error: e.toString());
       rethrow;
@@ -291,7 +562,7 @@ class _TracewayHttpClientRequest implements HttpClientRequest {
   }
 
   @override
-  Future<HttpClientResponse> get done => _inner.done;
+  Future<HttpClientResponse> get done => _response ?? _inner.done;
 
   @override
   void abort([Object? exception, StackTrace? stackTrace]) {

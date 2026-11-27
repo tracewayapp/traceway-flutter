@@ -46,7 +46,9 @@ class OpampHttpClient {
     int minPollIntervalMs = _minPollIntervalMs,
     http.Client? httpClient,
     this.requestTimeout = const Duration(seconds: 10),
+    DateTime Function()? now,
   })  : _uid = instanceUid,
+        _now = now ?? DateTime.now,
         _minIntervalMs = minPollIntervalMs,
         _intervalMs = defaultPollIntervalMs < minPollIntervalMs
             ? minPollIntervalMs
@@ -78,7 +80,11 @@ class OpampHttpClient {
   final Duration requestTimeout;
 
   final http.Client _http;
+  final DateTime Function() _now;
   final int _minIntervalMs;
+
+  /// When the last poll was sent, in ms since the epoch; 0 before the first.
+  int _lastPollMs = 0;
   Uint8List _uid;
   int _sequenceNum = 0;
   RemoteConfigStatus? _status;
@@ -118,6 +124,16 @@ class OpampHttpClient {
     return future;
   }
 
+  /// Polls if the last poll was at least a poll interval ago, as when the
+  /// app returns to the foreground: away long enough, it may have missed a
+  /// change; back from a dialog or the share sheet, it has not.
+  Future<void> pollIfDue() {
+    if (_now().millisecondsSinceEpoch - _lastPollMs < _intervalMs) {
+      return _inFlight ?? Future.value();
+    }
+    return poll();
+  }
+
   /// Polls with the current description even if a poll is under way, e.g.
   /// right after a targeting attribute changed.
   Future<void> refresh() async {
@@ -136,6 +152,7 @@ class OpampHttpClient {
   }
 
   Future<void> _exchange() async {
+    _lastPollMs = _now().millisecondsSinceEpoch;
     http.Response response;
     try {
       final body = encodeAgentToServer(AgentToServer(

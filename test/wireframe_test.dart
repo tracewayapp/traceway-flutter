@@ -794,6 +794,30 @@ void main() {
       expect(allText(screen), contains('Read-only words'));
     });
 
+    testWidgets('rich text under perspective keeps every node id unique',
+        (tester) async {
+      await tester.pumpWidget(_app(Scaffold(
+        body: Transform(
+          transform: Matrix4.identity()
+            ..setEntry(3, 2, 0.002)
+            ..rotateY(0.4),
+          child: const Text.rich(TextSpan(text: 'one ', children: [
+            TextSpan(text: 'two ', style: TextStyle(fontWeight: FontWeight.bold)),
+            TextSpan(text: 'three ', style: TextStyle(fontStyle: FontStyle.italic)),
+            TextSpan(text: 'four', style: TextStyle(color: Color(0xFFFF0000))),
+          ])),
+        ),
+      )));
+      final screen = _capture(WireframeCapture());
+      expect(allNodes(screen).map((n) => n.attributes['style'] ?? '').join(),
+          contains('matrix3d('));
+      expect(allText(screen), 'one |two |three |four');
+      final ids = allNodes(screen).map((n) => n.id).toList();
+      expect(ids.toSet(), hasLength(ids.length), reason: 'ids $ids');
+      // rrweb's mirror holds one node per id.
+      Mirror().play([_fullSnapshotOf(screen)]);
+    });
+
     testWidgets('a Cupertino alert keeps its frosted backdrop', (tester) async {
       await tester.pumpWidget(_app(Builder(
         builder: (context) => Center(
@@ -1006,6 +1030,187 @@ void main() {
               since: now.subtract(const Duration(seconds: 1)), until: now),
           isFalse);
       recorder.stop();
+    });
+
+    testWidgets('masking inputs again drops the frames that showed them',
+        (tester) async {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      await tester.pumpWidget(_app(Scaffold(
+        body: TextField(controller: TextEditingController(text: 'typed text')),
+      )));
+      final recorder = WireframeRecorder(
+          rootKey: _rootKey, maxFrames: 50, now: () => now)
+        ..maskAllInputs = false;
+      final start = now;
+      recorder.start();
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(recorder.bufferedFrameCount, 1);
+
+      now = now.add(const Duration(seconds: 1));
+      recorder.maskAllInputs = true;
+      // The screen is taken again at once, though the app draws nothing.
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(recorder.bufferedFrameCount, 1);
+      now = now.add(const Duration(seconds: 1));
+      final clip =
+          (await recorder.captureRecording('c', since: start, until: now))!;
+      final json = jsonEncode(clip.events);
+      expect(json, isNot(contains('typed text')));
+      expect(json, contains('***** ****'));
+      // Unmasking keeps what was masked.
+      recorder.maskAllInputs = false;
+      expect(recorder.bufferedFrameCount, 1);
+      recorder.stop();
+    });
+
+    testWidgets(
+        'a route change is a mutation, never a Meta event without its '
+        'snapshot', (tester) async {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      var href = '/home';
+      final counter = ValueNotifier(0);
+      await tester.pumpWidget(_app(Scaffold(
+        body: ValueListenableBuilder<int>(
+          valueListenable: counter,
+          builder: (_, n, __) => Text('count $n'),
+        ),
+      )));
+      final recorder = WireframeRecorder(
+        rootKey: _rootKey,
+        maxFrames: 50,
+        fps: 10,
+        now: () => now,
+        screenName: () => href,
+      );
+      final start = now;
+      recorder.start();
+      await tester.pump(const Duration(milliseconds: 1));
+
+      // Only the route's name changes; the screen stays as it was.
+      now = now.add(const Duration(milliseconds: 500));
+      href = '/details';
+      tester.binding.scheduleFrame();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // The route and the screen change together.
+      now = now.add(const Duration(milliseconds: 500));
+      href = '/settings';
+      counter.value = 1;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      now = now.add(const Duration(seconds: 1));
+
+      final clip =
+          (await recorder.captureRecording('c', since: start, until: now))!;
+      final events = clip.events.cast<Map<String, Object?>>();
+      // rrweb's player seeks from the last Meta event and takes the full
+      // snapshot after it as the screen: a Meta on its own would leave the
+      // next mutations without their nodes.
+      expect(events.map((e) => e['type']).toList(), [4, 2, 3, 5]);
+      for (var i = 0; i < events.length; i++) {
+        if (events[i]['type'] == 4) {
+          expect(events[i + 1]['type'], 2, reason: 'event $i');
+          expect(events[i + 1]['timestamp'], events[i]['timestamp']);
+        }
+      }
+      expect((events.first['data'] as Map)['href'], '/home');
+      final mirror = Mirror()..play(events);
+      expect(mirror.screen.dump(), contains('"count 1"'));
+      recorder.stop();
+    });
+
+    testWidgets('pointer moves go up in batches, as rrweb sends them',
+        (tester) async {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      await tester.pumpWidget(_app(const Scaffold(body: Text('drag'))));
+      final recorder =
+          WireframeRecorder(rootKey: _rootKey, maxFrames: 50, now: () => now);
+      final start = now;
+      recorder.start();
+      await tester.pump(const Duration(milliseconds: 1));
+      int ms() => now.millisecondsSinceEpoch;
+
+      now = now.add(const Duration(milliseconds: 100));
+      recorder.pointerDown(1, const Offset(10, 10), touch: true);
+      final down = ms();
+      final moved = <int>[];
+      for (var i = 1; i <= 20; i++) {
+        now = now.add(const Duration(milliseconds: 60));
+        recorder.pointerMove(1, Offset(10.0 + i, 10), touch: true);
+        moved.add(ms());
+      }
+      now = now.add(const Duration(milliseconds: 60));
+      recorder.pointerUp(1, const Offset(30, 10), touch: true, tap: false);
+      final up = ms();
+      // Then a mouse hovers.
+      for (var i = 0; i < 2; i++) {
+        now = now.add(const Duration(milliseconds: 60));
+        recorder.pointerMove(2, Offset(50.0 + i, 50), touch: false);
+      }
+      final hovered = ms();
+      now = now.add(const Duration(seconds: 1));
+
+      final clip =
+          (await recorder.captureRecording('c', since: start, until: now))!;
+      final pointer = [
+        for (final e in clip.events)
+          if (e['type'] == 3 && (e['data'] as Map)['source'] != 0)
+            e.cast<String, Object?>(),
+      ];
+      Map<String, Object?> data(Map<String, Object?> e) =>
+          (e['data'] as Map).cast<String, Object?>();
+      List<Map> positions(Map<String, Object?> e) =>
+          (data(e)['positions'] as List).cast<Map>();
+      expect(pointer.map((e) => data(e)['source']).toList(), [2, 6, 6, 6, 2, 1]);
+      expect(pointer.first['timestamp'], down);
+      expect(pointer[4]['timestamp'], up);
+
+      // Positions at most 500 ms apart share an event, stamped at the last.
+      final drags = pointer.where((e) => data(e)['source'] == 6).toList();
+      expect(drags.map((e) => positions(e).length).toList(), [9, 9, 2]);
+      for (final e in drags) {
+        final offsets = positions(e).map((p) => p['timeOffset'] as int).toList();
+        expect(offsets.last, 0);
+        expect(offsets.every((o) => o <= 0 && o >= -500), isTrue);
+      }
+      // The replayer moves the pointer at the event's time plus the offset:
+      // when it moved.
+      expect([
+        for (final e in drags)
+          for (final p in positions(e)) (e['timestamp'] as int) + (p['timeOffset'] as int),
+      ], moved);
+      expect(positions(drags.first).first, {
+        'x': 11,
+        'y': 10,
+        'id': screenNodeId,
+        'timeOffset': -480,
+      });
+
+      final hover = pointer.last;
+      expect(hover['timestamp'], hovered);
+      expect(positions(hover).map((p) => p['timeOffset']).toList(), [-60, 0]);
+
+      final times = clip.events.map((e) => e['timestamp'] as int).toList();
+      expect(times, orderedEquals([...times]..sort()));
+      recorder.stop();
+    });
+
+    test('the move throttle forgets pointers that went up', () {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      final recorder =
+          WireframeRecorder(rootKey: GlobalKey(), maxFrames: 2, now: () => now);
+      for (var pointer = 1; pointer <= 20; pointer++) {
+        now = now.add(const Duration(seconds: 1));
+        recorder
+          ..pointerDown(pointer, Offset.zero, touch: false)
+          ..pointerMove(pointer, const Offset(5, 5), touch: false)
+          ..pointerUp(pointer, const Offset(5, 5), touch: false, tap: false);
+        // A mouse hovers on with the id of its last press.
+        now = now.add(const Duration(milliseconds: 100));
+        recorder.pointerMove(pointer, const Offset(9, 9), touch: false);
+      }
+      expect(recorder.trackedPointerCount, 1);
     });
   });
 

@@ -48,12 +48,17 @@ class TracewayNavigatorObserver extends NavigatorObserver {
     try {
       final at = DateTime.now();
       final fromPath = from == null ? null : routePath(from) ?? fallbackPath(from);
-      void emit(String? toPath) {
+      // A popup opening, or closing back to the screen under it.
+      final overlay = to is PopupRoute ||
+          ((action == 'pop' || action == 'remove') && from is PopupRoute);
+      void emit(String? toPath, {required bool displayed}) {
         try {
           client.recordNavigationEvent(NavigationEvent(
             action: action,
             from: fromPath,
             to: toPath,
+            overlay: overlay,
+            displayed: displayed,
             timestamp: at,
           ));
         } catch (_) {}
@@ -61,11 +66,11 @@ class TracewayNavigatorObserver extends NavigatorObserver {
 
       final toPath = to == null ? null : routePath(to);
       if (to == null || toPath != null) {
-        emit(toPath);
+        emit(toPath, displayed: false);
         return;
       }
       SchedulerBinding.instance.addPostFrameCallback((_) {
-        emit(routePath(to) ?? fallbackPath(to));
+        emit(routePath(to) ?? fallbackPath(to), displayed: true);
       });
     } catch (_) {
       // Never let event recording break navigation.
@@ -116,21 +121,19 @@ class TracewayNavigatorObserver extends NavigatorObserver {
     'PrimaryScrollController',
   };
 
-  /// The page widget of a built route: the child of the route's
-  /// `Semantics(scopesRoute: true)`, past framework wrappers.
+  /// The page widget of a built route: the first widget under the route's
+  /// subtree (a repaint boundary around what `buildPage` returns) past
+  /// framework wrappers, such as the route's `Semantics(scopesRoute: true)`.
+  /// A `PageRouteBuilder` has no such `Semantics`: its page comes first.
   static String? _pageType(ModalRoute<dynamic> route) {
     final context = route.subtreeContext;
     if (context is! Element) return null;
     Element? current = context;
-    var inPage = false;
     for (var depth = 0; depth < 48 && current != null; depth++) {
       final widget = current.widget;
       final type = _stripGenerics(widget.runtimeType.toString());
-      if (inPage && !type.startsWith('_') && !_wrappers.contains(type)) {
+      if (depth > 0 && !type.startsWith('_') && !_wrappers.contains(type)) {
         return type;
-      }
-      if (widget is Semantics && widget.properties.scopesRoute == true) {
-        inPage = true;
       }
       Element? only;
       var count = 0;

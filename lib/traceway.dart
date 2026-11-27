@@ -3,6 +3,7 @@ export 'src/events/traceway_event.dart'
 export 'src/events/traceway_http_client.dart' show TracewayHttpClient;
 export 'src/events/traceway_navigator_observer.dart'
     show TracewayNavigatorObserver;
+export 'src/traceway_log_level.dart' show TracewayLogLevel;
 export 'src/traceway_mask_mode.dart'
     show TracewayMaskMode, TracewayMaskBlur, TracewayMaskBlank;
 export 'src/traceway_privacy_mask.dart' show TracewayPrivacyMask;

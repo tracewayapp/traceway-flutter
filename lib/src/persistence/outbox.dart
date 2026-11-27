@@ -14,6 +14,11 @@ const int _maxBatches = 200;
 const Duration _maxAge = Duration(hours: 24);
 const int _maxBatchBytes = 4 * 1024 * 1024;
 
+/// A batch is given up after this many failures it likely caused itself:
+/// ones in a drain where the server answered another batch. An outage alone
+/// never drops a batch; [_maxAge] and [_maxBatches] still bound the queue.
+const int _maxFailures = 10;
+
 /// Delays between the attempts of a live export, before a batch that keeps
 /// failing goes to the [Outbox].
 const List<Duration> liveRetryDelays = [
@@ -81,9 +86,16 @@ class Outbox {
   int _sequence = 0;
   bool _claimed = false;
   Timer? _timer;
-  Future<void>? _draining;
+  Future<bool>? _draining;
+  Future<bool>? _again;
   int _attempts = 0;
   bool _disposed = false;
+
+  /// Batches that failed, in memory: when each last failed, in the order of
+  /// [_failureCount], and how many of its failures count toward
+  /// [_maxFailures].
+  final Map<String, ({int at, int count})> _failed = {};
+  int _failureCount = 0;
 
   /// Identifies where this outbox sends, its credentials included: batches
   /// queued for other destinations or another project's token are dropped,
@@ -220,21 +232,56 @@ class Outbox {
     });
   }
 
+  /// Sends what is queued. Completes once a drain that started after this
+  /// call has run, so a batch added before it is covered, unless the drain
+  /// running now stops without any sign that the network works: the backoff
+  /// timer then retries.
   Future<void> drain() {
     final running = _draining;
-    if (running != null) return running;
+    if (running == null) return _pass();
+    // The running drain listed the batches before this call.
+    return _again ??= running.then((networkUp) {
+      _again = null;
+      if (!networkUp) return false;
+      return _draining ?? _pass();
+    }, onError: (Object _) {
+      _again = null;
+      return false;
+    });
+  }
+
+  Future<bool> _pass() {
     final future = _drain().onError<FileSystemException>((error, stack) {
       if (!_disposed) schedule(Duration(seconds: _backoffSeconds()));
+      return false;
     }).whenComplete(() => _draining = null);
     _draining = future;
     return future;
   }
 
-  Future<void> _drain() async {
-    if (!_claimed || _disposed) return;
+  /// Sends every queued batch once at most. Returns false when it stopped
+  /// before the server answered any batch: the network may be down.
+  Future<bool> _drain() async {
+    if (!_claimed || _disposed) return false;
     _prune();
-    for (final file in _files()) {
-      if (_disposed) return;
+    final files = _files();
+    final queued = {for (final file in files) file.path};
+    _failed.removeWhere((path, _) => !queued.contains(path));
+    // Batches that never failed go first, oldest first, then the ones that
+    // did, the one that failed longest ago first: a batch that keeps failing
+    // goes behind the others instead of holding them back, and batches that
+    // keep failing take turns.
+    final failed = files.where((f) => _failed.containsKey(f.path)).toList()
+      ..sort((a, b) => _failed[a.path]!.at.compareTo(_failed[b.path]!.at));
+    var answered = false;
+    var failuresInARow = 0;
+    var stopped = false;
+    var retry = false;
+    for (final file in [
+      ...files.where((f) => !_failed.containsKey(f.path)),
+      ...failed,
+    ]) {
+      if (_disposed) return false;
       final List<int> body;
       try {
         body = await file.readAsBytes();
@@ -245,17 +292,42 @@ class Outbox {
       final destination = destinations[kind];
       final status =
           destination == null ? 400 : await postOtlp(_http, destination, body);
-      if (isTransientFailure(status)) {
-        _attempts++;
-        schedule(Duration(seconds: _backoffSeconds()));
-        return;
+      if (!isTransientFailure(status)) {
+        // Delivered, or rejected for good: either way it is done.
+        answered = answered || destination != null;
+        failuresInARow = 0;
+        _failed.remove(file.path);
+        try {
+          await file.delete();
+        } catch (_) {}
+        continue;
       }
-      // Delivered, or rejected for good: either way it is done.
-      try {
-        await file.delete();
-      } catch (_) {}
+      // Only while the server answers other batches is a failure likely
+      // this batch's own.
+      final count = (_failed[file.path]?.count ?? 0) + (answered ? 1 : 0);
+      if (count >= _maxFailures) {
+        _failed.remove(file.path);
+        try {
+          await file.delete();
+        } catch (_) {}
+      } else {
+        _failed[file.path] = (at: ++_failureCount, count: count);
+        retry = true;
+      }
+      // Nothing answered yet, or two failures in a row: the network may be
+      // down. Back off instead of trying every batch.
+      if (!answered || ++failuresInARow >= 2) {
+        stopped = true;
+        break;
+      }
     }
-    _attempts = 0;
+    if (stopped || retry) {
+      _attempts++;
+      schedule(Duration(seconds: _backoffSeconds()));
+    } else {
+      _attempts = 0;
+    }
+    return answered || !stopped;
   }
 
   void dispose() {
@@ -298,19 +370,31 @@ mixin _InFlight {
 /// its URL. A batch that fails for a reason that may pass goes to the
 /// [Outbox] instead of being lost.
 class OtlpLogExporter with _InFlight implements LogRecordExporter {
-  OtlpLogExporter(this._destination, this._outbox, this._http);
+  OtlpLogExporter(this._destination, this._outbox, this._http, {this.admit});
 
   final OtlpDestination _destination;
   final Outbox _outbox;
   final http.Client _http;
 
+  /// Whether a record, by its event name, may still leave: the kill switch
+  /// or a rule may have turned its signal off while it waited in the batch
+  /// processor. Null sends every record.
+  final bool Function(String? eventName)? admit;
+
   @override
   Future<ExportResult> export(List<ReadableLogRecord> logRecords) async {
-    if (logRecords.isEmpty) return ExportResult.success;
+    final admit = this.admit;
+    final records = admit == null
+        ? logRecords
+        : [
+            for (final record in logRecords)
+              if (admit(record.eventName)) record,
+          ];
+    if (records.isEmpty) return ExportResult.success;
     final List<int> body;
     try {
-      body = OtlpLogRecordTransformer.transformLogRecords(logRecords)
-          .writeToBuffer();
+      body =
+          OtlpLogRecordTransformer.transformLogRecords(records).writeToBuffer();
     } catch (_) {
       return ExportResult.failure;
     }
@@ -331,15 +415,18 @@ class OtlpLogExporter with _InFlight implements LogRecordExporter {
 
 /// The span counterpart of [OtlpLogExporter].
 class OtlpSpanExporter with _InFlight implements SpanExporter {
-  OtlpSpanExporter(this._destination, this._outbox, this._http);
+  OtlpSpanExporter(this._destination, this._outbox, this._http, {this.admit});
 
   final OtlpDestination _destination;
   final Outbox _outbox;
   final http.Client _http;
 
+  /// Whether spans may still leave; see [OtlpLogExporter.admit].
+  final bool Function()? admit;
+
   @override
   Future<void> export(List<Span> spans) async {
-    if (spans.isEmpty) return;
+    if (spans.isEmpty || admit?.call() == false) return;
     final List<int> body;
     try {
       body = OtlpSpanTransformer.transformSpans(spans).writeToBuffer();

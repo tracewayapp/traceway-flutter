@@ -51,6 +51,11 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
   static const int _maxPointers = 4000;
   static const int _moveIntervalMs = 50;
 
+  /// rrweb sends the positions a pointer moved through together, in one
+  /// event about every 500 ms (its `mousemoveCallback`), not one event per
+  /// position: the per-session budget counts events.
+  static const int _moveBatchMs = 500;
+
   late final int _intervalMs = 1000 ~/ (fps < 1 ? 1 : fps);
   bool _running = false;
   bool _paused = false;
@@ -74,11 +79,23 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     if (value == _capture.maskAllInputs) return;
     _capture.maskAllInputs = value;
     _capture.reset();
+    if (value) {
+      // The frames held show what was typed: none of them may go up now.
+      // The screen is captured again at once, masked.
+      _frames.clear();
+      _timer?.cancel();
+      _timer = null;
+      _schedule(immediately: true);
+    }
   }
 
   /// Number of distinct screens held; never more than the ring's capacity.
   @visibleForTesting
   int get bufferedFrameCount => _frames.length;
+
+  /// Number of pointers whose last move is remembered, for the throttle.
+  @visibleForTesting
+  int get trackedPointerCount => _lastMoveMs.length;
 
   @override
   bool get isRunning => _running;
@@ -208,8 +225,13 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
 
   // ---- pointers -----------------------------------------------------------
 
-  void pointerDown(int pointer, Offset position, {required bool touch}) =>
-      _addPointer(_Pointer(_PointerKind.down, position, _now(), touch));
+  void pointerDown(int pointer, Offset position, {required bool touch}) {
+    // A mouse hovers with the id of its last press, after the press came
+    // up, and each press has a new one: forgotten here, or one id would be
+    // kept per click. A pointer still down only loses its throttle once.
+    _lastMoveMs.clear();
+    _addPointer(_Pointer(_PointerKind.down, position, _now(), touch));
+  }
 
   void pointerMove(int pointer, Offset position, {required bool touch}) {
     final now = _now();
@@ -282,26 +304,25 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     }
 
     final screenEvents = <Map<String, Object?>>[];
-    void snapshot(WireframeFrame frame, DateTime at) {
-      final ms = at.millisecondsSinceEpoch;
-      screenEvents
-        ..add({
+    void meta(WireframeFrame frame, DateTime at) => screenEvents.add({
           'type': 4,
           'data': {
             'href': frame.href ?? '/',
             'width': frame.size.width.round(),
             'height': frame.size.height.round(),
           },
-          'timestamp': ms,
-        })
-        ..add({
-          'type': 2,
-          'data': {
-            'node': serializeDocument(frame.screen ?? _awayScreen(frame.size)),
-            'initialOffset': const {'left': 0, 'top': 0},
-          },
-          'timestamp': ms,
+          'timestamp': at.millisecondsSinceEpoch,
         });
+    void snapshot(WireframeFrame frame, DateTime at) {
+      meta(frame, at);
+      screenEvents.add({
+        'type': 2,
+        'data': {
+          'node': serializeDocument(frame.screen ?? _awayScreen(frame.size)),
+          'initialOffset': const {'left': 0, 'top': 0},
+        },
+        'timestamp': at.millisecondsSinceEpoch,
+      });
     }
 
     var previous = frames[index];
@@ -310,6 +331,12 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
       final frame = frames[i];
       if (!frame.timestamp.isBefore(end)) break;
       final before = previous.screen, after = frame.screen;
+      // A Meta event only ever comes with a full snapshot: rrweb's player
+      // seeks from the last Meta before the time it seeks to and takes the
+      // snapshot after it as the screen, so a Meta alone (to change the
+      // address on a route change) would drop the screen the next mutations
+      // apply to. Another route is a mutation; the address stays the clip's
+      // first, which is the one the dashboard shows.
       if (before == null || after == null || previous.size != frame.size) {
         snapshot(frame, frame.timestamp);
       } else {
@@ -325,11 +352,31 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
       previous = frame;
     }
 
-    final pointerEvents = <Map<String, Object?>>[
-      for (final p in _pointers)
-        if (!p.timestamp.isBefore(start) && p.timestamp.isBefore(end))
-          ..._pointerEvents(p),
-    ];
+    final pointerEvents = <Map<String, Object?>>[];
+    final moves = <_Pointer>[];
+    void flushMoves() {
+      if (moves.isEmpty) return;
+      pointerEvents.add(_moveEvent(moves));
+      moves.clear();
+    }
+
+    for (final p in _pointers) {
+      if (p.timestamp.isBefore(start) || !p.timestamp.isBefore(end)) continue;
+      if (p.kind != _PointerKind.move) {
+        // A press or release stays between the moves before and after it.
+        flushMoves();
+        pointerEvents.addAll(_pointerEvents(p));
+        continue;
+      }
+      if (moves.isNotEmpty &&
+          (moves.first.touch != p.touch ||
+              p.timestamp.difference(moves.first.timestamp).inMilliseconds >
+                  _moveBatchMs)) {
+        flushMoves();
+      }
+      moves.add(p);
+    }
+    flushMoves();
     final events = _merge(screenEvents, pointerEvents);
     final endMs = end.millisecondsSinceEpoch;
     if ((events.last['timestamp'] as int) < endMs) {
@@ -402,18 +449,7 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
       case _PointerKind.down:
         return [interaction(p.touch ? 7 : 1)];
       case _PointerKind.move:
-        return [
-          {
-            'type': 3,
-            'data': {
-              'source': p.touch ? 6 : 1,
-              'positions': [
-                {'x': x, 'y': y, 'id': screenNodeId, 'timeOffset': 0},
-              ],
-            },
-            'timestamp': ms,
-          },
-        ];
+        return [_moveEvent([p])];
       case _PointerKind.up:
         return [interaction(p.touch ? 9 : 0)];
       case _PointerKind.tap:
@@ -421,6 +457,30 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
       case _PointerKind.cancel:
         return [interaction(p.touch ? 10 : 0)];
     }
+  }
+
+  /// One rrweb MouseMove or TouchMove event for [moves], all of one kind,
+  /// as rrweb records it: stamped when the last position was reached, each
+  /// position with its time before then as a negative `timeOffset`. The
+  /// replayer moves the pointer to each at the event's time plus its offset.
+  static Map<String, Object?> _moveEvent(List<_Pointer> moves) {
+    final ms = moves.last.timestamp.millisecondsSinceEpoch;
+    return {
+      'type': 3,
+      'data': {
+        'source': moves.first.touch ? 6 : 1,
+        'positions': [
+          for (final p in moves)
+            {
+              'x': p.position.dx.round(),
+              'y': p.position.dy.round(),
+              'id': screenNodeId,
+              'timeOffset': p.timestamp.millisecondsSinceEpoch - ms,
+            },
+        ],
+      },
+      'timestamp': ms,
+    };
   }
 
   /// What the replay shows while the app is in the background.

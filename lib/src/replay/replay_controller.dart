@@ -61,7 +61,10 @@ class ReplayController {
   ReplaySource? _source;
   Mode _mode = Mode.off;
   int _maxAgeMs = 600000;
-  final Set<Future<void>> _encodings = {};
+
+  /// The clips being encoded, each with the session its budget is charged
+  /// to.
+  final Map<Future<void>, String?> _encodings = {};
   Timer? _segmentTimer;
 
   /// The end of the last frames uploaded as part of the current session.
@@ -233,9 +236,14 @@ class ReplayController {
         // A failed encode loses the clip, never the app.
       }
     }();
-    _encodings.add(future);
+    _encodings[future] = budgetSession;
     future.whenComplete(() => _encodings.remove(future));
   }
+
+  /// Whether [sessionId] has replay: uploaded, or a clip charged to it
+  /// still being encoded, which goes up in the mode it was recorded in.
+  bool hasReplayFor(String sessionId) =>
+      _encodings.containsValue(sessionId) || budget.hasUploaded(sessionId);
 
   /// The session ended: a streaming one uploads its last segment under the
   /// session it belongs to.
@@ -254,7 +262,7 @@ class ReplayController {
 
   /// Waits for clips being encoded and for their upload.
   Future<void> drain() async {
-    await Future.wait(List.of(_encodings));
+    await Future.wait(List.of(_encodings.keys));
     await transport.flush();
   }
 

@@ -209,7 +209,13 @@ List<TriggerStep>? _parseSteps(Object? value) {
     }
     steps.add(TriggerStep(
       match: match,
-      withinSeconds: within is num && within > 0 ? within.toDouble() : null,
+      // A day is longer than any session; more would overflow the
+      // engine's millisecond arithmetic (1e306 s is infinite ms).
+      withinSeconds: within is num && within > 0
+          ? (within > _maxBufferAgeSeconds
+              ? _maxBufferAgeSeconds
+              : within.toDouble())
+          : null,
       count: count,
       periodSeconds: period,
     ));

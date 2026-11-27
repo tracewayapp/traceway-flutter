@@ -380,8 +380,15 @@ class WireframeCapture {
         style += 'opacity:${num3(parent.overAndUnderCenterOpacity)};';
       }
     }
-    s.out.add(_element(_id(element, 7), style, inside));
+    // The element's other nodes are inside, and none has a negative role.
+    s.out.add(_element(_id(element, _projectedRole), style, inside));
   }
+
+  /// The role of the node [_projected] wraps an element's own nodes in.
+  /// Every other role is zero or more, some of them counting up without
+  /// bound (a paragraph's runs, a table's rows), so a negative one is never
+  /// taken.
+  static const int _projectedRole = -1;
 
   /// A backdrop's filter. From Flutter 3.41 it is a `filterConfig`, and
   /// the `filter` getter throws for one set that way (Cupertino's dialogs);

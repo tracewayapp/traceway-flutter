@@ -1,13 +1,13 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui' show FrameTiming;
 
 import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart'
     show ReadableLogRecord;
 
 import 'package:dartastic_opentelemetry/proto/opentelemetry_proto_dart.dart'
     as proto;
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:traceway/src/core/control_state.dart';
@@ -642,6 +642,34 @@ void main() {
       });
       expect(h['app.screen.ttid|screen=/users/:id']!.sum, 250);
       expect(h['app.screen.ttfd|screen=/users/:id']!.sum, 1000);
+    });
+
+    testWidgets(
+        'a screen pushed from a post-frame callback is displayed by the next '
+        'frame, not at once', (tester) async {
+      await tester.pumpWidget(const SizedBox());
+      // A splash screen replacing itself once it is drawn.
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        vitals.navigated(
+            '/home', 'replace', DateTime.fromMicrosecondsSinceEpoch(nowUs));
+        nowUs += 120000;
+      });
+      SchedulerBinding.instance.scheduleFrame();
+      await tester.pump();
+      await tester.pump();
+      await r.recorder.flush();
+      expect(r.decoded.histograms['app.screen.ttid|screen=/home']!.sum, 120);
+    });
+
+    testWidgets('a route the observer waited for is displayed when reported',
+        (tester) async {
+      await tester.pumpWidget(const SizedBox());
+      vitals.navigated('/CheckoutPage', 'push',
+          DateTime.fromMicrosecondsSinceEpoch(nowUs - 40000),
+          displayed: true);
+      await r.recorder.flush();
+      expect(r.decoded.histograms['app.screen.ttid|screen=/CheckoutPage']!.sum,
+          40);
     });
 
     testWidgets('slow and frozen frames by screen', (tester) async {

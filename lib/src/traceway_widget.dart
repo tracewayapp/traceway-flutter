@@ -13,6 +13,7 @@ import 'events/traceway_navigator_observer.dart';
 import 'replay/replay_controller.dart';
 import 'screen_recorder.dart';
 import 'traceway_client.dart';
+import 'traceway_log_level.dart';
 import 'traceway_options.dart';
 import 'traceway_screen_capture_mode.dart';
 import 'wireframe/wireframe_recorder.dart';
@@ -51,6 +52,22 @@ class Traceway extends StatefulWidget {
   static void setAttribute(String key, String value) {
     TracewayClient.instance?.setAttribute(key, value);
   }
+
+  /// Records [message] as a log line at [level], e.g.
+  /// `Traceway.log('payment declined', level: TracewayLogLevel.warn)`.
+  /// Printed lines are info; `package:logging` records keep their level.
+  static void log(
+    String message, {
+    TracewayLogLevel level = TracewayLogLevel.info,
+    Object? error,
+    StackTrace? stackTrace,
+    Map<String, String>? attributes,
+  }) =>
+      TracewayClient.instance?.log(message,
+          level: level,
+          error: error,
+          stackTrace: stackTrace,
+          attributes: attributes);
 
   /// Records that the app arrived at [path], for routers that do not report
   /// to a [NavigatorObserver] (e.g. a `go_router` listener:
@@ -234,14 +251,17 @@ class _TracewayState extends State<Traceway> {
     }
   }
 
-  /// A pointer that comes up where it went down is a tap: it is recorded
-  /// before the app's own tap handlers run, so the tap comes first in the
-  /// session, before whatever it causes.
+  /// A pointer that comes up where it went down, before a long press
+  /// would, is a tap: it is recorded before the app's own tap handlers run,
+  /// so the tap comes first in the session, before whatever it causes. A
+  /// long press is not one: what it opened (a menu under the finger) is on
+  /// screen by the time it comes up, and would be taken for its target.
   void _onPointerUp(PointerUpEvent event) {
     _screenRecorder?.clearTouchPosition();
     final down = _downs.remove(event.pointer);
     final tap = down != null &&
-        (event.position - down.position).distance <= _slop(down.kind);
+        (event.position - down.position).distance <= _slop(down.kind) &&
+        event.timeStamp - down.timeStamp < kLongPressTimeout;
     _wireframeRecorder?.pointerUp(event.pointer, event.localPosition,
         touch: _isTouch(event.kind), tap: tap);
     if (down == null || !tap) return;

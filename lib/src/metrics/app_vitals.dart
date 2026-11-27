@@ -200,7 +200,11 @@ class AppVitals {
 
   /// A navigation to [screen] (normalized) at [at]. Only a route that is
   /// new on the stack is built and displayed; returning to one is not.
-  void navigated(String? screen, String action, DateTime at) {
+  /// [displayed]: the route already drew its first frame (the navigator
+  /// observer waited for it to learn its name), so its time to initial
+  /// display ends now.
+  void navigated(String? screen, String action, DateTime at,
+      {bool displayed = false}) {
     if (screen == null || (action != 'push' && action != 'replace')) {
       if (action != 'remove') _visit = null;
       return;
@@ -211,26 +215,27 @@ class AppVitals {
     }
     final visit = _Visit(screen, at.microsecondsSinceEpoch);
     _visit = visit;
-    void displayed() {
+    void done() {
       if (visit.displayed) return;
       visit.displayed = true;
       final ms = (_nowUs() - visit.startUs) / 1000;
       if (ms >= 0 && ms <= _maxStartMs) _recorder.screenDisplayed(screen, ms);
     }
 
+    if (displayed) {
+      done();
+      return;
+    }
     try {
       final scheduler = SchedulerBinding.instance;
-      // The navigator observer reports a route it had to wait for once its
-      // first frame is done.
-      if (scheduler.schedulerPhase == SchedulerPhase.postFrameCallbacks) {
-        displayed();
-      } else {
-        scheduler.addPostFrameCallback((_) => displayed());
-        // A navigation always rebuilds; this only makes sure a router that
-        // reports before scheduling its frame is not measured against some
-        // later, unrelated one.
-        scheduler.ensureVisualUpdate();
-      }
+      // Reported during a frame's post-frame callbacks (a splash screen
+      // replacing itself once drawn), the route is built by the next frame:
+      // a callback added now runs after that one.
+      scheduler.addPostFrameCallback((_) => done());
+      // A navigation always rebuilds; this only makes sure a router that
+      // reports before scheduling its frame is not measured against some
+      // later, unrelated one.
+      scheduler.ensureVisualUpdate();
     } catch (_) {
       // No binding (a plain Dart test): there are no frames to wait for.
     }

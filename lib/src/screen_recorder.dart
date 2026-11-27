@@ -106,6 +106,18 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
 
   late final int _captureIntervalMs = 1000 ~/ fps;
 
+  /// The longest video a clip makes, in seconds. Every frame is shown for
+  /// as long as it was on screen, so frames captured slowly, or minutes in
+  /// the background between two of them, make a clip longer than the ring
+  /// buffer's nominal length, and every encoder frame, a repeat too, costs
+  /// a copy of the whole picture. Past this the clip keeps its end; see
+  /// [_holds].
+  static const int maxClipSeconds = 60;
+
+  /// Encoder frames a clip has at most: never fewer than the ring holds, so
+  /// frames captured on time always fit.
+  late final int _maxEncodedFrames = max(_buffer.capacity, maxClipSeconds * fps);
+
   Timer? _captureTimer;
   bool _isCapturing = false;
   bool _isPaused = false;
@@ -144,6 +156,9 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   void start() {
     if (_captureTimer != null) return;
     WidgetsBinding.instance.addObserver(this);
+    // Changes while stopped were not observed: the app may have gone to
+    // the background, or come back, since.
+    _isPaused = _pausedIn(WidgetsBinding.instance.lifecycleState);
     _captureTimer = Timer.periodic(
       Duration(milliseconds: _captureIntervalMs),
       (_) => _captureFrame(),
@@ -162,8 +177,14 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _isPaused = state != AppLifecycleState.resumed;
+    _isPaused = _pausedIn(state);
   }
+
+  /// Whether no frames are captured in [state]: whenever the app is not in
+  /// the foreground. Before the platform reports a state there is none,
+  /// and the app is on screen.
+  static bool _pausedIn(AppLifecycleState? state) =>
+      state != null && state != AppLifecycleState.resumed;
 
   Future<void> _captureFrame() async {
     if (_isCapturing || _isPaused) return;
@@ -180,10 +201,14 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
       // where its widget is in this frame.
       final maskRegions = maskRegionsIn(boundary);
       final image = await boundary.toImage(pixelRatio: pixelRatio);
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
       final width = image.width;
       final height = image.height;
-      image.dispose();
+      ByteData? byteData;
+      try {
+        byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      } finally {
+        image.dispose();
+      }
 
       if (byteData != null) {
         _buffer.push(CapturedFrame(
@@ -207,12 +232,18 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   /// Decodes a PNG frame to raw RGBA pixels.
   Future<Uint8List> _decodePngToRgba(Uint8List pngBytes, int width, int height) async {
     final codec = await ui.instantiateImageCodec(pngBytes);
-    final frameInfo = await codec.getNextFrame();
-    final image = frameInfo.image;
-    final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-    image.dispose();
-    codec.dispose();
-    return byteData!.buffer.asUint8List();
+    try {
+      final image = (await codec.getNextFrame()).image;
+      try {
+        final byteData =
+            await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+        return byteData!.buffer.asUint8List();
+      } finally {
+        image.dispose();
+      }
+    } finally {
+      codec.dispose();
+    }
   }
 
   /// Draws a blue (#4ba3f7) circle onto raw RGBA pixel data at the touch position.
@@ -339,6 +370,42 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   /// Number of frames currently held; never more than the buffer capacity.
   int get bufferedFrameCount => _buffer.length;
 
+  /// Adds [frame] to the ring as if it had been captured.
+  @visibleForTesting
+  void addFrame(CapturedFrame frame) => _buffer.push(frame);
+
+  /// How many encoder frames each of [frames] is shown for, so the video
+  /// plays at the app's speed: a frame until the next one was taken, the
+  /// last one until [end], each at least once. Counted from the first
+  /// frame, so rounding does not add up along the clip.
+  ///
+  /// A clip is at most [_maxEncodedFrames] long. Over that, the last frame
+  /// is held for less, then the earliest frames are left out: the frames
+  /// captured last, nearest to what asked for the clip, are kept. Returns
+  /// the index of the first frame encoded and the holds of it and of every
+  /// frame after it.
+  (int, List<int>) _holds(List<CapturedFrame> frames, DateTime end) {
+    final frameMs = 1000 / fps;
+    final origin = frames.first.timestamp;
+    final holds = <int>[];
+    var encoded = 0;
+    for (var i = 0; i < frames.length; i++) {
+      final shownUntil =
+          i + 1 < frames.length ? frames[i + 1].timestamp : end;
+      final at = (shownUntil.difference(origin).inMilliseconds / frameMs).round();
+      final hold = max(1, at - encoded);
+      holds.add(hold);
+      encoded += hold;
+    }
+    var first = 0;
+    var beforeLast = encoded - holds.last;
+    while (first < frames.length - 1 && beforeLast + 1 > _maxEncodedFrames) {
+      beforeLast -= holds[first++];
+    }
+    holds.last = min(holds.last, _maxEncodedFrames - beforeLast);
+    return (first, holds.sublist(first));
+  }
+
   static bool _inWindow(CapturedFrame frame, DateTime? since, DateTime? until) =>
       (since == null || !frame.timestamp.isBefore(since)) &&
       (until == null || frame.timestamp.isBefore(until));
@@ -348,7 +415,9 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
       _buffer.readAll().any((f) => _inWindow(f, since, until));
 
   /// Encodes the buffered frames captured at or after [since] and before
-  /// [until] to MP4. The clip can never be longer than the frame ring buffer.
+  /// [until] to MP4. The clip can never hold more frames than the frame
+  /// ring buffer; each is shown for as long as it was on screen, the last
+  /// one until [until], so the video keeps the session's time.
   /// The frames are chosen when this is called, before it waits for an
   /// earlier encode to finish.
   @override
@@ -357,9 +426,16 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
     DateTime? since,
     DateTime? until,
   }) async {
-    final frames =
+    final window =
         _buffer.readAll().where((f) => _inWindow(f, since, until)).toList();
-    if (frames.isEmpty) return null;
+    if (window.isEmpty) return null;
+    final (first, holds) = _holds(window, until ?? window.last.timestamp);
+    final frames = window.sublist(first);
+    final encodedFrames = holds.fold<int>(0, (sum, n) => sum + n);
+    final durationSeconds = encodedFrames / fps;
+    final startedAt = frames.first.timestamp;
+    final endedAt = startedAt
+        .add(Duration(microseconds: (durationSeconds * 1000000).round()));
 
     final previous = _encodingLock;
     final completer = Completer<void>();
@@ -381,8 +457,6 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
       if (maxWidth.isOdd) maxWidth++;
       if (maxHeight.isOdd) maxHeight++;
 
-      final durationSeconds = frames.length * _captureIntervalMs / 1000.0;
-
       final tempDir = await getTemporaryDirectory();
       final outputPath = '${tempDir.path}/traceway_$clipId.mp4';
       videoFile = File(outputPath);
@@ -399,7 +473,8 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
       // Decode each PNG → RGBA, apply masks, draw touch circle, feed to encoder.
       // Frames smaller than maxWidth×maxHeight are padded with dark grey.
       final canvasSize = maxWidth * maxHeight * 4;
-      for (final frame in frames) {
+      for (var i = 0; i < frames.length; i++) {
+        final frame = frames[i];
         final rgba = await _decodePngToRgba(frame.pngBytes, frame.width, frame.height);
 
         for (final region in frame.maskRegions) {
@@ -437,7 +512,11 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
           }
         }
 
-        await encoder.appendFrame(output);
+        // A frame on screen for longer is the same picture again, built
+        // once.
+        for (var n = 0; n < holds[i]; n++) {
+          await encoder.appendFrame(output);
+        }
       }
 
       await encoder.finish();
@@ -447,7 +526,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
 
       if (debug) {
         final bufferKB = frames.fold<int>(0, (sum, f) => sum + f.pngBytes.length) ~/ 1024;
-        print('Traceway: encoded ${frames.length} frames (buffer: ${bufferKB}KB) to ${videoBytes.length ~/ 1024}KB MP4 (${durationSeconds.toStringAsFixed(1)}s)');
+        print('Traceway: encoded ${frames.length} frames as $encodedFrames (buffer: ${bufferKB}KB) to ${videoBytes.length ~/ 1024}KB MP4 (${durationSeconds.toStringAsFixed(1)}s)');
       }
 
       return SessionRecordingPayload(
@@ -461,8 +540,10 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
             'durationSeconds': durationSeconds,
           }
         ],
-        startedAt: frames.first.timestamp,
-        endedAt: frames.last.timestamp,
+        // The span the video plays: from its first frame for as long as it
+        // runs.
+        startedAt: startedAt,
+        endedAt: endedAt,
       );
     } catch (e) {
       if (debug) {

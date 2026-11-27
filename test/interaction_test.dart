@@ -318,6 +318,41 @@ void main() {
       expect(target.selector, 'IconButton');
     });
 
+    testWidgets('a key under a mask is not reported either', (tester) async {
+      await tester.pumpWidget(app(Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TracewayPrivacyMask(
+            child: ListTile(
+              key: const ValueKey('Ann Smith'),
+              onTap: () {},
+              title: const Text('Ann Smith'),
+            ),
+          ),
+          Container(
+            key: const Key('contacts'),
+            child: TracewayPrivacyMask(
+              child: KeyedSubtree(
+                key: const Key('AnnSmith'),
+                child: GestureDetector(
+                  onTap: () {},
+                  child: const SizedBox(
+                      width: 100, height: 40, child: Text('Mail')),
+                ),
+              ),
+            ),
+          ),
+        ],
+      )));
+      final tile = describeTap(pathAt(tester, find.text('Ann Smith')))!;
+      expect(tile.id, isNull);
+      expect(tile.selector, isNot(contains('Ann')));
+      final mail = describeTap(pathAt(tester, find.text('Mail')))!;
+      expect(mail.selector, isNot(contains('Ann')));
+      // An id above the mask is the app's own, not masked content.
+      expect(mail.id, 'contacts');
+    });
+
     testWidgets('a mask inside a control hides its label', (tester) async {
       await tester.pumpWidget(app(Column(
         mainAxisSize: MainAxisSize.min,

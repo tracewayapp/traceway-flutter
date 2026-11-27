@@ -89,6 +89,15 @@ int _estimateBytes(Attributes? attributes, Object? body) {
   return size;
 }
 
+/// Whether a log record may still be exported, checked again when it reaches
+/// the exporter: the kill switch or a rule may have turned its signal off
+/// since it was routed. Control records follow only the kill switch, as when
+/// they are routed: a session's end goes with its start.
+bool canExportLog(ControlState control, String? eventName) {
+  final signal = classifyLog(eventName);
+  return signal == signalControl ? control.enabled : control.canExport(signal);
+}
+
 /// Decides for every log record and span whether it is sent now, kept in the
 /// ring buffer or dropped, according to the [ControlState]. Triggers are
 /// observed after routing so a triggered flush includes the record that
@@ -277,9 +286,11 @@ class TelemetryRouter {
     }
     if (mode == Mode.off) return Routed.off;
     final sessionId = hooks.sessionId;
+    // Within the plan's limits: a signal they only let buffer stays here.
     final baselineSampled = _baselineSignals.contains(signal) &&
         sessionId != null &&
-        unitHash(sessionId) < control.settings.baselineSampleRate;
+        unitHash(sessionId) < control.settings.baselineSampleRate &&
+        control.canExport(signal);
     if (mode == Mode.stream || baselineSampled) return Routed.stream;
     buffer.push(BufferEntry(
       timeMs: timeMs,

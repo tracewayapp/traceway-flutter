@@ -428,6 +428,39 @@ void main() {
       expect(c.budget.snapshot('s2')['traceway.collection.events'], 0);
     });
 
+    test('a session has replay while its first clip is still encoding',
+        () async {
+      final source = SlowReplaySource();
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.buffer, maxAgeMs: 600000);
+      expect(c.hasReplayFor('s1'), isFalse);
+      expect(c.flush(30000, null), isTrue);
+      expect(source.pending, 1);
+      expect(c.budget.hasUploaded('s1'), isFalse);
+      expect(c.hasReplayFor('s1'), isTrue);
+      expect(c.hasReplayFor('s2'), isFalse);
+      source.release();
+      await c.drain();
+      expect(c.hasReplayFor('s1'), isTrue);
+      expect(c.budget.hasUploaded('s1'), isTrue);
+    });
+
+    test('a clip that encodes to nothing leaves the session without replay',
+        () async {
+      final source = SlowReplaySource()..empty = true;
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.buffer, maxAgeMs: 600000);
+      source.empty = false;
+      expect(c.flush(30000, null), isTrue);
+      source.empty = true;
+      expect(c.hasReplayFor('s1'), isTrue);
+      source.release();
+      await c.drain();
+      expect(c.hasReplayFor('s1'), isFalse);
+    });
+
     test('off stops the source, clears frames and refuses to flush', () async {
       final source = FakeReplaySource();
       final c = controller()

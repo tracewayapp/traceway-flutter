@@ -15,7 +15,8 @@ class SessionRecordingPayload {
   /// Wall-clock timestamp of the first frame in this recording.
   final DateTime? startedAt;
 
-  /// Wall-clock timestamp of the last frame in this recording.
+  /// Wall-clock time the recording ends: for a video, when its last frame
+  /// stops showing (the start plus the video's duration).
   final DateTime? endedAt;
 
   const SessionRecordingPayload({

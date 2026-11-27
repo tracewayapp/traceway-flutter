@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../core/endpoints.dart';
+import 'outbox.dart' show isTransientFailure;
 
 /// 1.x saved each exception together with its clip, without saving its project.
 class LegacyReports {
@@ -54,8 +55,9 @@ class LegacyReports {
         final dynamic entry;
         try {
           entry = jsonDecode(await file.readAsString());
-        } on FormatException {
-          await file.delete();
+        } on Exception {
+          // Corrupt or unreadable: kept, it would stop every drain here.
+          await _delete(file);
           continue;
         }
         if (entry is! Map ||
@@ -86,11 +88,25 @@ class LegacyReports {
               body: gzip.encode(utf8.encode(body)),
             )
             .timeout(const Duration(seconds: 10));
-        if (response.statusCode != 200) return;
+        final status = response.statusCode;
+        final delivered = status >= 200 && status < 300;
+        final rejected =
+            status >= 400 && status < 500 && !isTransientFailure(status);
+        // Throttled or a server error: the next drain sends it again.
+        if (!delivered && !rejected) return;
+        // Delivered, or rejected for good: either way it is done.
         await file.delete();
       }
     } catch (_) {
       // A concurrent migration or interrupted upload can be retried on resume.
+    }
+  }
+
+  static Future<void> _delete(File file) async {
+    try {
+      await file.delete();
+    } on FileSystemException {
+      // Gone already, or stuck: either way the drain goes on.
     }
   }
 }

@@ -54,7 +54,10 @@ class TracewayOptions {
   /// drain its pending errors and clips. Those files contain no project ID.
   final String? legacyConnectionString;
 
-  /// Capture every `print` / `debugPrint` line as a log record.
+  /// Capture every `print` / `debugPrint` line as a log record (level
+  /// info), every `package:logging` record with its level, and
+  /// [Traceway.log]. `dart:developer`'s `log` cannot be captured: it does
+  /// not go through the app's zone.
   final bool captureLogs;
 
   /// Install [HttpOverrides] so every dart:io HTTP call is recorded as a

@@ -82,11 +82,15 @@ try {
 // Capture a message
 TracewayClient.instance?.captureMessage('User completed checkout');
 
+// A log line with a level (a printed line is info)
+Traceway.log('payment declined', level: TracewayLogLevel.warn);
+
 // A named product event; triggers can match it by name
 Traceway.track('checkout_failed', {'reason': 'card_declined'});
 
 // Attributes attached to every later record, and usable to target this
-// user or device from the dashboard
+// user or device from the dashboard. The session is updated with them at
+// once.
 Traceway.setAttribute('user.id', user.id);
 
 // Send what is ready now
@@ -107,7 +111,7 @@ Every record is an OpenTelemetry log record or span and belongs to a *signal*. E
 |--------|--------|---------|
 | `errors` | uncaught errors, `captureException` | stream |
 | `messages` | `captureMessage` | stream |
-| `console` | `print` / `debugPrint` | buffer |
+| `console` | `package:logging`, `Traceway.log`, `print` / `debugPrint` | buffer |
 | `network` | HTTP requests (client spans) | buffer |
 | `navigation` | `Traceway.navigatorObserver`, `Traceway.recordNavigation` | buffer |
 | `userActions` | taps (`browser.user_action.click`) | buffer |
@@ -176,7 +180,7 @@ The dashboard's *recording trigger* steps work in Flutter. A step is one of:
 | `{"event": {"type": "click", "value": "<selector>"}}` | a tap on a widget the selector matches, or inside one |
 | `{"event": {"type": "hover", "value": "<selector>"}}` | the mouse entering a matching widget (desktop; never touch) |
 | `{"event": {"type": "navigation", "value": "/users/{id}"}}` | arriving at a route; `{id}` is one non-empty segment |
-| `{"event": {"type": "log", "value": "Profile loaded", "mode": "contains"}}` | a `print` / `debugPrint` line or a `captureMessage` (`exact` by default) |
+| `{"event": {"type": "log", "value": "Profile loaded", "mode": "contains"}}` | a log line (`print` / `debugPrint`, `package:logging`, `Traceway.log`) or a `captureMessage` (`exact` by default) |
 
 Steps match in order, each within its `withinSeconds` of the previous one; progress survives an app restart within the session. When a trigger that asks for replay fires, the session lists it as a recording reason with its sequence.
 
@@ -206,8 +210,10 @@ Widget type names are minified in `--obfuscate` builds: there, match by key, ide
 A navigation step matches the path the observer reports for the route on top:
 
 - its name (`RouteSettings.name`): named routes, `onGenerateRoute`, and routers that name their pages,
-- else `/` and the page widget's type, e.g. `/CheckoutPage` for `MaterialPageRoute(builder: (_) => const CheckoutPage())`,
+- else `/` and the page widget's type, e.g. `/CheckoutPage` for `MaterialPageRoute(builder: (_) => const CheckoutPage())` or `PageRouteBuilder(pageBuilder: (_, __, ___) => const CheckoutPage())`,
 - else `/` and the route's type, e.g. `/DialogRoute`.
+
+Dialogs, bottom sheets, menus and dropdowns are recorded as navigations with `navigation.overlay: true`, but the screen under them stays the current screen, for issues, taps and screen metrics.
 
 A router that does not report to a `NavigatorObserver` can report its location itself:
 
@@ -350,7 +356,7 @@ A `telemetry` URL that is not HTTP(S) or carries credentials, a query or a fragm
 | `maxBufferFrames` | `150` | Frames in the recording ring buffer (~10s at 15fps); the upper bound of every clip |
 | `fps` | `15` | Frames per second for screen capture (1–59) |
 | `persistToDisk` | `true` | Keep SDK state and undelivered telemetry on disk across restarts |
-| `captureLogs` | `true` | Capture every `print` / `debugPrint` |
+| `captureLogs` | `true` | Capture `package:logging` records, `Traceway.log` and every `print` / `debugPrint` |
 | `captureNetwork` | `true` | Install `HttpOverrides.global` to record every dart:io HTTP call |
 | `captureNavigation` | `true` | Record navigation transitions reported by `Traceway.navigatorObserver` |
 | `captureUserActions` | `true` | Record taps with the selector of the widget, and feed taps and hovers to recording triggers |
@@ -404,10 +410,17 @@ A regression suite (`tool/e2e/wireframe`) runs a gallery of layouts, scrolling, 
 
 Breadcrumbs are OpenTelemetry records held in the ring buffer and shown on the session timeline next to the exception that flushed them:
 
-- **Logs** — every `print` / `debugPrint` line, captured via a Zone print override. `dart:developer.log` is **not** captured.
+- **Logs** — with a level, so the timeline shows warnings and errors and the console's minimum severity in the remote settings filters them:
+  - every `package:logging` record, with its level (`FINE` is debug, `WARNING` warn, `SEVERE` error, `SHOUT` fatal), logger name (`logger.name`), error and stack trace. An app that prints its records itself (`Logger.root.onRecord.listen(print)`) gets each one recorded once, not again as a printed line.
+  - `Traceway.log(message, level: ...)`, with an optional error, stack trace and attributes.
+  - every `print` / `debugPrint` line, as info, captured via a Zone print override. The console dump of an error the SDK already reported is not recorded again as lines.
+  - `dart:developer.log` is **not** captured: it does not go through the app's zone.
+  Each log says where it came from in `log.source` (`logging`, `api` or `print`). Debug and trace logs are dropped unless the console's minimum severity (`info` by default) is lowered in the settings.
 - **Network** — every dart:io HTTP request as a client span (method, URL, status, duration, byte counts) via `HttpOverrides.global`. Catches `package:http`, Dio, Firebase, anything on dart:io. The SDK's own requests are not recorded. Clients that do not sit on dart:io need `TracewayHttpClient` (see below).
 - **Navigation** — push / pop / replace / remove from any `Navigator`, by attaching `Traceway.navigatorObserver` to your app.
-- **Taps** — every tap inside the `Traceway` widget, with the selector, type, id, shown text and label of the widget, and the screen (`browser.user_action.click`, with the OpenTelemetry `app.widget.*` and `app.screen.*` attributes).
+- **Taps** — every tap inside the `Traceway` widget, with the selector, type, id, shown text and label of the widget, and the screen (`browser.user_action.click`, with the OpenTelemetry `app.widget.*` and `app.screen.*` attributes). A long press is not a tap.
+
+Every exception and `captureMessage` also says where the app was when it happened: `app.screen.name` (the screen on top; a dialog, sheet or menu over it does not change it), `app.screen.previous`, `app.screen.duration_ms` (how long the screen had been shown) and `viewport` (the window's size in logical pixels). Attributes you pass to `captureException` win over these.
 - **Custom** — anything you call `Traceway.recordAction(...)` or `Traceway.track(...)` with.
 
 ### Wire up navigation capture
