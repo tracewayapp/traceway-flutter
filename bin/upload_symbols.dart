@@ -84,7 +84,13 @@ Future<void> main(List<String> argv) async {
     exit(1);
   }
 
-  final uploadUrl = symbolsUploadEndpoint(url);
+  final String uploadUrl;
+  try {
+    uploadUrl = symbolsUploadEndpoint(url);
+  } on ArgumentError catch (error) {
+    stderr.writeln(error.message);
+    exit(2);
+  }
 
   if (args['dry-run'] == true) {
     stdout.writeln('dry run — would upload to $uploadUrl');

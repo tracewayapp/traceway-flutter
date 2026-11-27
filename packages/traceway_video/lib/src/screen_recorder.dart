@@ -106,12 +106,16 @@ class ScreenRecorder
   final CircularBuffer<CapturedFrame> _buffer;
   final bool debug;
 
-  /// Pixelates what is typed into text fields, as the wireframe masks it
-  /// and rrweb's `maskAllInputs` does; the settings turn it off
-  /// (`replay.maskAllInputs`). Obscured and read-only fields are left as
-  /// they are drawn.
+  /// Pixelates ordinary editable fields. Password fields are always blanked.
+  bool get maskAllInputs => _maskAllInputs;
+  bool _maskAllInputs = true;
+  int _generation = 0;
+
   @override
-  bool maskAllInputs = true;
+  set maskAllInputs(bool value) {
+    if (value && !_maskAllInputs) clearBuffer();
+    _maskAllInputs = value;
+  }
 
   late final int _captureIntervalMs = 1000 ~/ fps;
 
@@ -162,7 +166,10 @@ class ScreenRecorder
 
   /// Forgets every buffered frame, e.g. when replay is switched off remotely.
   @override
-  void clearBuffer() => _buffer.clear();
+  void clearBuffer() {
+    _generation++;
+    _buffer.clear();
+  }
 
   @override
   void start() {
@@ -198,6 +205,9 @@ class ScreenRecorder
   static bool _pausedIn(AppLifecycleState? state) =>
       state != null && state != AppLifecycleState.resumed;
 
+  @visibleForTesting
+  Future<void> captureFrameForTest() => _captureFrame();
+
   Future<void> _captureFrame() async {
     if (_isCapturing || _isPaused) return;
 
@@ -207,6 +217,7 @@ class ScreenRecorder
     final boundary = context.findRenderObject();
     if (boundary is! RenderRepaintBoundary) return;
 
+    final generation = _generation;
     _isCapturing = true;
     try {
       // Read in the same turn as the picture is taken, so every mask is
@@ -222,7 +233,7 @@ class ScreenRecorder
         image.dispose();
       }
 
-      if (byteData != null) {
+      if (generation == _generation && byteData != null) {
         _buffer.push(CapturedFrame(
           pngBytes: byteData.buffer.asUint8List(),
           width: width,
@@ -450,6 +461,7 @@ class ScreenRecorder
     DateTime? since,
     DateTime? until,
   }) async {
+    final generation = _generation;
     final window =
         _buffer.readAll().where((f) => _inWindow(f, since, until)).toList();
     if (window.isEmpty) return null;
@@ -466,7 +478,10 @@ class ScreenRecorder
     await previous;
 
     File? videoFile;
+    VideoEncoder? openedEncoder;
+    SessionRecordingPayload? clip;
     try {
+      if (generation != _generation) return null;
       // Find max dimensions across all frames so the encoder can handle
       // screen size changes (rotation, keyboard, navigation bar).
       int maxWidth = 0;
@@ -481,6 +496,7 @@ class ScreenRecorder
       if (maxHeight.isOdd) maxHeight++;
 
       final tempDir = await getTemporaryDirectory();
+      if (generation != _generation) return null;
       final outputPath = '${tempDir.path}/traceway_$clipId.mp4';
       videoFile = File(outputPath);
 
@@ -493,6 +509,8 @@ class ScreenRecorder
         filepath: outputPath,
         debug: debug,
       );
+
+      openedEncoder = encoder;
 
       // Decode each PNG → RGBA, apply masks, draw touch circle, feed to encoder.
       // Frames smaller than maxWidth×maxHeight are padded with dark grey.
@@ -540,11 +558,14 @@ class ScreenRecorder
         // A frame on screen for longer is the same picture again, built
         // once.
         for (var n = 0; n < holds[i]; n++) {
+          if (generation != _generation) return null;
           await encoder.appendFrame(output);
         }
       }
 
+      openedEncoder = null;
       await encoder.finish();
+      if (generation != _generation) return null;
 
       final videoBytes = await videoFile.readAsBytes();
       final base64Video = base64Encode(videoBytes);
@@ -554,7 +575,7 @@ class ScreenRecorder
         print('Traceway: encoded ${frames.length} frames as $encodedFrames (buffer: ${bufferKB}KB) to ${videoBytes.length ~/ 1024}KB MP4 (${durationSeconds.toStringAsFixed(1)}s)');
       }
 
-      return SessionRecordingPayload(
+      clip = SessionRecordingPayload(
         clipId: clipId,
         events: [
           {
@@ -576,6 +597,9 @@ class ScreenRecorder
       }
       return null;
     } finally {
+      try {
+        await openedEncoder?.finish();
+      } catch (_) {}
       // Also after an encode that failed half way: the file is not left in
       // the app's temporary directory.
       try {
@@ -585,5 +609,6 @@ class ScreenRecorder
       } catch (_) {}
       completer.complete();
     }
+    return generation == _generation ? clip : null;
   }
 }

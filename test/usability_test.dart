@@ -282,21 +282,60 @@ void main() {
   });
 
   group('FLT2-7 / FLT2-17: version and requirements', () {
-    test('2.1.0 everywhere: both pubspecs, the SDK, both CHANGELOGs', () {
-      String version(String path) =>
-          RegExp(r'^version: (\S+)$', multiLine: true)
-              .firstMatch(File(path).readAsStringSync())!
-              .group(1)!;
-      expect(version('pubspec.yaml'), '2.1.0');
-      expect(version('packages/traceway_video/pubspec.yaml'), '2.1.0');
-      expect(tracewaySdkVersion, '2.1.0');
-      for (final changelog in [
-        'CHANGELOG.md',
-        'packages/traceway_video/CHANGELOG.md'
-      ]) {
-        expect(File(changelog).readAsLinesSync().first, '## 2.1.0 — unreleased',
-            reason: changelog);
+    test('both packages, the SDK, and their changelogs agree on the version', () {
+      final expected = tracewaySdkVersion;
+      for (final dir in ['', 'packages/traceway_video/']) {
+        final pubspec = File('${dir}pubspec.yaml').readAsLinesSync();
+        expect(pubspec, contains('version: $expected'));
+        if (dir.isNotEmpty) expect(pubspec, contains('  traceway: ^$expected'));
+        final heading = File('${dir}CHANGELOG.md').readAsLinesSync().first;
+        expect(heading, matches(RegExp('^## ${RegExp.escape(expected)} — '
+            r'(unreleased|\d{4}-\d{2}-\d{2})$')));
       }
+    });
+
+    test('stable preparation accepts the untagged package version and the next',
+        () async {
+      final sandbox = Directory.systemTemp.createTempSync('traceway_release');
+      addTearDown(() => sandbox.deleteSync(recursive: true));
+      for (final path in ['pubspec.yaml', 'CHANGELOG.md', 'lib/src/sdk_version.dart',
+        'packages/traceway_video/pubspec.yaml', 'packages/traceway_video/CHANGELOG.md']) {
+        final target = File('${sandbox.path}/$path');
+        target.parent.createSync(recursive: true);
+        File(path).copySync(target.path);
+      }
+      await Process.run('git', ['init', '-q'], workingDirectory: sandbox.path);
+      final notes = File('${sandbox.path}/notes')..writeAsStringSync('- release notes\n');
+      final prepare = File('tool/prepare_release.sh').absolute.path;
+      final current = tracewaySdkVersion;
+      for (final version in [current, '99.1.2']) {
+        final run = await Process.run('bash', [prepare, version, notes.path],
+            workingDirectory: sandbox.path);
+        expect(run.exitCode, 0, reason: '${run.stdout}\n${run.stderr}');
+        for (final dir in ['', 'packages/traceway_video/']) {
+          final base = '${sandbox.path}/$dir';
+          final changelog = File('${base}CHANGELOG.md').readAsLinesSync();
+          expect(changelog.first, startsWith('## $version — '));
+          expect(changelog.first, isNot(contains('unreleased')));
+          expect(changelog.where((l) => l.startsWith('## $version — ')), hasLength(1));
+          final pubspec = File('${base}pubspec.yaml').readAsLinesSync();
+          expect(pubspec, contains('version: $version'));
+          if (dir.isNotEmpty) expect(pubspec, contains('  traceway: ^$version'));
+        }
+        expect(File('${sandbox.path}/lib/src/sdk_version.dart').readAsStringSync(),
+            contains("tracewaySdkVersion = '$version';"));
+      }
+      // A tag may already be present even when the package still says unreleased.
+      final blob = await Process.run('git', ['hash-object', '-w', 'notes'],
+          workingDirectory: sandbox.path);
+      final tagged = await Process.run('git',
+          ['update-ref', 'refs/tags/v99.1.2', blob.stdout.toString().trim()],
+          workingDirectory: sandbox.path);
+      expect(tagged.exitCode, 0);
+      final duplicate = await Process.run('bash', [prepare, '99.1.2', notes.path],
+          workingDirectory: sandbox.path);
+      expect(duplicate.exitCode, isNot(0));
+      expect(duplicate.stderr, contains('already exists'));
     });
 
     test('pub says which Flutter it needs', () {
@@ -312,8 +351,9 @@ void main() {
       final changelog = File('${dir.path}/CHANGELOG.md')
         ..writeAsStringSync('## 2.1.0 — unreleased\n\n- a change\n\n## 2.0.0\n');
       final notes = File('${dir.path}/notes')..writeAsStringSync('- noted\n');
-      expect(File('publish.sh').readAsStringSync(),
-          contains('tool/update_changelog.sh'));
+      for (final script in ['publish.sh', '.github/workflows/release.yml']) {
+        expect(File(script).readAsStringSync(), contains('tool/prepare_release.sh'));
+      }
       Future<void> run(String version) async {
         final result = await Process.run('bash',
             [File('tool/update_changelog.sh').absolute.path, version, notes.path],

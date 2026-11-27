@@ -8,6 +8,7 @@ import '../guarded.dart';
 import '../replay/json_size.dart';
 import '../replay/replay_source.dart';
 import '../traceway_image_policy.dart';
+import 'segment_images.dart';
 import 'vnode.dart';
 import 'wireframe_capture.dart';
 import 'wireframe_css.dart';
@@ -253,6 +254,9 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     }
   }
 
+  @visibleForTesting
+  void addFrameForTest(WireframeFrame frame) => _push(frame);
+
   void _push(WireframeFrame frame) {
     final last = _frames.isEmpty ? null : _frames.last;
     if (last != null &&
@@ -408,6 +412,7 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
       previous = frame;
     }
 
+    limitWireframeSegmentImages(screenEvents);
     final pointerEvents = <Map<String, Object?>>[];
     final moves = <WireframePointer>[];
     void flushMoves() {

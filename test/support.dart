@@ -185,4 +185,3 @@ class FakeVideoBackend implements TracewayVideoBackend {
     return recorder;
   }
 }
-

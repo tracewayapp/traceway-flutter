@@ -4,3 +4,4 @@
   and call `TracewayVideo.register()` before `Traceway.run` to record `TracewayScreenCaptureMode.video`; the core
   package records wireframes and has no native code. `TracewayVideo.register(encoder:)` takes a `VideoEncoder` of the
   app's, for platforms without a hardware encoder.
+- Password fields are blanked on every frame. Enabling input masking drops earlier frames and cancels clips still being encoded.

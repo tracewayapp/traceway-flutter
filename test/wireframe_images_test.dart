@@ -814,6 +814,71 @@ void main() {
       recorder.stop();
     });
 
+    testWidgets('a rendered photo falls back to layout across repeated snapshots',
+        (tester) async {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      final start = now;
+      final photo = (await tester.runAsync(
+          () => imageOf(noise(192, 192, 5), 192, 192)))!;
+      addTearDown(photo.dispose);
+      await tester.pumpWidget(_screen([
+        _box(Image(image: _Picture(photo)), width: 192, height: 192),
+        const Text('Gallery'),
+      ]));
+      final recorder = WireframeRecorder(
+          rootKey: _rootKey, maxFrames: 64, now: () => now)
+        ..imagePolicy = TracewayImagePolicy.always;
+      addTearDown(recorder.stop);
+      await tester.runAsync(() async {
+        Future<void> settle() async {
+          for (var i = 0; i < 500 && !recorder.isSettled; i++) {
+            now = now.add(const Duration(milliseconds: 10));
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+          expect(recorder.isSettled, isTrue);
+        }
+
+        recorder.start();
+        await settle();
+        now = now.add(const Duration(seconds: 1));
+        final small = (await recorder.captureRecording('small', until: now))!;
+        final jpegUrl = RegExp(r'data:image/jpeg;base64,[A-Za-z0-9+/=]+')
+            .allMatches(jsonEncode(small.events))
+            .single
+            .group(0)!;
+        final photoBytes = base64Decode(jpegUrl.split(',').last);
+        expect(photoBytes.take(3), [0xff, 0xd8, 0xff]);
+
+        // Each return to the app needs its own full snapshot. The same
+        // recorded photo is drawn from cache, and serialized once per return.
+        final repeats = (128 * 1024) ~/ jpegUrl.length;
+        expect(repeats, inInclusiveRange(1, 30));
+        for (var i = 0; i < repeats; i++) {
+          recorder.didChangeAppLifecycleState(AppLifecycleState.paused);
+          now = now.add(const Duration(milliseconds: 20));
+          recorder.didChangeAppLifecycleState(AppLifecycleState.resumed);
+          await settle();
+          now = now.add(const Duration(milliseconds: 20));
+        }
+        recorder.pointerDown(1, const Offset(12, 34), touch: true);
+        now = now.add(const Duration(milliseconds: 10));
+        final large =
+            (await recorder.captureRecording('large', since: start, until: now))!;
+        final json = jsonEncode(large.events);
+        expect(json, isNot(contains('data:image/')));
+        expect(json, contains('Gallery'));
+        expect(json, contains('width:192px;height:192px'));
+        expect(
+            large.events.where((e) =>
+                e['type'] == 3 && (e['data'] as Map)['source'] == 2),
+            isNotEmpty);
+
+        final fresh = (await recorder.captureRecording('fresh',
+            since: now.subtract(const Duration(milliseconds: 5)), until: now))!;
+        expect(jsonEncode(fresh.events), contains(jpegUrl));
+      });
+    });
+
     test('the image budget: 4 MiB per session, kept with the replay budget',
         () {
       final budget = CollectionBudget();

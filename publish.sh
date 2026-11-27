@@ -37,15 +37,6 @@ if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
   exit 0
 fi
 
-# --- 5. Bump version in pubspec.yaml ---
-echo ""
-echo "Bumping version to $NEW_VERSION..."
-sed -i.bak "s/^version: .*/version: $NEW_VERSION/" pubspec.yaml
-sed -i.bak "s/^const String tracewaySdkVersion = .*/const String tracewaySdkVersion = '$NEW_VERSION';/" lib/src/sdk_version.dart
-# The video add-on ships with the same version.
-sed -i.bak "s/^version: .*/version: $NEW_VERSION/" packages/traceway_video/pubspec.yaml
-rm -f pubspec.yaml.bak lib/src/sdk_version.dart.bak packages/traceway_video/pubspec.yaml.bak
-
 # --- 6. Update CHANGELOG.md ---
 echo ""
 echo "What changed in this version? (one change per line, empty line to finish):"
@@ -67,7 +58,7 @@ NOTES_FILE=$(mktemp)
 echo -e "$CHANGES" > "$NOTES_FILE"
 # "## Unreleased" or "## $NEW_VERSION — unreleased" becomes this release's
 # heading; there is never a second one.
-bash tool/update_changelog.sh "$NEW_VERSION" "$NOTES_FILE"
+bash tool/prepare_release.sh "$NEW_VERSION" "$NOTES_FILE"
 rm -f "$NOTES_FILE"
 echo ""
 echo "CHANGELOG.md updated."
@@ -75,7 +66,7 @@ echo "CHANGELOG.md updated."
 # --- 6b. Commit version bump before publish ---
 echo ""
 echo "Committing version bump and changelog..."
-git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart packages/traceway_video/pubspec.yaml
+git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart packages/traceway_video/{pubspec.yaml,CHANGELOG.md}
 git commit -m "v$NEW_VERSION"
 
 # --- 7. Run analysis and tests ---
@@ -116,7 +107,8 @@ echo "  Published traceway v$NEW_VERSION"
 echo "========================================"
 echo ""
 echo "Publish the video add-on with the same version once traceway is live:"
-echo "  (cd packages/traceway_video && dart pub publish)"
+echo "  Publish from a clean copy of the tag with packages/traceway_video/pubspec_overrides.yaml removed."
+echo "  From packages/traceway_video run flutter pub get, dart pub publish --dry-run, then dart pub publish."
 echo ""
 echo "Don't forget to push commits and tags:"
 echo "  git push && git push --tags"

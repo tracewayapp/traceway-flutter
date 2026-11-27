@@ -23,6 +23,11 @@ void main() {
   // CONTRACT §16.1: the table every SDK's tests share.
   group('parseConnectionString: every variation (§16.1)', () {
     const valid = {
+      'tok@http://api': 'http://api',
+      'tok@api/': 'https://api',
+      'tok@http://api/report': 'http://api/report',
+      'tok@http://api/api/report?old=1': 'http://api',
+      'tok@http://api/a%2Fb/api': 'http://api/a%2Fb',
       'tok@https://cloud.tracewayapp.com': 'https://cloud.tracewayapp.com',
       'tok@https://cloud.tracewayapp.com/': 'https://cloud.tracewayapp.com',
       'tok@https://cloud.tracewayapp.com/api': 'https://cloud.tracewayapp.com',

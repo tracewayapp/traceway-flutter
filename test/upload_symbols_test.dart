@@ -42,6 +42,10 @@ void main() {
 
   group('symbolsUploadEndpoint', () {
     const cases = {
+      'http://api': 'http://api/api/symbols/upload',
+      'api/': 'https://api/api/symbols/upload',
+      'http://api/report': 'http://api/report/api/symbols/upload',
+      'http://api/symbols/upload': 'http://api/symbols/upload/api/symbols/upload',
       'https://cloud.tracewayapp.com':
           'https://cloud.tracewayapp.com/api/symbols/upload',
       'https://cloud.tracewayapp.com/':
@@ -62,6 +66,12 @@ void main() {
       'https://corp.example/traceway/api/symbols/upload':
           'https://corp.example/traceway/api/symbols/upload',
     };
+    test('rejects unusable server URLs before attempting an upload', () {
+      for (final url in ['', 'ftp://api', 'http://']) {
+        expect(() => symbolsUploadEndpoint(url), throwsArgumentError);
+      }
+    });
+
     cases.forEach((url, endpoint) {
       test('$url -> $endpoint', () {
         expect(symbolsUploadEndpoint(url), endpoint);

@@ -72,7 +72,7 @@ The encoder plugin is CocoaPods only: an app built with Swift Package Manager al
 4. It is uploaded to Traceway's recordings endpoint, like a wireframe clip.
 
 Touches are drawn onto the frames. Masks (`TracewayMask`, `ValueKey('traceway-mask')`) pixelate or blank their
-widget, and with `replay.maskAllInputs` on (the default) the text typed into fields is pixelated. The dashboard can
+widget. Password fields are always covered by an opaque mask. With `replay.maskAllInputs` on (the default), other editable fields are pixelated. Turning it on discards earlier frames and invalidates clips still encoding. The dashboard can
 switch a session between video and wireframe (`replay.captureMode`); one session's replay is all one or the other.
 
 ## Migrating from traceway 2.0

@@ -57,7 +57,7 @@ bool isMaskMarker(Key? key) =>
 
 /// Where every mask under [root] is right now, in the coordinates of the
 /// render box [root] paints into: [TracewayMask] widgets and widgets with a
-/// marker key, in tree order, and with [maskAllInputs] every text field the
+/// marker key, obscured fields (blanked), and with [maskAllInputs] every field the
 /// user types into (blurred). Read from the render tree when a frame is
 /// captured, so a mask stays on its widget while that scrolls, animates or
 /// is transformed: the rectangle is the bounds of the widget as it was last
@@ -86,13 +86,12 @@ List<MaskRegion> maskRegionsIn(BuildContext root,
       add(element.findRenderObject(), mode);
       if (mode is TracewayMaskBlank) return;
     }
-    if (maskAllInputs && element is RenderObjectElement) {
-      final editable = element.renderObject;
-      // What is typed, not what is shown (SelectableText) or already
-      // obscured (a password).
-      if (editable is RenderEditable &&
-          !editable.readOnly &&
-          !editable.obscureText) {
+    if (element is RenderObjectElement && element.renderObject is RenderEditable) {
+      final editable = element.renderObject as RenderEditable;
+      if (editable.obscureText) {
+        // A mobile password field can briefly paint the last typed character.
+        add(editable, const TracewayMaskBlank());
+      } else if (maskAllInputs && !editable.readOnly) {
         add(editable, const TracewayMaskBlur());
       }
     }

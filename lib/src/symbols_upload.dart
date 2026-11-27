@@ -3,11 +3,11 @@
 /// Flutter, so the command-line tool can import it.
 library;
 
+import 'base_url.dart';
+
 /// Traceway Cloud: where symbols go when no flag, `TRACEWAY_URL` or
 /// `traceway.url` names a self-hosted server.
-const String symbolsUploadDefaultUrl = 'https://cloud.tracewayapp.com';
-
-const _localHosts = {'localhost', '127.0.0.1', '10.0.2.2', '[::1]'};
+const String symbolsUploadDefaultUrl = defaultBaseUrl;
 
 /// The first of [values] that is not blank, trimmed; null when all are.
 String? firstNonEmpty(Iterable<String?> values) {
@@ -36,22 +36,12 @@ String resolveSymbolsUploadUrl({
 /// fragment and trailing slashes dropped, then a trailing `/api/report`,
 /// else `/api`. A URL that already ends in the endpoint is kept.
 String symbolsUploadEndpoint(String url) {
-  var u = url.trim();
-  if (!RegExp(r'^[a-zA-Z][a-zA-Z\d+.-]*://').hasMatch(u)) {
-    final authority = u.split(RegExp(r'[/?#]')).first;
-    final host = authority.startsWith('[')
-        ? authority.substring(0, authority.indexOf(']') + 1)
-        : authority.split(':').first;
-    u = '${_localHosts.contains(host.toLowerCase()) ? 'http' : 'https'}://$u';
+  final base = normalizeBaseUrl(url);
+  if (base == null) {
+    throw ArgumentError('The symbol upload URL must be an HTTP(S) URL with a host.');
   }
-  u = u.replaceFirst(RegExp(r'[?#].*$'), '').replaceFirst(RegExp(r'/+$'), '');
-  if (u.endsWith('/api/symbols/upload')) {
-    return u;
-  }
-  u = u
-      .replaceFirst(RegExp(r'/api(/report)?$'), '')
-      .replaceFirst(RegExp(r'/+$'), '');
-  return '$u/api/symbols/upload';
+  const endpoint = '/api/symbols/upload';
+  return Uri.parse(base).path.endsWith(endpoint) ? base : '$base$endpoint';
 }
 
 /// The `key: value` pairs of the top-level `traceway:` block of a

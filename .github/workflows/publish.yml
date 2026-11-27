@@ -37,6 +37,7 @@ jobs:
       - name: Resolve version from tag
         id: ver
         run: |
+          [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" == v* ]] || exit 1
           VERSION="${GITHUB_REF_NAME#v}"
           PUBSPEC=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
           if [ "$PUBSPEC" != "$VERSION" ]; then
@@ -83,8 +84,11 @@ jobs:
             if [ "$code" = 200 ]; then
               echo "$package $VERSION is already on pub.dev: skipping it"
               echo "$package=true" >> $GITHUB_OUTPUT
-            else
+            elif [ "$code" = 404 ]; then
               echo "$package=false" >> $GITHUB_OUTPUT
+            else
+              echo "Registry lookup for $package returned HTTP $code" >&2
+              exit 1
             fi
           done
 
@@ -115,6 +119,7 @@ jobs:
             echo "waiting for traceway $VERSION on pub.dev ($attempt/30)"
             sleep 20
           done
+          [ "$code" = 200 ] || { echo "traceway $VERSION did not appear on pub.dev" >&2; exit 1; }
           flutter pub get
 
       - name: Publish traceway_video - dry run

@@ -647,7 +647,7 @@ void main() {
   });
 
   group('FLT-11: video and maskAllInputs', () {
-    testWidgets('typed text fields are mask regions, others are not',
+    testWidgets('password pixels are blank even when general input masking is off',
         (tester) async {
       final root = GlobalKey();
       await tester.pumpWidget(MaterialApp(
@@ -665,15 +665,24 @@ void main() {
         ),
       ));
       final context = root.currentContext!;
-      expect(maskRegionsIn(context), isEmpty);
-      final regions = maskRegionsIn(context, maskAllInputs: true);
-      expect(regions, hasLength(1));
+      final origin = tester.getTopLeft(find.byKey(root));
+      final password = tester.allRenderObjects.whereType<RenderEditable>()
+          .singleWhere((r) => r.obscureText);
+      final passwordBounds = MatrixUtils.transformRect(
+          password.getTransformTo(null), Offset.zero & password.size);
+      for (final all in [false, true]) {
+        final regions = maskRegionsIn(context, maskAllInputs: all);
+        expect(regions, hasLength(all ? 2 : 1));
+        final blank = regions.singleWhere((r) => r.mode is TracewayMaskBlank);
+        expect(blank.rect.shift(origin), passwordBounds);
+      }
+      final regions = maskRegionsIn(context, maskAllInputs: true)
+          .where((r) => r.mode is TracewayMaskBlur);
       final typed = tester.allRenderObjects
           .whereType<RenderEditable>()
           .singleWhere((r) => !r.obscureText && !r.readOnly);
       final field = MatrixUtils.transformRect(
           typed.getTransformTo(null), Offset.zero & typed.size);
-      final origin = tester.getTopLeft(find.byKey(root));
       expect(regions.single.rect.shift(origin), field);
       expect(regions.single.mode, isA<TracewayMaskBlur>());
     });

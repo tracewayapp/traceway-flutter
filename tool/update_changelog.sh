@@ -9,7 +9,11 @@ VERSION="$1"
 NOTES_FILE="$2"
 DATE=$(date +%Y-%m-%d)
 HEADING="## $VERSION — $DATE"
-UNRELEASED="^## (Unreleased|${VERSION//./\\.} — unreleased)\$"
+UNRELEASED='^## (Unreleased|[^ ]+ — unreleased)$'
+# A prepared checkout may be validated or prepared again before it is tagged.
+if awk -v version="$VERSION" '$1 == "##" && $2 == version && $4 ~ /^[0-9]/ {found=1} END {exit !found}' CHANGELOG.md; then
+  exit 0
+fi
 if grep -Eq "$UNRELEASED" CHANGELOG.md; then
   HEADING="$HEADING" NOTES="$(cat "$NOTES_FILE")" PATTERN="$UNRELEASED" awk '
     !done && $0 ~ ENVIRON["PATTERN"] {

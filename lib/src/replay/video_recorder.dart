@@ -5,8 +5,9 @@ import 'replay_source.dart';
 /// A recorder of video replay, which the `traceway_video` add-on provides:
 /// the core package records wireframes only and has no native code.
 abstract class TracewayVideoRecorder implements ReplaySource {
-  /// Whether what is typed into text fields is hidden in the video, as the
-  /// wireframe masks it; the settings turn it off (`replay.maskAllInputs`).
+  /// Whether ordinary editable fields are masked (`replay.maskAllInputs`).
+  /// Password fields always require an opaque mask. When enabled, discard
+  /// buffered frames and in-flight work captured under the previous setting.
   set maskAllInputs(bool value);
 
   /// Where a finger or the mouse is on the screen, in logical pixels, so the

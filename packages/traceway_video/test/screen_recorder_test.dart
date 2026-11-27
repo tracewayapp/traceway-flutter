@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -11,6 +12,8 @@ class _FakeEncoder implements VideoEncoder {
   final List<Uint8List> frames = [];
   late String filepath;
   late int fps;
+  final started = Completer<void>();
+  Future<void>? pause;
 
   @override
   Future<void> setup({
@@ -22,6 +25,8 @@ class _FakeEncoder implements VideoEncoder {
   }) async {
     this.filepath = filepath;
     this.fps = fps;
+    if (!started.isCompleted) started.complete();
+    await pause;
   }
 
   @override
@@ -81,6 +86,27 @@ void main() {
           for (final f in encoder.frames)
             encoder.frames.indexWhere((other) => identical(other, f)),
         ];
+
+    test('tightening masking invalidates buffered, encoding and queued clips',
+        () async {
+      final recorder = ScreenRecorder(repaintBoundaryKey: GlobalKey(), maxFrames: 3)
+        ..maskAllInputs = false
+        ..addFrame(frame(0));
+      final resume = Completer<void>();
+      encoder.pause = resume.future;
+      final active = recorder.captureRecording('active');
+      await encoder.started.future;
+      final queued = recorder.captureRecording('queued');
+      recorder.maskAllInputs = true;
+      resume.complete();
+      expect(await active, isNull);
+      expect(await queued, isNull);
+      expect(recorder.hasFrames(), isFalse);
+      expect(await recorder.captureRecording('lookback'), isNull);
+      recorder.addFrame(frame(100));
+      recorder.maskAllInputs = true;
+      expect(await recorder.captureRecording('fresh'), isNotNull);
+    });
 
     test('each frame is held as long as it was on screen', () async {
       final recorder = ScreenRecorder(

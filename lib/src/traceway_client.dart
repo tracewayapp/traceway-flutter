@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
+import 'package:fixnum/fixnum.dart' show Int64;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
@@ -646,17 +647,6 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         destination: _routes.traceway?.key ?? _bufferDestination);
     await _store.load();
     _replay.budget.store = _store;
-    // What a 1.x build left in `traceway_pending` becomes records of this
-    // one: nothing is sent to the 1.x `/api/report` any more.
-    final legacyDirectory = _overrides == null && stateDir != null
-        ? Directory('${stateDir.parent.path}/traceway_pending')
-        : _overrides?.legacyDirectory;
-    if (legacyDirectory != null) {
-      final legacy = _legacyReports = LegacyReports(legacyDirectory,
-          (report) => guarded('legacy report', () => _emitLegacy(report)));
-      unawaited(guardedAsync('legacy reports', legacy.convert));
-    }
-
     final storedUid = _store.get('instanceUid');
     final uid = storedUid is String ? uuidToBytes(storedUid) : null;
     if (uid != null) {
@@ -758,6 +748,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       _outbox?.schedule(const Duration(seconds: 2));
       _tracewayOutbox?.schedule(const Duration(seconds: 2));
     });
+    final legacyDirectory = _overrides == null && stateDir != null
+        ? Directory('${stateDir.parent.path}/traceway_pending')
+        : _overrides?.legacyDirectory;
+    if (legacyDirectory != null) {
+      final token = _token;
+      final legacy = _legacyReports = LegacyReports(legacyDirectory,
+          token == null ? {} : LegacyReports.keysFor(_endpoints!.base, token),
+          _deliverLegacy);
+      unawaited(guardedAsync('legacy reports', legacy.convert));
+    }
     _log('started, instance ${bytesToUuid(_instanceUid)}');
   }
 
@@ -1082,33 +1082,23 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     );
   }
 
-  /// A report a 1.x build saved, as the record 2.x makes of it, with the
-  /// time it happened. It is not an error of this run: it fires no trigger,
-  /// so it uploads no breadcrumbs or replay of this one.
-  void _emitLegacy(LegacyReport report) {
-    if (!_ready) {
-      _queue(() => guarded('legacy report', () => _emitLegacy(report)),
-          keep: true);
-      return;
+  /// Hand the old report directly to its OTLP destination. It already has
+  /// durable storage of its own, and stays there across transient failures.
+  Future<bool> _deliverLegacy(LegacyReport report) async {
+    final destination = _routes.traceway;
+    if (_shutdown || destination == null) return false;
+    final name = report.isMessage ? eventMessage : eventException;
+    final signal = classifyLog(name);
+    if (_control.modeFor(signal) != Mode.stream || !_control.canExport(signal)) {
+      return false;
     }
+    if (unitHash(report.id) >= _control.sampleRate(signal)) return true;
     final attrs = <String, Object>{
       ...report.attributes,
       'traceway.legacy_report': true,
-      attrExceptionId: uuidv4(),
+      attrExceptionId: report.id,
     };
-    _legacyDepth++;
-    try {
-      if (report.isMessage) {
-        _emit(
-          eventName: eventMessage,
-          severity: Severity.INFO,
-          severityText: 'INFO',
-          body: report.stackTrace,
-          attributes: attrs,
-          time: report.recordedAt,
-        );
-        return;
-      }
+    if (!report.isMessage) {
       final trace = report.stackTrace;
       final first = trace.split('\n').first.trim();
       final headed = RegExp(r'^([A-Za-z_$][\w$<>, ?.]*): (.*)$').firstMatch(first);
@@ -1121,20 +1111,26 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       attrs['exception.stacktrace'] = trace;
       final buildId = extractBuildId(trace);
       if (buildId != null) attrs['flutter.build_id'] = buildId;
-      _emit(
-        eventName: eventException,
-        severity: Severity.ERROR,
-        severityText: 'ERROR',
-        attributes: attrs,
-        time: report.recordedAt,
-      );
-    } finally {
-      _legacyDepth--;
     }
+    final record = SDKLogRecord(
+      instrumentationScope: OTel.instrumentationScope(
+          name: tracewaySdkName, version: tracewaySdkVersion),
+      resource: _privateLoggerProvider?.resource,
+      timestamp: Int64(report.recordedAt.microsecondsSinceEpoch) * 1000,
+      eventName: name,
+      severityNumber: report.isMessage ? Severity.INFO : Severity.ERROR,
+      severityText: report.isMessage ? 'INFO' : 'ERROR',
+      body: report.isMessage ? report.stackTrace : null,
+      attributes: OTel.attributesFromMap(attrs),
+    );
+    final injected = _overrides?.logExporter;
+    if (injected != null && !_routes.splitsLogs) {
+      return await injected.export([record]) == ExportResult.success;
+    }
+    final body = OtlpLogRecordTransformer.transformLogRecords([record]).writeToBuffer();
+    final status = await postOtlp(_http, destination, body);
+    return status >= 200 && status < 300;
   }
-
-  /// Set while a 1.x report is emitted: [observe] runs no trigger for it.
-  int _legacyDepth = 0;
 
   /// Whether [captured] is reported: not matched by
   /// [TracewayOptions.ignoreErrors] and not dropped by
@@ -2318,7 +2314,6 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void observe(ObservedRecord observed) {
     if (observed.signal == signalControl) return;
     if (!_control.enabled) return;
-    if (_legacyDepth > 0) return;
     // An error or message left out by its sample rate is as if it never
     // happened: it must not upload breadcrumbs or a clip of its own.
     if (observed.routed == Routed.filtered &&

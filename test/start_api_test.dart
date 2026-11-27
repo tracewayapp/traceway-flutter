@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:traceway/src/connection_string.dart';
+import 'package:traceway/src/core/endpoints.dart';
 import 'package:traceway/src/otel/events.dart';
 import 'package:traceway/src/traceway_client.dart' show TracewayTestOverrides;
 import 'package:traceway/traceway.dart';
@@ -120,9 +121,12 @@ void main() {
     final root = Directory.systemTemp.createTempSync('traceway_no_report');
     addTearDown(() => root.deleteSync(recursive: true));
     final pending = Directory('${root.path}/traceway_pending')..createSync();
+    final key = OtlpDestination('https://traceway.test/api/report',
+        {'Authorization': 'Bearer tok'}).key;
+    final owner = Directory('${pending.path}/$key')..createSync();
     final now = DateTime.now().toUtc().toIso8601String();
     for (final name in ['a', 'b']) {
-      File('${pending.path}/$name.json').writeAsStringSync(jsonEncode({
+      File('${owner.path}/$name.json').writeAsStringSync(jsonEncode({
         'createdAt': now,
         'exception': {
           'stackTrace': 'StateError: Bad state: $name\nmain\n    file:///a.dart:1:1',
@@ -173,8 +177,8 @@ void main() {
       for (var i = 0; i < lines.length; i++) {
         final line = lines[i].trim();
         if (!line.contains('api/report') || line.startsWith('//')) continue;
-        // The normalizer drops the suffix of old connection strings.
-        expect(line, matches(RegExp(r"endsWith\('/api/report'\)|'/api/report'\.length")),
+        expect(file.path, 'lib/src/base_url.dart');
+        expect(line, "const legacyReportPath = '/api/report';",
             reason: '${file.path}:${i + 1}: $line');
       }
     }

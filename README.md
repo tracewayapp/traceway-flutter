@@ -491,7 +491,9 @@ ListTile(key: const ValueKey('traceway-blank'), title: Text(account.iban))
 
 The marker takes the place of the widget's own key and is never reported as its id. Flutter requires the keys of the children of one `Row`, `Column`, `Stack` or other multi-child widget to differ, so mark one of them this way and wrap the others in `TracewayMask`.
 
-In a [wireframe](#wireframe) a blank mask is a box of its color and nothing inside it is recorded; a blur mask keeps the layout but replaces its text with `*` and its images with placeholders. Text typed into fields is replaced with `*` unless remote settings set `replay.maskAllInputs: false`; obscured fields always are. Turning `maskAllInputs` on drops the frames recorded without it. In a video the same setting pixelates the text area of every field the user types into, like a blur mask; obscured and read-only fields are left as drawn.
+Each wireframe clip or streamed segment allows 128 KiB of inline raster data URLs, including repeats in snapshots and mutations. Larger segments use layout-only image and icon placeholders throughout. The next segment starts with a fresh allowance. This limit applies to wireframe replay.
+
+In a [wireframe](#wireframe) a blank mask is a box of its color and nothing inside it is recorded; a blur mask keeps the layout but replaces its text with `*` and its images with placeholders. Text typed into fields is replaced with `*` unless remote settings set `replay.maskAllInputs: false`; obscured fields always are. Turning `maskAllInputs` on drops the frames recorded without it. In a video the same setting pixelates the text area of every field the user types into, like a blur mask; password fields always receive an opaque mask, including the last character shown while typing. Read-only, non-password fields keep their displayed text. Enabling input masking discards older video frames and clips still encoding.
 
 The mask covers the widget where it is in each recorded frame: its place is read from the render tree when the frame is captured, so it stays on the widget while that scrolls in a list, animates or is transformed.
 
@@ -852,13 +854,13 @@ The API has the names of the browser, Android and iOS SDKs. Where Flutter differ
 - **Start with a token**: `Traceway.run(token: 'YOUR_TOKEN', child: …)`, with `baseUrl: 'https://your-server'` only for a self-hosted server (Traceway Cloud, `https://cloud.tracewayapp.com`, is the default). Keep the token out of the source with `--dart-define=TRACEWAY_TOKEN=…`. The `connectionString` parameter still works and is deprecated: it is read as the token and the server URL (the API path the old strings ended in dropped, `https://` added when there is no scheme) and prints one warning naming the new form. One it cannot read prints one warning and leaves the SDK off; it never throws.
 - **`TracewayClient.initialize`** takes the same named parameters, `initialize(token:, baseUrl:, options:)`, and returns `null` when the server URL is unusable.
 - **Video is an add-on**: the default `screenCaptureMode` is now `wireframe`, and the `traceway` package no longer depends on `flutter_quick_video_encoder` (no Gradle patch, no CocoaPods requirement). For video, add [`traceway_video`](#video-replay-add-on) and call `TracewayVideo.register()` before `Traceway.run`; without it, video mode warns once and records a wireframe. Remove the `flutter_quick_video_encoder` Gradle block from an app that does not use the add-on: Gradle fails on a project that no longer exists.
-- **`legacyConnectionString` is gone**: the reports a 1.x build left on the device are sent as OTLP exception records of the running SDK, through its normal path, with the time they happened (their video clips are dropped); reports older than 12 hours, the 1.x default, are deleted. Nothing is sent to the 1.x report endpoint any more.
+- **`legacyConnectionString` is gone**: 2.1 converts pending reports that a 2.0 beta associated with the current Traceway server and project token into OTLP records with their original timestamps. Matching reports follow error and message sampling. Reports selected for delivery stay in their original queue until the server accepts them or they expire. The beta stored a hash of the exact legacy URL and credential. Unassigned 1.x files and destination hashes that cannot be matched stay on device and expire after 12 hours. Legacy video is discarded. Nothing is sent to the 1.x report endpoint any more.
 
 ### From 1.x
 
 - **Server**: 2.x sends OTLP to `/api/otel/v1/logs`, `/api/otel/v1/traces` and `/api/otel/v1/metrics`, polls `/api/otel/v1/opamp` and uploads clips to `/api/recordings`. There is no fallback to the 1.x protocol.
 - **Start**: pass the token of the connection string as `token:`, and its server as `baseUrl:` when it is not Traceway Cloud (see above). Without a token the SDK runs [standalone](#standalone-without-a-traceway-server).
-- **Unsent 1.x reports** are delivered by the first 2.1 start, as above.
+- **Unsent 1.x reports** expire on device unless an earlier 2.0 beta associated them with the current project, as above.
 - **Behaviour**: logs and actions are no longer limited to the last 10 seconds and no longer travel inside the recording. They are buffered for up to 10 minutes and sent as their own records with an exception. `captureMessage` no longer attaches a screen recording.
 - **Renamed API**: `TracewayPrivacyMask` is now `TracewayMask`; the old name is a deprecated alias of it.
 - **Removed options**: `debounceMs`, `retryDelayMs`, `maxPendingExceptions`, `maxLocalFiles`, `localFileMaxAgeHours`, `eventsWindow`, `eventsMaxCount`.
@@ -912,6 +914,12 @@ Caveats:
 - [Traceway GitHub](https://github.com/tracewayapp/traceway)
 - [Documentation](https://docs.tracewayapp.com/client/flutter?sdk=flutter)
 - [Flutter SDK Source](https://github.com/tracewayapp/traceway-flutter)
+
+## Publishing the Flutter packages
+
+Run the **Release (bump + tag)** workflow with the prepared, untagged version and release notes. It dates both changelogs, tests both packages, tags the release and starts the **Publish to pub.dev** workflow. The publisher uploads `traceway`, waits until that version is available from pub.dev, then resolves and publishes `traceway_video` against it.
+
+For the first `traceway_video` release, let the publisher upload core first. Once core is visible on pub.dev, use a clean checkout of that tag. In `packages/traceway_video`, remove the local `pubspec_overrides.yaml`, run `flutter pub get` and `dart pub publish --dry-run`, then publish the add-on with an authorized maintainer account. Configure automated publishing on the add-on's pub.dev admin page for `tracewayapp/traceway-flutter`, tag pattern `v{{version}}`, with workflow-dispatch publishing enabled. Rerun **Publish to pub.dev** on the same tag to finish the release. Already-published versions are skipped.
 
 ## License
 

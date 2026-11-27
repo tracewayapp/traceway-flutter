@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:traceway/traceway.dart';
 import 'package:traceway_video/src/screen_recorder.dart';
@@ -50,6 +51,69 @@ void main() {
         ),
         const SizedBox(height: 2000),
       ]);
+
+  testWidgets('tightening masking during readback discards that image',
+      (tester) async {
+    await tester.pumpWidget(app(const ColoredBox(color: Colors.blue)));
+    await tester.runAsync(() async {
+      final recorder = ScreenRecorder(repaintBoundaryKey: boundary,
+          maxFrames: 2, fps: 20)..maskAllInputs = false;
+      // Capture has selected its masks and yielded on the image readback.
+      final capture = recorder.captureFrameForTest();
+      recorder.maskAllInputs = true;
+      await capture;
+      expect(recorder.hasFrames(), isFalse);
+      await recorder.captureFrameForTest();
+      expect(recorder.hasFrames(), isTrue);
+    });
+  });
+
+  testWidgets('a typed password field is opaque in encoded Android frames',
+      (tester) async {
+    tester.platformDispatcher.brieflyShowPasswordTestValue = true;
+    addTearDown(tester.platformDispatcher.resetBrieflyShowPassword);
+    final field = find.byType(TextField);
+    await tester.pumpWidget(MaterialApp(
+      theme: ThemeData(platform: TargetPlatform.android),
+      home: Scaffold(body: RepaintBoundary(key: boundary,
+          child: const TextField(obscureText: true,
+              decoration: InputDecoration(filled: true, fillColor: Colors.white)))),
+    ));
+    await tester.tap(field);
+    await tester.enterText(field, 'ab');
+    await tester.pump();
+    await tester.enterText(field, 'abx');
+    await tester.pump(const Duration(milliseconds: 1));
+    final editable = tester.renderObject<RenderEditable>(
+        find.byElementPredicate((e) =>
+            e is RenderObjectElement && e.renderObject is RenderEditable));
+    expect(editable.text?.toPlainText(), '••x',
+        reason: 'the rendered field is briefly displaying the typed character');
+    final bounds = MatrixUtils.transformRect(editable.getTransformTo(
+        boundary.currentContext!.findRenderObject()), Offset.zero & editable.size);
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (call) async => Directory.systemTemp.path);
+    await tester.runAsync(() async {
+      for (final maskInputs in [false, true]) {
+        final encoder = _RecordingEncoder();
+        final recorder = ScreenRecorder(repaintBoundaryKey: boundary,
+            maxFrames: 1, pixelRatio: 1, encoder: encoder)..maskAllInputs = maskInputs;
+        await recorder.captureFrameForTest();
+        await recorder.captureRecording('obscured');
+        final frame = encoder.frames.single;
+        for (var y = bounds.top.ceil(); y < bounds.bottom.floor(); y++) {
+          for (var x = bounds.left.ceil(); x < bounds.right.floor(); x++) {
+            final offset = (y * encoder.width + x) * 4;
+            if (frame[offset] != 0 || frame[offset + 1] != 0 ||
+                frame[offset + 2] != 0 || frame[offset + 3] != 255) {
+              fail('Unmasked pixel at ($x, $y) with maskAllInputs=$maskInputs');
+            }
+          }
+        }
+      }
+    });
+  });
 
   testWidgets('the recorded frame is masked where the widget was painted',
       (tester) async {
