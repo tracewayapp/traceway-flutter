@@ -439,7 +439,7 @@ The mask covers the widget where it is in each recorded frame: its place is read
 
 In tap records, the shown text, the label and the keys of a masked widget and of everything inside it are left out (see [Naming views](#naming-views)).
 
-`TracewayPrivacyMask`, the name before 2.0, is a deprecated alias of `TracewayMask`.
+`TracewayPrivacyMask`, the name in 1.x and 2.0.0-beta.1, is a deprecated alias of `TracewayMask`.
 
 ## Network requests
 
@@ -719,6 +719,19 @@ npm install @tracewayapp/frontend
 
 See the full [JS SDK documentation](https://docs.tracewayapp.com/client/js-sdk?sdk=js-generic) for all options. Its session replay records the DOM; Flutter web paints its UI into a canvas, which the recorder does not capture, so a replay shows little of a Flutter app.
 
+### Platform differences
+
+The API has the names of the browser, Android and iOS SDKs. Where Flutter differs, it is for these reasons:
+
+- **Start**: `Traceway.run(connectionString:, child:, options:)` instead of `init`, because it wraps `runApp`: it starts the client, runs the app in a zone that catches uncaught async errors and `print` lines, installs `FlutterError.onError` and `PlatformDispatcher.onError`, and puts the app inside the `Traceway` widget, which records the screen and taps. A malformed connection string is reported and the app runs without the SDK. Android starts with `Traceway.init`, iOS with `Traceway.initialize`.
+- **Masks are widgets**: `TracewayMask(child:, mode:)`. The marker that needs no wrapper is a key, `ValueKey('traceway-mask')` or `ValueKey('traceway-blank')`, where the browser uses CSS classes, Android `android:tag` / `testTag` and iOS `accessibilityIdentifier`. Mask colors are `Color`s.
+- **Dart errors do not carry their stack**: `captureException(error, [stackTrace, attributes])` and `log(message, {level, error, stackTrace, attributes})` take it next to the error.
+- **Named parameters**: `recordAction(category:, name:, data:)` and `recordNavigation(path, {from, action, route})` take theirs by name. `flush([timeoutMs])` waits at most that many milliseconds, as in the browser and Android (iOS takes seconds).
+- **Getters**: `Traceway.currentSessionId` is a getter (a function in the browser); `getInstanceId()` is a method, as in the browser and Android (iOS: `instanceId`).
+- **Navigation** is recorded by `Traceway.navigatorObserver` on the app's `Navigator`, not by itself; a router that does not report to it calls `recordNavigation`.
+- **Selectors name widgets**: types, `ValueKey`s and `Semantics` identifiers, labels and roles (see [Naming views](#naming-views)).
+- **Video** replay (`screenCaptureMode: video`, `fps`, `capturePixelRatio`) exists only in Flutter.
+
 ## Migrating from 1.x
 
 To deliver unsent 1.x errors and their clips, set `TracewayOptions(legacyConnectionString: previousConnectionString)` to the connection string the old build used. Version 1.x stored these reports without a project identifier. The SDK retries eligible reports against that original project’s `/api/report` endpoint and expires them after 12 hours, the 1.x default. New reports use OTLP.
@@ -726,6 +739,7 @@ To deliver unsent 1.x errors and their clips, set `TracewayOptions(legacyConnect
 - **Server**: 2.0 sends OTLP to `/api/otel/v1/logs`, `/api/otel/v1/traces` and `/api/otel/v1/metrics`, polls `/api/otel/v1/opamp` and uploads clips to `/api/recordings`. There is no fallback to the 1.x `/api/report` protocol.
 - **Connection string**: unchanged. `token@https://host/api/report` still works, as does `token@https://host`; the other endpoints are derived from it. It is now optional: without it the SDK runs [standalone](#standalone-without-a-traceway-server).
 - **Behaviour**: logs and actions are no longer limited to the last 10 seconds and no longer travel inside the recording. They are buffered for up to 10 minutes and sent as their own records with an exception. `captureMessage` no longer attaches a screen recording.
+- **Renamed API**: `TracewayPrivacyMask` is now `TracewayMask`; the old name is a deprecated alias of it.
 - **Removed options**: `debounceMs`, `retryDelayMs`, `maxPendingExceptions`, `maxLocalFiles`, `localFileMaxAgeHours`, `eventsWindow`, `eventsMaxCount`.
 - **Removed API**: the 1.x transport methods of `TracewayClient` (`addException`, `loadPendingFromDisk`, `pendingExceptions`, `pendingRecordings`, `bufferedEvents`, `collectDeviceInfo`, `collectSyncDeviceInfo`, `setDeviceAttributes`) and the `ReportSender` export. Use `Traceway.captureException`, `Traceway.setAttribute` and `Traceway.flush()`. `TracewayClient.initialize` returns the running client instead of replacing it: call `shutdown()` and wait for it before initializing with another connection string.
 - **New API**: `Traceway.captureException`, `captureMessage`, `log`, `track`, `setAttribute`, `setAttributes`, `removeAttribute`, `clearAttributes`, `recordNavigation`, `setRoute`, `startInteraction`, `reportFullyDisplayed`, `metric`, `count`, `setMetricDimension`, `flush`, `shutdown`, `refreshConfig`, `getInstanceId` and `currentSessionId`; `TracewayTelemetry` and `TracewayTelemetryEndpoint`. The same methods remain on `TracewayClient.instance`. New options include `telemetry`, `propagateTraceHeaderUrls`, `collection`, `captureUserActions`, `captureMetrics`, `recordAllSessions` and `replayImages`.

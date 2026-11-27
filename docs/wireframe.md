@@ -21,14 +21,14 @@ Video replay (`ScreenRecorder`, Flutter only) shares everything after the record
 | `replay/replay_controller.dart` | `ReplayController` | mode, segments, clips |
 | `replay/recordings_transport.dart` | `RecordingsTransport`, `RecordingSegment` | upload to `/api/recordings` |
 | `replay/collection_budget.dart` | `CollectionBudget` | per-session bytes and events |
-| `traceway_privacy_mask.dart`, `traceway_mask_mode.dart` | `TracewayPrivacyMask`, `TracewayMaskMode` | privacy masks |
+| `traceway_mask.dart`, `traceway_mask_mode.dart` | `TracewayMask`, `maskModeOf`, `maskRegionsIn`, `TracewayMaskMode` | masks: the widget, the marker keys, video mask regions |
 
 ## Pipeline
 
 roots → walk → convert → VNodes (stable ids, shared unchanged subtrees) → CSS → diff → rrweb events
 
 1. **Roots.** `WireframeRoots` returns the element of the `Traceway` widget's `RepaintBoundary` (built only when the screen is recorded). Routes, dialogs, sheets, menus and overlay entries are all inside it, in the `Navigator`'s overlay, so one walk sees every window the app shows.
-2. **Walk.** `WireframeCapture.capture` visits the element tree, not the render tree: some of what a wireframe needs is only on widgets (the color of a `ColoredBox`, the image provider of an `Image`, which toggle a painter belongs to, where a `TracewayPrivacyMask` starts). Geometry comes from the render objects: each one's `applyPaintTransform` is composed with its parent's, which covers translation, scrolling, scaling and rotation alike. A parent that does not paint a child (`paintsChild`, `IndexedStack`'s index) skips it, a repaint boundary without an attached layer (an offstage route, an inactive tab) is left out, and a box outside the current clip is culled. A render object painted elsewhere than under its element's parent (an `OverlayPortal` child) is placed on top of the screen.
+2. **Walk.** `WireframeCapture.capture` visits the element tree, not the render tree: some of what a wireframe needs is only on widgets (the color of a `ColoredBox`, the image provider of an `Image`, which toggle a painter belongs to, where a mask starts: a `TracewayMask` or a widget with a marker key). Geometry comes from the render objects: each one's `applyPaintTransform` is composed with its parent's, which covers translation, scrolling, scaling and rotation alike. A parent that does not paint a child (`paintsChild`, `IndexedStack`'s index) skips it, a repaint boundary without an attached layer (an offstage route, an inactive tab) is left out, and a box outside the current clip is culled. A render object painted elsewhere than under its element's parent (an `OverlayPortal` child) is placed on top of the screen.
 3. **Convert.** Each render object that draws becomes nodes by its kind (see [What each kind of view becomes](#what-each-kind-of-view-becomes)). The many layout-only render objects in between get no node: they are folded into the transforms.
 4. **VNodes.** `VNode` is immutable: tag, text, attributes, children, id. An element keeps its ids from frame to frame (an `Expando` per element and role), and a node equal to the previous frame's (same id, tag, text, attributes and the very same children) is that previous object, so frames share unchanged subtrees and a frame costs memory only for what moved.
 5. **CSS.** Geometry and paint are inline on each node: `left/top/width/height`, or `transform:matrix(…)` with `transform-origin:0 0` for other affine transforms and `matrix3d(…)` for perspective. Lengths are rounded to 0.1 px so sub-pixel animation noise is not a mutation. Borders are inset box shadows, colors `#rrggbb` or `rgba()`. The shared rules are in the [stylesheet](#stylesheet).
@@ -106,8 +106,10 @@ The Android and iOS SDKs inline pictures of image views as data URIs under the s
 
 ## Privacy
 
-- `TracewayPrivacyMask` with `TracewayMaskMode.blank` replaces its widget with a box of its color; nothing of its subtree is recorded.
-- With `TracewayMaskMode.blur` the layout stays, every non-space character of its text becomes `*`, and its images are placeholders. Tap records leave out the shown text and label of a widget inside a mask.
+- `TracewayMask(mode: TracewayMaskMode.blank(color))`, or `ValueKey('traceway-blank')` on any widget (black): the widget becomes one box of that color; nothing of its subtree is walked.
+- `TracewayMask(child: …)` (blur), or `ValueKey('traceway-mask')` on any widget: the layout stays, every non-space character of its text becomes `*`, and its images are placeholders. A marker key on a widget masks it as a `TracewayMask` around it would.
+- A mask covers its subtree. Tap records leave out the shown text, label and keys of a masked widget, and a marker key is never reported as a widget's id. `TracewayPrivacyMask` is a deprecated alias of `TracewayMask`.
+- Video clips use the same masks: `maskRegionsIn` walks the elements under the recorded `RepaintBoundary` as each frame is taken and pixelates or fills the bounds each mask was painted at.
 - `replay.maskAllInputs` (on by default, as rrweb's `maskAllInputs`) replaces every non-space character typed into an editable field with `*`; read-only text (`SelectableText`) is shown. Obscured fields always show their obscuring character. Turning it on drops the frames held and captures the screen again at once.
 
 ## Scrolling
