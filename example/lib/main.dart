@@ -69,7 +69,7 @@ class _HomePageState extends State<HomePage> {
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
-            TracewayPrivacyMask(
+            TracewayMask(
               child: Text(
                 'Counter: $_counter',
                 style: Theme.of(context).textTheme.headlineMedium,

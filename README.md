@@ -31,7 +31,7 @@ Error tracking, session context and session replay for Flutter apps, built on th
 - **Taps that name the widget** — every tap is recorded with a CSS-like selector (`ElevatedButton#pay`, `IconButton[label="Delete"]`) that click steps of recording triggers match
 - **Session replay in two modes** — a wireframe of the widget tree replayed as HTML by the dashboard's rrweb player (every platform, a few kilobytes per segment), or video: the last ~10 seconds encoded as MP4 (Android, iOS, macOS). Either is uploaded as the clip of an exception, or as consecutive segments while a capture streams
 - Touch/click positions on recordings
-- Privacy masking — blur or blank sensitive UI regions in recordings; typed text masked in wireframes; network images switched off remotely with `replay.images`
+- Masks — `TracewayMask` or a `ValueKey('traceway-mask')` blurs or blanks sensitive widgets in recordings and keeps their text out of tap records; typed text masked in wireframes; network images switched off remotely with `replay.images`
 - Sessions, with the breadcrumb timeline of each one
 - **Any OpenTelemetry backend** — send logs, spans and metrics to an OpenTelemetry Collector, Grafana, Honeycomb or any OTLP/HTTP receiver with `telemetry:`, next to Traceway or without it (standalone)
 - Telemetry that failed to send is kept on disk and retried; the ring buffer is saved when the app goes to the background, so a session that goes on after the system killed the app still has its breadcrumbs (`buffer.persist`)
@@ -300,7 +300,7 @@ In Flutter the views a selector names are widgets. Flutter has no DOM, so click 
 
 Attribute values take `=`, `^=`, `$=`, `*=`, `~=` and `|=`. Combinators are descendant (space), child (`>`), adjacent (`+`) and general (`~`) sibling, in the element tree, where a widget such as `ElevatedButton` sits several elements above the `Text` it shows, so prefer the descendant combinator. A tap matches when the widget under the finger or any widget around it does, the way a browser click matches its target or an ancestor.
 
-You rarely write one by hand: every tap is recorded as `browser.user_action.click` with the selector of the control that handled it (`browser.css_selector`), shown on the session timeline. It prefers an id (`ElevatedButton#pay`, or `CheckoutButton#checkout` for your own widget with a key), then a key, the shown text, the label, and the type alone. Keys and `Semantics(identifier:)` (the ones integration tests and Appium/Maestro use) are the most stable choice. The shown text and the label of a widget inside `TracewayPrivacyMask` are never sent.
+You rarely write one by hand: every tap is recorded as `browser.user_action.click` with the selector of the control that handled it (`browser.css_selector`), shown on the session timeline. It prefers an id (`ElevatedButton#pay`, or `CheckoutButton#checkout` for your own widget with a key), then a key, the shown text, the label, and the type alone. Keys and `Semantics(identifier:)` (the ones integration tests and Appium/Maestro use) are the most stable choice. The shown text, the label and the keys of a widget inside a [mask](#privacy-masks) are never sent.
 
 Widget type names are minified in `--obfuscate` builds: there, match by key, identifier, role, label or text, and recorded selectors leave the type out.
 
@@ -387,19 +387,19 @@ The `replay.images` setting says when a wireframe may show the app's images: `of
 
 - A Flutter wireframe never uploads image pixels. An image loaded from the network (`Image.network`, `NetworkImage` through `ResizeImage`, an `http(s)` URL) is an `<img>` with that URL, and a `DecorationImage` of one a CSS background: the browser that plays the replay fetches them. `wifi` and `always` both keep these URLs; Flutter has no network type to tell them apart.
 - `off` turns them into the `.im` placeholder (a gray box with a cross), as soon as the setting arrives: the frames held that showed them are dropped, and the screen is taken again.
-- Images from memory, files and assets are always placeholders, and so is every image inside a blur `TracewayPrivacyMask`.
+- Images from memory, files and assets are always placeholders, and so is every image inside a blur mask.
 - Video recordings are not affected.
 
 Sessions report the policy in effect at their start (`traceway.replay.images`; `off` when the screen is not recorded). The Android and iOS SDKs upload the pictures of image views themselves, only on an unmetered network under `wifi`.
 
 ### Privacy masks
 
-Use `TracewayPrivacyMask` to hide sensitive content in screen recordings. Masked regions are applied to the recorded frames only — the user sees no visual change in the live app.
+Wrap a widget in `TracewayMask` to hide it in screen recordings, or give it a marker key (below). Masks apply to the recording only: the user sees no change in the live app.
 
 **Blur (pixelation):**
 
 ```dart
-TracewayPrivacyMask(
+TracewayMask(
   child: Text('4242 4242 4242 4242'),
 )
 ```
@@ -407,7 +407,7 @@ TracewayPrivacyMask(
 The default mode is `TracewayMaskMode.blur()` which pixelates the region. You can control the intensity with the `ratio` parameter (0.0 = light, 1.0 = heavy):
 
 ```dart
-TracewayPrivacyMask(
+TracewayMask(
   mode: TracewayMaskMode.blur(ratio: 0.5),
   child: CreditCardWidget(),
 )
@@ -416,7 +416,7 @@ TracewayPrivacyMask(
 **Blank (solid fill):**
 
 ```dart
-TracewayPrivacyMask(
+TracewayMask(
   mode: TracewayMaskMode.blank(color: Color(0xFF000000)),
   child: SensitiveDataWidget(),
 )
@@ -424,9 +424,22 @@ TracewayPrivacyMask(
 
 This replaces the region with a solid color (black by default) in the recording.
 
+**Marker keys.** A widget keyed `ValueKey('traceway-mask')` is masked like `TracewayMask(child: ...)`, and one keyed `ValueKey('traceway-blank')` like a black `TracewayMaskMode.blank()`, in wireframes, videos and tap records, with no wrapper:
+
+```dart
+Text(card.number, key: const ValueKey('traceway-mask'))
+ListTile(key: const ValueKey('traceway-blank'), title: Text(account.iban))
+```
+
+The marker takes the place of the widget's own key and is never reported as its id. Flutter requires the keys of the children of one `Row`, `Column`, `Stack` or other multi-child widget to differ, so mark one of them this way and wrap the others in `TracewayMask`.
+
 In a [wireframe](#wireframe) a blank mask is a box of its color and nothing inside it is recorded; a blur mask keeps the layout but replaces its text with `*` and its images with placeholders. Text typed into fields is replaced with `*` unless remote settings set `replay.maskAllInputs: false`; obscured fields always are. Turning `maskAllInputs` on drops the frames recorded without it.
 
 The mask covers the widget where it is in each recorded frame: its place is read from the render tree when the frame is captured, so it stays on the widget while that scrolls in a list, animates or is transformed.
+
+In tap records, the shown text, the label and the keys of a masked widget and of everything inside it are left out (see [Naming views](#naming-views)).
+
+`TracewayPrivacyMask`, the name before 2.0, is a deprecated alias of `TracewayMask`.
 
 ## Network requests
 

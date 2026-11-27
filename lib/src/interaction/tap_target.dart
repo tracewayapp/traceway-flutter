@@ -104,7 +104,7 @@ class TapTarget {
   final String tag;
   final String? id;
 
-  /// Not set for a widget inside a `TracewayPrivacyMask`.
+  /// Not set for a widget inside a traceway mask.
   final String? text;
   final String? label;
 }
@@ -268,7 +268,7 @@ TapTarget? describeTap(ElementPath path, {bool includeText = true}) {
       includeText && !masked ? shownText(path[owner], includeMasked: false) : null;
 
   // An id on the target, on a wrapper right above it (the app's own widget
-  // with a key) or inside it. Not one under a privacy mask: a key is often
+  // with a key) or inside it. Not one under a mask: a key is often
   // made of what the widget shows (`ValueKey(contact.name)`).
   int? idIndex;
   for (final i in [

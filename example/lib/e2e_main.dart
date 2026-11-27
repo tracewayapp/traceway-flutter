@@ -472,7 +472,7 @@ class _HomeState extends State<_Home> {
                 ),
               ),
               const SizedBox(height: 16),
-              const TracewayPrivacyMask(child: Text('secret 4242 4242')),
+              const TracewayMask(child: Text('secret 4242 4242')),
               const SizedBox(height: 16),
               SizedBox(
                 width: 200,

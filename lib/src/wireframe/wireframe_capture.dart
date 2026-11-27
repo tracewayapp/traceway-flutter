@@ -58,7 +58,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import '../traceway_mask_mode.dart';
-import '../traceway_privacy_mask.dart';
+import '../traceway_mask.dart';
 import 'vnode.dart';
 import 'wireframe_css.dart';
 import 'wireframe_glyphs.dart';
@@ -86,9 +86,10 @@ class WireframeFrame {
 /// The element tree is walked rather than the render tree because some of
 /// what a wireframe needs is only on widgets: the color of a [ColoredBox],
 /// the image provider of an [Image], which toggle a painter belongs to, and
-/// where a [TracewayPrivacyMask] starts. Geometry comes from the render
-/// objects: each one's paint transform is composed with its parent's, which
-/// covers translations, scrolling, scaling and rotation alike.
+/// where a mask ([TracewayMask] or a marker key) starts. Geometry comes
+/// from the render objects: each one's paint transform is composed with its
+/// parent's, which covers translations, scrolling, scaling and rotation
+/// alike.
 ///
 /// Only render objects that paint something, clip, or fade get a DOM node;
 /// the many layout-only render objects in between are folded into the
@@ -232,17 +233,18 @@ class WireframeCapture {
   void _visit(Element element, _Scope scope) {
     final widget = element.widget;
     var s = scope;
-    if (widget is TracewayPrivacyMask) {
-      final mode = widget.mode;
-      if (mode is TracewayMaskBlank) {
-        _replace(element, s, (box, geometry) {
-          return _element(
-              _id(element), '$geometry background:${cssColor(mode.color)};', const []);
-        });
-        return;
-      }
-      s = s.copy(maskText: true, blockImages: true);
-    } else if (widget is Icon) {
+    final mask = maskModeOf(widget);
+    if (mask is TracewayMaskBlank) {
+      _replace(element, s, (box, geometry) {
+        return _element(
+            _id(element), '$geometry background:${cssColor(mask.color)};', const []);
+      });
+      return;
+    }
+    // A marker key can sit on any widget, so a blur mask still lets the
+    // widget's own kind be read below.
+    if (mask != null) s = s.copy(maskText: true, blockImages: true);
+    if (widget is Icon) {
       s = s.copy(hint: const _IconHint());
     } else if (widget is Image) {
       s = s.copy(image: widget.image);
@@ -1308,7 +1310,7 @@ class WireframeCapture {
   // ---- helpers --------------------------------------------------------------
 
   /// Whether an image under [s] is drawn from its URL: images are on and
-  /// no privacy mask above blocks them.
+  /// no mask above blocks them.
   bool _showsImages(_Scope s) => networkImages && !s.blockImages;
 
   static bool _paints(RenderObject parent, RenderObject child) {

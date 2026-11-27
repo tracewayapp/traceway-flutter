@@ -81,7 +81,7 @@ class TracewayOptions {
 
   /// Record taps (`browser.user_action.click`) with a selector naming the
   /// widget, and let recording triggers match taps and mouse hovers. The
-  /// shown text of a widget inside a `TracewayPrivacyMask` is never sent.
+  /// shown text of a widget inside a `TracewayMask` is never sent.
   final bool captureUserActions;
 
   /// Measure the app's performance on the device and upload it as metrics:

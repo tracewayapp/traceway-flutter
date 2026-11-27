@@ -1,4 +1,5 @@
-// What must never be recorded: masked widgets, typed and obscured text.
+// What must never be recorded: masked widgets (TracewayMask and the marker
+// keys), typed and obscured text.
 // Every secret here is printed for the harness, which fails if any of them
 // appears anywhere in the recording.
 // ignore: deprecated_member_use
@@ -24,7 +25,7 @@ final privacyScenarios = [
   Scenario(
     id: 'privacy',
     title: 'Privacy masks',
-    subtitle: 'TracewayPrivacyMask, inputs and passwords',
+    subtitle: 'TracewayMask, marker keys, inputs and passwords',
     icon: Icons.lock,
     page: () => const PrivacyPage(),
     script: (d) async {
@@ -59,19 +60,17 @@ class PrivacyPage extends StatelessWidget {
         children: [
           const Text('Visible: order total 19.25'),
           const SizedBox(height: 12),
-          const TracewayPrivacyMask(
-            mode: TracewayMaskMode.blank(color: Color(0xFF263238)),
-            child: ListTile(
-                title: Text('Card 4242 4242 4242 4242'), subtitle: Text('Expires 12/29')),
-          ),
+          const ListTile(
+              key: ValueKey('traceway-blank'),
+              title: Text('Card 4242 4242 4242 4242'),
+              subtitle: Text('Expires 12/29')),
           const SizedBox(height: 12),
-          const TracewayPrivacyMask(
-            child: Card(
-                child: ListTile(
-                    leading: Icon(Icons.person),
-                    title: Text('Grace Hopper'),
-                    subtitle: Text('grace@example.com'))),
-          ),
+          const Card(
+              key: ValueKey('traceway-mask'),
+              child: ListTile(
+                  leading: Icon(Icons.person),
+                  title: Text('Grace Hopper'),
+                  subtitle: Text('grace@example.com'))),
           const SizedBox(height: 12),
           TextField(
             controller: TextEditingController(text: 'typed but masked'),
@@ -86,7 +85,7 @@ class PrivacyPage extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           if (url != null)
-            TracewayPrivacyMask(
+            TracewayMask(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
                 child: Image.network(url, height: 90, width: double.infinity, fit: BoxFit.cover),
@@ -100,7 +99,7 @@ class PrivacyPage extends StatelessWidget {
             child: ListView.builder(
               itemCount: 12,
               itemBuilder: (_, i) => i.isOdd
-                  ? TracewayPrivacyMask(
+                  ? TracewayMask(
                       mode: const TracewayMaskMode.blank(color: Color(0xFF455A64)),
                       child: ListTile(title: Text('Account 9001-$i')),
                     )

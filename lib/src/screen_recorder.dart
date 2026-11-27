@@ -13,7 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'circular_buffer.dart';
 import 'replay/replay_source.dart';
 import 'traceway_mask_mode.dart';
-import 'traceway_privacy_mask.dart';
+import 'traceway_mask.dart';
 
 class CapturedFrame {
   final Uint8List pngBytes;
@@ -198,7 +198,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
     try {
       // Read in the same turn as the picture is taken, so every mask is
       // where its widget is in this frame.
-      final maskRegions = maskRegionsIn(boundary);
+      final maskRegions = maskRegionsIn(context);
       final image = await boundary.toImage(pixelRatio: pixelRatio);
       final width = image.width;
       final height = image.height;

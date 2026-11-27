@@ -23,7 +23,7 @@ import 'package:traceway/src/traceway_client.dart';
 import 'package:traceway/src/traceway_options.dart';
 import 'package:traceway/src/traceway_screen_capture_mode.dart';
 import 'package:traceway/src/traceway_mask_mode.dart';
-import 'package:traceway/src/traceway_privacy_mask.dart';
+import 'package:traceway/src/traceway_mask.dart';
 import 'package:traceway/src/traceway_widget.dart';
 import 'package:traceway/src/wireframe/vnode.dart';
 import 'package:traceway/src/wireframe/wireframe_capture.dart';
@@ -538,15 +538,15 @@ void main() {
           reason: 'the dialog is above the page');
     });
 
-    testWidgets('masks what privacy masks and text fields hold',
+    testWidgets('masks what traceway masks and text fields hold',
         (tester) async {
       await tester.pumpWidget(_app(Scaffold(
         body: Column(children: [
-          const TracewayPrivacyMask(
+          const TracewayMask(
             mode: TracewayMaskBlank(color: Color(0xFF123456)),
             child: Text('secret blank'),
           ),
-          const TracewayPrivacyMask(child: Text('secret blur')),
+          const TracewayMask(child: Text('secret blur')),
           TextField(controller: TextEditingController(text: 'typed text')),
           TextField(
             obscureText: true,
@@ -572,6 +572,59 @@ void main() {
       screen = _capture(capture);
       expect(allText(screen), contains('typed text'));
       expect(allText(screen), isNot(contains('hunter2')));
+    });
+
+    testWidgets('a marker key masks like TracewayMask', (tester) async {
+      final picture =
+          (await tester.runAsync(() => createTestImage(width: 4, height: 4)))!;
+      await tester.pumpWidget(_app(Scaffold(
+        body: Column(children: [
+          const Text('secret blur', key: ValueKey('traceway-mask')),
+          // Siblings cannot share a key, so the second one sits lower.
+          Center(
+            child: Container(
+              key: const ValueKey('traceway-mask'),
+              child: const Text('secret nested'),
+            ),
+          ),
+          const SizedBox(
+            key: ValueKey('traceway-blank'),
+            width: 50,
+            height: 20,
+            child: Text('secret blank'),
+          ),
+          SizedBox(
+            width: 40,
+            height: 40,
+            child: Image(
+                key: const ValueKey('traceway-mask'),
+                image: _LocalNetworkImage(
+                    'https://blocked.test/secret.png', picture)),
+          ),
+          // ignore: deprecated_member_use_from_same_package
+          const TracewayPrivacyMask(child: Text('secret old')),
+          const Text('shown', key: ValueKey('traceway-masked')),
+        ]),
+      )));
+      await tester.pump();
+      final screen = _capture(WireframeCapture());
+      final text = allText(screen);
+      expect(text, isNot(contains('secret')));
+      expect(text, contains('****** ****|'));
+      expect(text, contains('****** ******|'));
+      expect(text, contains('****** ***|'));
+      expect(text, contains('shown'));
+      final blank = allNodes(screen)
+          .where((n) =>
+              (n.attributes['style'] ?? '').contains('background:#000000'))
+          .toList();
+      expect(blank, hasLength(1));
+      expect(blank.single.children, isEmpty);
+      expect(blank.single.attributes['style'],
+          contains('width:50px;height:20px;'));
+      expect(jsonEncode(serializeDocument(screen)), isNot(contains('blocked')));
+      expect(allNodes(screen).where((n) => n.attributes['class'] == 'im'),
+          hasLength(1));
     });
 
     testWidgets('transforms, fades, toggles, icons and rich text',
@@ -1048,7 +1101,7 @@ void main() {
               image: DecorationImage(image: photo, fit: BoxFit.contain),
             ),
           ),
-          TracewayPrivacyMask(
+          TracewayMask(
             child: SizedBox(
                 width: 120,
                 height: 80,
@@ -1071,7 +1124,7 @@ void main() {
           contains('background-image:url("https://cdn.test/photo.png");'
               'background-size:contain;'));
       expect(decorated.attributes['class'], isNull);
-      // Under a privacy mask an image is a placeholder anyway.
+      // Under a mask an image is a placeholder anyway.
       expect(jsonEncode(serializeDocument(screen)), isNot(contains('blocked')));
 
       capture.networkImages = false;

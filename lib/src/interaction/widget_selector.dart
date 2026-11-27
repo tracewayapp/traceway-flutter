@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 
-import '../traceway_privacy_mask.dart';
+import '../traceway_mask.dart';
 
 /// How the SDK names a widget for click and hover triggers, with the CSS
 /// selector syntax the dashboard already accepts for the browser SDK. Flutter
@@ -375,7 +375,7 @@ class ElementInfo {
     final roles = <String>{};
     final values = <String, String>{};
     final key = widget.key;
-    if (key is ValueKey) {
+    if (key is ValueKey && !isMaskMarker(key)) {
       final value = key.value;
       values['key'] = '$value';
       if (value is String && value.isNotEmpty) ids.add(value);
@@ -425,7 +425,7 @@ String? _labelBelow(Element element) {
     if (count != 1) return null;
     current = only;
     final widget = current!.widget;
-    if (widget is TracewayPrivacyMask) return null;
+    if (isMask(widget)) return null;
     if (widget is Semantics) {
       final label = _semanticLabel(widget);
       if (label != null) return label;
@@ -452,7 +452,7 @@ String? _ownText(Widget widget) => switch (widget) {
 
 /// The text [element] shows: its own for a `Text`, else that of the `Text`
 /// widgets under it, at most three, joined by a space. Input fields are
-/// skipped, and so are privacy masks unless [includeMasked].
+/// skipped, and so are masks unless [includeMasked].
 String? shownText(Element element, {required bool includeMasked}) {
   if (element.widget is Icon) return null;
   final own = _ownText(element.widget);
@@ -464,7 +464,7 @@ String? shownText(Element element, {required bool includeMasked}) {
     final widget = e.widget;
     // An icon is a glyph of its font, not text anyone reads.
     if (widget is EditableText || widget is Icon) return;
-    if (!includeMasked && widget is TracewayPrivacyMask) return;
+    if (!includeMasked && isMask(widget)) return;
     final text = _ownText(widget);
     if (text != null) {
       final cleaned = _clean(text);
@@ -507,7 +507,7 @@ class ElementPath {
 
   bool isMasked(int index) {
     for (var i = index; i < elements.length; i++) {
-      if (elements[i].widget is TracewayPrivacyMask) return true;
+      if (isMask(elements[i].widget)) return true;
     }
     return false;
   }
