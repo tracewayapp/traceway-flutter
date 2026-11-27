@@ -318,6 +318,8 @@ Settings applyOverlay(Settings base, Json overlay) {
     if (replay['maskAllInputs'] is bool) {
       out.replayMaskAllInputs = replay['maskAllInputs'] as bool;
     }
+    final images = TracewayImagePolicy.parse(replay['images']);
+    if (images != null) out.replayImages = images;
     final captureMode = replay['captureMode'];
     if (captureMode == 'video' || captureMode == 'wireframe') {
       out.replayCaptureMode = captureMode as String;
@@ -393,6 +395,7 @@ Ceilings applyLimits(Ceilings ceilings, Json? overlay) {
     replay: replay == null ? ceilings.replay : lowerMode(ceilings.replay, replay),
     sessions: ceilings.sessions,
     metrics: ceilings.metrics && limits['metrics'] != 'off',
+    replayImages: ceilings.replayImages,
   );
 }
 
@@ -407,5 +410,6 @@ Settings clampToCeilings(Settings settings, Ceilings ceilings) {
   out.replayMode = lowerMode(out.replayMode, ceilings.replay);
   out.sessionsEnabled = out.sessionsEnabled && ceilings.sessions;
   out.metrics.enabled = out.metrics.enabled && ceilings.metrics;
+  out.replayImages = out.replayImages.lower(ceilings.replayImages);
   return out;
 }

@@ -36,6 +36,7 @@ import 'persistence/outbox.dart';
 import 'persistence/state_store.dart';
 import 'replay/recordings_transport.dart';
 import 'replay/replay_controller.dart';
+import 'replay/replay_source.dart';
 import 'screen_recorder.dart';
 import 'session/session_manager.dart';
 import 'stack_trace_formatter.dart';
@@ -53,6 +54,8 @@ const int _maxPendingBeforeReady = 500;
 const int _maxErrorsPerMinute = 60;
 const int _duplicateErrorWindowMs = 1000;
 const int _maxGlobalAttributes = 64;
+const int _defaultHealthDelayMs = 1000;
+const int _maxHealthDelayMs = 300000;
 
 /// Kept while the SDK starts even when breadcrumbs filled the queue.
 const Set<String> _keptBeforeReady = {
@@ -78,6 +81,7 @@ class TracewayTestOverrides {
     this.opampMinPollIntervalMs,
     this.videoSupported = true,
     this.appVitals = false,
+    this.collectionHealthDelayMs,
   });
 
   final LogRecordExporter? logExporter;
@@ -97,6 +101,9 @@ class TracewayTestOverrides {
   /// Whether the frame, start and hang instrumentation runs. Metrics the
   /// app reports and requests, sessions and errors are recorded either way.
   final bool appVitals;
+
+  /// The first delay of `traceway.collection.health` (1 s by default).
+  final int? collectionHealthDelayMs;
 }
 
 class TracewayClient with WidgetsBindingObserver implements RouterHooks {
@@ -158,6 +165,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         // still correlates records and samples.
         sessions: _options.sessions && !_standalone,
         captureMetrics: _options.captureMetrics,
+        replayImages: _options.replayImages,
       ),
     );
     final settings = _control.settings;
@@ -172,6 +180,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       url: _endpoints?.recordings ?? '',
       token: _token ?? '',
       httpClient: _http,
+      onFailed: _scheduleHealth,
     );
     // A streamed segment must leave before the frame ring buffer wraps.
     final ringMs =
@@ -181,6 +190,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       sessionId: () => _sessions?.currentId,
       nextSegmentIndex: () => _sessions?.nextSegmentIndex() ?? 0,
       segmentMs: (ringMs * 0.8).round().clamp(200, 10000),
+      onBudgetExceeded: _scheduleHealth,
     );
     _metrics = MetricsRecorder(
       control: _control,
@@ -245,6 +255,17 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   String? _lastErrorKey;
   int _lastErrorMs = 0;
   int _suppressedErrors = 0;
+
+  /// Errors the flood guard dropped since the SDK started.
+  int _suppressedTotal = 0;
+
+  Timer? _healthTimer;
+  late int _healthDelayMs = _firstHealthDelayMs;
+  late final int _firstHealthDelayMs =
+      _overrides?.collectionHealthDelayMs ?? _defaultHealthDelayMs;
+
+  /// Whether this session's row already heard that data was dropped.
+  bool _healthReported = false;
 
   StateStore _store = StateStore(null);
   Outbox? _outbox;
@@ -412,6 +433,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _screenRecorder = recorder;
     if (recorder is WireframeRecorder) {
       recorder.maskAllInputs = _control.settings.replayMaskAllInputs;
+      recorder.networkImages =
+          _control.settings.replayImages != TracewayImagePolicy.off;
     }
     _replay.attach(recorder);
   }
@@ -1077,6 +1100,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// Changes made together send one update.
   void _attributesChanged() {
     _scheduleRefresh();
+    _scheduleSessionUpdate();
+  }
+
+  /// Sends `traceway.session.update` for the current session soon; calls
+  /// made together send one.
+  void _scheduleSessionUpdate() {
     if (_sessionUpdateScheduled) return;
     _sessionUpdateScheduled = true;
     scheduleMicrotask(() {
@@ -1740,6 +1769,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _replay.stop();
     _refreshTimer?.cancel();
     _overrideTimer?.cancel();
+    _healthTimer?.cancel();
     _progressTimer?.cancel();
     _rssTimer?.cancel();
     try {
@@ -1854,7 +1884,42 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         ..._replay.budget.snapshot(session.id),
         'traceway.replay.failed_segments': _recordings.failedSegments,
         'traceway.context.evicted': _buffer.evictedCount,
+        'traceway.replay.images': replayImagePolicy.name,
       };
+
+  /// What replay may show of the app's images now: the `replay.images`
+  /// setting under [TracewayOptions.replayImages], and `off` when the
+  /// screen is not recorded.
+  @visibleForTesting
+  TracewayImagePolicy get replayImagePolicy => recordsScreen
+      ? _control.settings.replayImages
+      : TracewayImagePolicy.off;
+
+  /// Tells the server that data was dropped: a `traceway.collection.health`
+  /// record with the session's counters, after 1 s and then at most once
+  /// per doubling delay (up to 5 minutes), as the browser SDK does. The
+  /// first one in a session also updates the session row, whose closing
+  /// event carries the totals.
+  void _scheduleHealth() {
+    if (_healthTimer != null || _shutdown) return;
+    _healthTimer = Timer(Duration(milliseconds: _healthDelayMs), () {
+      _healthTimer = null;
+      final session = _sessions?.current;
+      _emit(
+        eventName: eventCollectionHealth,
+        severity: Severity.INFO,
+        attributes: {
+          ..._replay.budget.snapshot(session?.id),
+          'traceway.error.suppressed_total': _suppressedTotal,
+          'traceway.context.evicted': _buffer.evictedCount,
+          'traceway.replay.failed_segments': _recordings.failedSegments,
+        },
+      );
+      if (session != null && !_healthReported) _scheduleSessionUpdate();
+      _healthReported = true;
+      _healthDelayMs = min(_healthDelayMs * 2, _maxHealthDelayMs);
+    });
+  }
 
   void _onSessionStart(SessionInfo session, bool resumed) {
     // What an earlier session left behind is not this one's context.
@@ -1863,6 +1928,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       _persisted?.restored.clear();
     }
     _triggers.resetSession();
+    _healthDelayMs = _firstHealthDelayMs;
+    _healthReported = false;
     final limits = _store.get('triggerLimits');
     if (limits is Map && limits['sessionId'] == session.id) {
       _triggers.restoreSessionLimits(limits['limits']);
@@ -1920,7 +1987,11 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     if (signal == 'errors') {
       final key = '${existing['exception.type']?.value}:'
           '${existing['exception.message']?.value}';
-      if (!_admitError(key)) return false;
+      if (!_admitError(key)) {
+        _suppressedTotal++;
+        _scheduleHealth();
+        return false;
+      }
       if (_suppressedErrors > 0) {
         record.addAttribute(OTel.attributeInt(
             'traceway.error.suppressed_count', _suppressedErrors));
@@ -2230,6 +2301,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final recorder = _screenRecorder;
     if (recorder is WireframeRecorder) {
       recorder.maskAllInputs = settings.replayMaskAllInputs;
+      recorder.networkImages = settings.replayImages != TracewayImagePolicy.off;
     }
     _replay.apply(
       _control.replayMode,

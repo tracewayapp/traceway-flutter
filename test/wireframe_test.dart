@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'dart:ui' show ImageFilter, instantiateImageCodec;
 
 // ignore: deprecated_member_use
@@ -9,6 +10,7 @@ import 'package:flutter/cupertino.dart'
     show CupertinoAlertDialog, CupertinoDialogAction, showCupertinoDialog;
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,10 +25,11 @@ import 'package:traceway/src/traceway_screen_capture_mode.dart';
 import 'package:traceway/src/traceway_mask_mode.dart';
 import 'package:traceway/src/traceway_privacy_mask.dart';
 import 'package:traceway/src/traceway_widget.dart';
-import 'package:traceway/src/wireframe/capture.dart';
-import 'package:traceway/src/wireframe/diff.dart';
-import 'package:traceway/src/wireframe/glyphs.dart';
 import 'package:traceway/src/wireframe/vnode.dart';
+import 'package:traceway/src/wireframe/wireframe_capture.dart';
+import 'package:traceway/src/wireframe/wireframe_css.dart';
+import 'package:traceway/src/wireframe/wireframe_diff.dart';
+import 'package:traceway/src/wireframe/wireframe_glyphs.dart';
 import 'package:traceway/src/wireframe/wireframe_recorder.dart';
 
 /// What rrweb's replayer does with a page, closely enough to tell whether
@@ -868,7 +871,7 @@ void main() {
         ]),
       )));
       final ready = <Glyph>[];
-      final glyphs = IconGlyphs();
+      final glyphs = WireframeGlyphs();
       final capture = WireframeCapture()..glyphs = glyphs;
       late VNode screen;
       await tester.runAsync(() async {
@@ -957,6 +960,129 @@ void main() {
       expect(styleNumber(video, 'height'), 90);
       expect(nativeViewLabel('plugins.flutter.dev/google_maps_android'), 'Map');
       expect(nativeViewLabel('com.pichillilorenzo/flutter_inappwebview'), 'Web view');
+    });
+  });
+
+  group('shared invariants', () {
+    test('the stylesheet is the one every platform uses', () {
+      expect(wireframeCss, File('test/fixtures/wireframe.css').readAsStringSync());
+    });
+
+    test('the document skeleton has the fixed node ids', () {
+      final document = serializeDocument(VNode.element(
+          screenNodeId, 'div', const {'id': 'tw'}, [
+        VNode.text(firstCapturedNodeId, 'first'),
+      ]));
+      final ids = <String>[];
+      void walk(Map<String, Object?> node) {
+        final name = node['tagName'] ?? node['name'] ?? 'type${node['type']}';
+        ids.add('${node['id']}:$name');
+        for (final child in (node['childNodes'] as List? ?? const [])) {
+          walk(child as Map<String, Object?>);
+        }
+      }
+
+      walk(document);
+      expect(ids, [
+        '1:type0',
+        '2:html',
+        '3:html',
+        '4:head',
+        '5:meta',
+        '6:style',
+        '7:body',
+        '8:div',
+        '16:type3',
+      ]);
+      final head = ((document['childNodes'] as List)[1] as Map)['childNodes'] as List;
+      final style = ((head[0] as Map)['childNodes'] as List)[1] as Map;
+      expect((style['attributes'] as Map)['_cssText'], wireframeCss);
+    });
+
+    testWidgets('the screen node carries the platform font', (tester) async {
+      await tester.pumpWidget(_app(const Scaffold(body: Text('font'))));
+      final capture = WireframeCapture();
+      final android = _capture(capture);
+      expect(android.id, screenNodeId);
+      expect(android.attributes['id'], 'tw');
+      expect(android.attributes['style'],
+          'width:800px;height:600px;font-family:$robotoFontStack');
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      try {
+        expect(_capture(capture).attributes['style'],
+            'width:800px;height:600px;font-family:$appleFontStack');
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+      expect(appleFontStack,
+          '-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif');
+      expect(robotoFontStack, 'Roboto,"Segoe UI","Helvetica Neue",Arial,sans-serif');
+      expect(wireframeFontStack(TargetPlatform.macOS), appleFontStack);
+      for (final platform in [
+        TargetPlatform.android,
+        TargetPlatform.fuchsia,
+        TargetPlatform.linux,
+        TargetPlatform.windows,
+      ]) {
+        expect(wireframeFontStack(platform), robotoFontStack);
+      }
+    });
+
+    testWidgets(
+        'network images are drawn from their URL, and are placeholders '
+        'when images are off', (tester) async {
+      final picture =
+          (await tester.runAsync(() => createTestImage(width: 4, height: 4)))!;
+      final photo = _LocalNetworkImage('https://cdn.test/photo.png', picture);
+      await tester.pumpWidget(_app(Scaffold(
+        body: Column(children: [
+          SizedBox(
+              width: 120,
+              height: 80,
+              child: Image(image: photo, fit: BoxFit.cover)),
+          Container(
+            width: 120,
+            height: 80,
+            decoration: BoxDecoration(
+              color: const Color(0xFF00FF00),
+              image: DecorationImage(image: photo, fit: BoxFit.contain),
+            ),
+          ),
+          TracewayPrivacyMask(
+            child: SizedBox(
+                width: 120,
+                height: 80,
+                child: Image(
+                    image: _LocalNetworkImage(
+                        'https://blocked.test/secret.png', picture))),
+          ),
+        ]),
+      )));
+      await tester.pump();
+      final capture = WireframeCapture();
+      var screen = _capture(capture);
+      final img = allNodes(screen).singleWhere((n) => n.tag == 'img');
+      expect(img.attributes['src'], 'https://cdn.test/photo.png');
+      expect(img.attributes['style'], contains('object-fit:cover;'));
+      final decorated = allNodes(screen).singleWhere((n) =>
+          (n.attributes['style'] ?? '').contains('background-image:url('));
+      expect(
+          decorated.attributes['style'],
+          contains('background-image:url("https://cdn.test/photo.png");'
+              'background-size:contain;'));
+      expect(decorated.attributes['class'], isNull);
+      // Under a privacy mask an image is a placeholder anyway.
+      expect(jsonEncode(serializeDocument(screen)), isNot(contains('blocked')));
+
+      capture.networkImages = false;
+      screen = _capture(capture);
+      expect(jsonEncode(serializeDocument(screen)), isNot(contains('cdn.test')));
+      expect(allNodes(screen).where((n) => n.tag == 'img'), isEmpty);
+      final placeholders =
+          allNodes(screen).where((n) => n.attributes['class'] == 'im').toList();
+      expect(placeholders, hasLength(3));
+      expect(placeholders[1].attributes['style'],
+          contains('background-color:rgba(158,158,158,.22);'));
     });
   });
 
@@ -1060,6 +1186,78 @@ void main() {
       // Unmasking keeps what was masked.
       recorder.maskAllInputs = false;
       expect(recorder.bufferedFrameCount, 1);
+      recorder.stop();
+    });
+
+    testWidgets('turning images off drops the frames that showed them',
+        (tester) async {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      final picture =
+          (await tester.runAsync(() => createTestImage(width: 4, height: 4)))!;
+      await tester.pumpWidget(_app(Scaffold(
+        body: SizedBox(
+          width: 100,
+          height: 100,
+          child: Image(
+              image: _LocalNetworkImage('https://cdn.test/a.png', picture)),
+        ),
+      )));
+      await tester.pump();
+      final recorder =
+          WireframeRecorder(rootKey: _rootKey, maxFrames: 50, now: () => now);
+      expect(recorder.networkImages, isTrue);
+      final start = now;
+      recorder.start();
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(recorder.bufferedFrameCount, 1);
+
+      now = now.add(const Duration(seconds: 1));
+      recorder.networkImages = false;
+      // Taken again at once, though the app draws nothing.
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(recorder.bufferedFrameCount, 1);
+      now = now.add(const Duration(seconds: 1));
+      final off =
+          (await recorder.captureRecording('c', since: start, until: now))!;
+      expect(jsonEncode(off.events), isNot(contains('cdn.test')));
+      expect(jsonEncode(off.events), contains('"class":"im"'));
+
+      recorder.networkImages = true;
+      await tester.pump(const Duration(milliseconds: 1));
+      now = now.add(const Duration(seconds: 1));
+      final on = (await recorder.captureRecording('d',
+          since: now.subtract(const Duration(milliseconds: 500)), until: now))!;
+      expect(jsonEncode(on.events), contains('"src":"https://cdn.test/a.png"'));
+      recorder.stop();
+    });
+
+    testWidgets('the background screen has its fixed ids and the font',
+        (tester) async {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      await tester.pumpWidget(_app(const Scaffold(body: Text('front'))));
+      final recorder =
+          WireframeRecorder(rootKey: _rootKey, maxFrames: 50, now: () => now);
+      final start = now;
+      recorder.start();
+      await tester.pump(const Duration(milliseconds: 1));
+      now = now.add(const Duration(seconds: 1));
+      recorder.didChangeAppLifecycleState(AppLifecycleState.paused);
+      now = now.add(const Duration(seconds: 1));
+      final clip =
+          (await recorder.captureRecording('c', since: start, until: now))!;
+      expect(clip.events.map((e) => e['type']).toList(), [4, 2, 4, 2, 5]);
+      final away = (clip.events[3]['data'] as Map)['node'] as Map;
+      final body = (((away['childNodes'] as List)[1] as Map)['childNodes']
+          as List)[1] as Map;
+      final screen = (body['childNodes'] as List).single as Map;
+      expect(screen['id'], screenNodeId);
+      expect((screen['attributes'] as Map)['style'],
+          contains('font-family:$robotoFontStack;'));
+      final label = (screen['childNodes'] as List).single as Map;
+      expect(label['id'], 9);
+      final text = (label['childNodes'] as List).single as Map;
+      expect(text['id'], 10);
+      expect(text['textContent'], 'App in the background');
       recorder.stop();
     });
 
@@ -1235,6 +1433,31 @@ void main() {
           isNull);
     });
 
+    test('replay.images is a remote setting, wifi by default', () {
+      expect(defaultSettings().replayImages, TracewayImagePolicy.wifi);
+      Settings apply(String doc) =>
+          applyOverlay(defaultSettings(), parseSettingsDocument(doc));
+      expect(apply('{"replay": {"images": "off"}}').replayImages,
+          TracewayImagePolicy.off);
+      expect(apply('{"replay": {"images": "always"}}').copy().replayImages,
+          TracewayImagePolicy.always);
+      expect(apply('{"replay": {"images": "sometimes"}}').replayImages,
+          TracewayImagePolicy.wifi);
+      expect(apply('{"replay": {"images": false}}').replayImages,
+          TracewayImagePolicy.wifi);
+      // The app's option is the ceiling: off < wifi < always.
+      Settings capped(TracewayImagePolicy ceiling, String doc) =>
+          clampToCeilings(apply(doc), ceilingsFrom(replayImages: ceiling));
+      expect(capped(TracewayImagePolicy.off, '{"replay": {"images": "always"}}')
+          .replayImages, TracewayImagePolicy.off);
+      expect(capped(TracewayImagePolicy.wifi, '{"replay": {"images": "always"}}')
+          .replayImages, TracewayImagePolicy.wifi);
+      expect(capped(TracewayImagePolicy.always, '{"replay": {"images": "off"}}')
+          .replayImages, TracewayImagePolicy.off);
+      expect(capped(TracewayImagePolicy.always, '{}').replayImages,
+          TracewayImagePolicy.wifi);
+    });
+
     Future<TracewayClient> client(TracewayOptions options,
             {bool video = true, Directory? dir}) =>
         TracewayClient.initializeForTest(
@@ -1340,6 +1563,44 @@ void main() {
       await app.shutdown();
     });
 
+    testWidgets('replay.images off turns network images into placeholders',
+        (tester) async {
+      final app = (await tester.runAsync(() => client(const TracewayOptions(
+          remoteConfig: false,
+          screenCapture: true,
+          screenCaptureMode: wireframe))))!;
+      await tester.pumpWidget(const Traceway(
+          child: Directionality(
+              textDirection: TextDirection.ltr, child: Text('screen'))));
+      await tester.pump();
+      final recorder = app.screenRecorder! as WireframeRecorder;
+      expect(app.replayImagePolicy, TracewayImagePolicy.wifi);
+      expect(recorder.networkImages, isTrue);
+      app.control.applyRemote({
+        'replay': {'images': 'off'}
+      });
+      expect(app.replayImagePolicy, TracewayImagePolicy.off);
+      expect(recorder.networkImages, isFalse);
+      app.control.applyRemote({
+        'replay': {'images': 'always'}
+      });
+      expect(app.replayImagePolicy, TracewayImagePolicy.always);
+      expect(recorder.networkImages, isTrue);
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(app.shutdown);
+
+      final capped = (await tester.runAsync(() => client(const TracewayOptions(
+          remoteConfig: false,
+          screenCapture: true,
+          screenCaptureMode: wireframe,
+          replayImages: TracewayImagePolicy.off))))!;
+      capped.control.applyRemote({
+        'replay': {'images': 'always'}
+      });
+      expect(capped.replayImagePolicy, TracewayImagePolicy.off);
+      await tester.runAsync(capped.shutdown);
+    });
+
     testWidgets('the Traceway widget swaps its recorder with the mode',
         (tester) async {
       final app = (await tester.runAsync(() => client(capture)))!;
@@ -1415,4 +1676,43 @@ class _RenderThrowing extends RenderProxyBox {
     }
     return super.size;
   }
+}
+
+/// A network image whose bytes are already here, so a test shows it without
+/// a network: the capture only looks at its URL.
+class _LocalNetworkImage extends ImageProvider<NetworkImage>
+    implements NetworkImage {
+  _LocalNetworkImage(this.url, this.picture);
+
+  @override
+  final String url;
+  final ui.Image picture;
+
+  @override
+  double get scale => 1;
+
+  @override
+  Map<String, String>? get headers => null;
+
+  @override
+  WebHtmlElementStrategy get webHtmlElementStrategy =>
+      WebHtmlElementStrategy.never;
+
+  @override
+  Future<NetworkImage> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture<NetworkImage>(this);
+
+  ImageStreamCompleter _load() => OneFrameImageStreamCompleter(
+      SynchronousFuture(ImageInfo(image: picture.clone())));
+
+  @override
+  ImageStreamCompleter loadBuffer(
+          // ignore: deprecated_member_use
+          NetworkImage key, DecoderBufferCallback decode) =>
+      _load();
+
+  @override
+  ImageStreamCompleter loadImage(
+          NetworkImage key, ImageDecoderCallback decode) =>
+      _load();
 }

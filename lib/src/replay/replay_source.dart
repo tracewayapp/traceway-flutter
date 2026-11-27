@@ -1,5 +1,26 @@
-/// One screen-recording clip, as produced by a recorder: a video clip or a
-/// wireframe recording.
+/// What the replay controller needs from a screen recorder: the video
+/// recorder (`ScreenRecorder`) or the wireframe recorder
+/// (`WireframeRecorder`). Lets tests stand in for both.
+abstract class ReplaySource {
+  bool get isRunning;
+  void start();
+  void stop();
+  void clearBuffer();
+
+  /// Whether any frame was captured at or after [since] and before [until].
+  bool hasFrames({DateTime? since, DateTime? until});
+
+  /// Makes one clip of what was on screen at or after [since] and before
+  /// [until]. The frames are chosen when this is called.
+  Future<SessionRecordingPayload?> captureRecording(
+    String clipId, {
+    DateTime? since,
+    DateTime? until,
+  });
+}
+
+/// One screen-recording clip, as a [ReplaySource] hands it to the
+/// controller: a video clip or a wireframe recording.
 class SessionRecordingPayload {
   /// Names the clip while it is encoded; not sent.
   final String clipId;

@@ -5,6 +5,10 @@ library;
 
 import 'dart:convert';
 
+import '../traceway_image_policy.dart';
+
+export '../traceway_image_policy.dart' show TracewayImagePolicy;
+
 /// `off` drops a signal, `buffer` keeps it on the device until a trigger or
 /// capture flushes it, `stream` sends it.
 enum Mode { off, buffer, stream }
@@ -295,6 +299,7 @@ class Settings {
     required this.replayMode,
     required this.replaySessionSampleRate,
     this.replayMaskAllInputs = true,
+    this.replayImages = TracewayImagePolicy.wifi,
     this.replayCaptureMode,
     required this.bufferMaxBytes,
     required this.bufferMaxAgeSeconds,
@@ -316,6 +321,10 @@ class Settings {
   /// (`replay.maskAllInputs`, as in the browser SDK).
   bool replayMaskAllInputs;
 
+  /// When replay may show images (`replay.images`): `wifi` by default,
+  /// held under the app's `TracewayOptions.replayImages`.
+  TracewayImagePolicy replayImages;
+
   /// How the Flutter SDK records the screen, `video` or `wireframe`
   /// (`replay.captureMode`); null keeps the app's
   /// `TracewayOptions.screenCaptureMode`.
@@ -335,6 +344,7 @@ class Settings {
         replayMode: replayMode,
         replaySessionSampleRate: replaySessionSampleRate,
         replayMaskAllInputs: replayMaskAllInputs,
+        replayImages: replayImages,
         replayCaptureMode: replayCaptureMode,
         bufferMaxBytes: bufferMaxBytes,
         bufferMaxAgeSeconds: bufferMaxAgeSeconds,
@@ -354,6 +364,7 @@ class Ceilings {
     required this.replay,
     required this.sessions,
     this.metrics = true,
+    this.replayImages = TracewayImagePolicy.always,
   });
 
   final bool enabled;
@@ -366,6 +377,9 @@ class Ceilings {
 
   /// False when the app or the plan does not allow metrics.
   final bool metrics;
+
+  /// The most images replay may show (`TracewayOptions.replayImages`).
+  final TracewayImagePolicy replayImages;
 }
 
 const String defaultExceptionTriggerId = 'default-exception';
@@ -443,6 +457,7 @@ Ceilings ceilingsFrom({
   bool captureUserActions = true,
   bool sessions = true,
   bool captureMetrics = true,
+  TracewayImagePolicy replayImages = TracewayImagePolicy.always,
 }) {
   Mode allow(bool flag) => flag ? Mode.stream : Mode.off;
   final signals = {for (final name in signalNames) name: Mode.stream};
@@ -456,5 +471,6 @@ Ceilings ceilingsFrom({
     replay: allow(screenCapture),
     sessions: sessions,
     metrics: captureMetrics,
+    replayImages: replayImages,
   );
 }

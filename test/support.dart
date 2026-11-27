@@ -6,9 +6,8 @@ import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
 import 'package:dartastic_opentelemetry/testing.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:traceway/src/models/session_recording_payload.dart';
 import 'package:traceway/src/opamp/messages.dart';
-import 'package:traceway/src/replay/replay_controller.dart';
+import 'package:traceway/src/replay/replay_source.dart';
 import 'package:traceway/src/traceway_client.dart';
 import 'package:traceway/src/traceway_options.dart';
 
@@ -72,6 +71,7 @@ Future<Harness> startHarness({
   Handler? handler,
   Directory? stateDirectory,
   double Function()? random,
+  int? collectionHealthDelayMs,
 }) async {
   final logs = InMemoryLogExporter();
   final spans = InMemorySpanExporter();
@@ -96,6 +96,7 @@ Future<Harness> startHarness({
       stateDirectory: stateDirectory,
       deviceAttributes: const {'os.name': 'test-os'},
       random: random,
+      collectionHealthDelayMs: collectionHealthDelayMs,
     ),
   );
   return Harness(client, logs, spans, requests);

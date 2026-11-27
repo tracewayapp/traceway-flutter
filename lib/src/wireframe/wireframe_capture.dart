@@ -1,3 +1,26 @@
+/// Wireframe capture: what the app paints, as an HTML document rrweb plays.
+///
+/// Pipeline: roots → walk → convert → VNodes (stable ids, shared unchanged
+/// subtrees) → CSS → diff → rrweb events.
+///
+/// - **roots**: `WireframeRoots` gives the element the walk starts from,
+///   the `Traceway` widget's repaint boundary; dialogs and overlays are
+///   inside it.
+/// - **walk**: [WireframeCapture] visits the element tree in paint order.
+/// - **convert**: each render object that draws becomes nodes, by kind:
+///   `text`, `field`, `image`, `toggle`, `slider`, `progress`, `segmented`,
+///   `nativePlaceholder`, `customDrawing`, `group`, `scroll`, and Flutter's
+///   own `table` and `circle`.
+/// - **VNodes**: an element keeps its node ids from frame to frame, and an
+///   unchanged subtree is the previous frame's very object (`vnode.dart`).
+/// - **CSS**: geometry and paint inline on each node, the shared rules in
+///   [wireframeCss] (`wireframe_css.dart`).
+/// - **diff**: `diffScreens` turns two frames into an rrweb mutation
+///   (`wireframe_diff.dart`).
+/// - **rrweb events**: `WireframeRecorder` assembles Meta, FullSnapshot,
+///   mutations and pointer events into clips.
+library;
+
 import 'dart:math' as math;
 
 // The SDK supports Flutter releases from before material_ui and
@@ -30,15 +53,15 @@ import 'package:flutter/material.dart'
         Switch,
         Theme,
         UnderlineInputBorder;
-import 'package:flutter/foundation.dart' show mergeSort;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, mergeSort;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import '../traceway_mask_mode.dart';
 import '../traceway_privacy_mask.dart';
-import 'css.dart';
-import 'glyphs.dart';
 import 'vnode.dart';
+import 'wireframe_css.dart';
+import 'wireframe_glyphs.dart';
 
 /// One captured screen: the wireframe DOM of what the app painted.
 class WireframeFrame {
@@ -75,12 +98,14 @@ class WireframeCapture {
   /// Text in editable fields is masked, as rrweb's `maskAllInputs` does.
   bool maskAllInputs = true;
 
-  /// Load images that came from the network in the replay. Off, every image
-  /// is a placeholder.
+  /// Load images that came from the network in the replay, by their URL:
+  /// the browser that plays it fetches them. Off (`replay.images = off`),
+  /// every image is a placeholder (`.im`). Images from memory, files and
+  /// assets are always placeholders: nothing of theirs is uploaded.
   bool networkImages = true;
 
   /// Draws the shapes of icons; without it every icon is a square.
-  IconGlyphs? glyphs;
+  WireframeGlyphs? glyphs;
 
   /// The last error a render object raised while it was captured; it and
   /// its subtree were left out of that frame.
@@ -135,7 +160,8 @@ class WireframeCapture {
       'div',
       {
         'id': 'tw',
-        'style': 'width:${px(root.size.width)};height:${px(root.size.height)}',
+        'style': 'width:${px(root.size.width)};height:${px(root.size.height)};'
+            'font-family:${wireframeFontStack(defaultTargetPlatform)}',
       },
       children,
     ));
@@ -199,7 +225,7 @@ class WireframeCapture {
     ));
   }
 
-  VNode _text(int id, String text) => _intern(VNode.text(id, text));
+  VNode _textNode(int id, String text) => _intern(VNode.text(id, text));
 
   // ---- walk -----------------------------------------------------------------
 
@@ -435,22 +461,22 @@ class WireframeCapture {
     if (ro is PlatformViewRenderBox ||
         ro is RenderDarwinPlatformView ||
         ro is TextureBox) {
-      _native(element, ro, t, s);
+      _nativePlaceholder(element, ro, t, s);
       return;
     }
     if (ro is RenderParagraph) {
-      _paragraph(element, ro, t, s);
+      _text(element, ro, t, s);
       return;
     }
     if (ro is RenderEditable) {
-      _editable(element, ro, t, s);
+      _field(element, ro, t, s);
       return;
     }
     if (ro is RenderImage) {
       _image(element, ro, t, s);
       return;
     }
-    if (ro is RenderCustomPaint && _customPaint(element, ro, t, s)) return;
+    if (ro is RenderCustomPaint && _customDrawing(element, ro, t, s)) return;
     if (ro is RenderTable) {
       _table(element, ro, t, s);
       return;
@@ -459,7 +485,7 @@ class WireframeCapture {
     var style = '';
     var clips = false;
     var group = false;
-    _Affine? content;
+    String? cls;
     if (widget is ColoredBox) {
       group = true;
       if (!isTransparent(widget.color)) {
@@ -474,18 +500,22 @@ class WireframeCapture {
         _circle(element, ro, decoration, direction, t, inner, s);
         return;
       }
-      final css = decorationCss(decoration, size, direction,
-          images: networkImages && !s.blockImages);
+      final images = _showsImages(s);
+      final css = decorationCss(decoration, size, direction, images: images);
+      final placeholder =
+          decorationImagePlaceholder(decoration, images: images) ? 'im' : null;
       if (ro.position == DecorationPosition.foreground) {
         final children = <VNode>[];
         _visitChildren(element, inner.copy(out: children, origin: t));
-        children.add(_element(_id(element, 1),
-            'width:100%;height:100%;$css', const []));
+        children.add(_element(
+            _id(element, 1), 'width:100%;height:100%;$css', const [],
+            cls: placeholder));
         s.out.add(_element(_id(element), _geometry(s.origin, t, size), children));
         return;
       }
       group = true;
       style = css;
+      cls = placeholder;
     } else if (ro is RenderPhysicalModel) {
       group = true;
       clips = ro.clipBehavior != Clip.none;
@@ -568,13 +598,23 @@ class WireframeCapture {
       }
     } else if (ro is RenderAbstractViewport &&
         ro is! RenderListWheelViewport) {
-      group = true;
-      clips = ro is! RenderViewportBase || ro.clipBehavior != Clip.none;
-      final shift = _scrollShift(element, ro as RenderAbstractViewport);
-      if (shift != null) content = t.translate(shift.dx, shift.dy);
+      _scroll(element, t, s, bounds);
+      return;
     }
+    _group(element, t, s, bounds,
+        style: group ? style : null, clips: clips, cls: cls);
+  }
 
-    if (!group) {
+  /// A render object with no look of its own. One that paints, clips or
+  /// fades its children ([style] not null) is a container node holding
+  /// them. One that only lays them out is folded: its children go into the
+  /// parent's node, placed by the transforms, so the many layout-only
+  /// render objects cost no node.
+  void _group(RenderObjectElement element, _Affine t, _Scope s, Rect bounds,
+      {String? style, bool clips = false, String? cls}) {
+    final ro = element.renderObject as RenderBox;
+    final inner = s.copy(ro: ro, transform: t);
+    if (style == null) {
       // The render object that lays out a SegmentedButton's segments:
       // the first under it with a child for each.
       final hint = s.hint;
@@ -589,7 +629,7 @@ class WireframeCapture {
       segmented?.drawn = true;
       _visitChildren(element, inner);
       if (segmented != null) {
-        _segmentedOutline(
+        _segmented(
             element,
             segmented,
             ro as ContainerRenderObjectMixin<RenderBox,
@@ -599,29 +639,59 @@ class WireframeCapture {
       }
       return;
     }
-    if (clips) style += 'overflow:hidden;';
     final children = <VNode>[];
-    final childClip = clips ? s.clip.intersect(bounds) : s.clip;
-    if (content != null) {
-      final contentChildren = <VNode>[];
-      _visitChildren(
-        element,
-        inner.copy(out: contentChildren, origin: content, clip: childClip),
-      );
-      final shift = content.relativeTo(t);
-      children.add(_element(
-        _id(element, 1),
-        'left:${px(shift.tx)};top:${px(shift.ty)};',
-        contentChildren,
-      ));
-    } else {
-      _visitChildren(
-        element,
-        inner.copy(out: children, origin: t, clip: childClip),
-      );
-    }
-    s.out.add(_element(_id(element), _geometry(s.origin, t, size) + style, children));
+    _visitChildren(
+      element,
+      inner.copy(
+          out: children,
+          origin: t,
+          clip: clips ? s.clip.intersect(bounds) : s.clip),
+    );
+    s.out.add(_element(
+        _id(element),
+        _geometry(s.origin, t, ro.size) + style + (clips ? 'overflow:hidden;' : ''),
+        children,
+        cls: cls));
   }
+
+  /// A scrolling viewport: a node that clips, holding a content node
+  /// shifted by the scroll offset along the axis. The children keep their
+  /// place in the content node while it scrolls, so a scroll changes one
+  /// attribute per frame instead of every child's.
+  void _scroll(
+      RenderObjectElement element, _Affine t, _Scope s, Rect bounds) {
+    final ro = element.renderObject as RenderBox;
+    final viewport = ro as RenderAbstractViewport;
+    final clips =
+        viewport is! RenderViewportBase || viewport.clipBehavior != Clip.none;
+    final shift = _scrollShift(element, viewport);
+    if (shift == null) {
+      _group(element, t, s, bounds, style: '', clips: clips);
+      return;
+    }
+    final content = t.translate(shift.dx, shift.dy);
+    final contentChildren = <VNode>[];
+    _visitChildren(
+      element,
+      s.copy(
+          out: contentChildren,
+          ro: ro,
+          transform: t,
+          origin: content,
+          clip: clips ? s.clip.intersect(bounds) : s.clip),
+    );
+    final offset = content.relativeTo(t);
+    final contentNode = _element(
+      _id(element, 1),
+      'left:${px(offset.tx)};top:${px(offset.ty)};',
+      contentChildren,
+    );
+    s.out.add(_element(
+        _id(element),
+        _geometry(s.origin, t, ro.size) + (clips ? 'overflow:hidden;' : ''),
+        [contentNode]));
+  }
+
 
   /// A circle decoration on a box that is not square: Flutter draws a
   /// circle as wide as the box is short, in its middle, where CSS would
@@ -631,12 +701,14 @@ class WireframeCapture {
       _Scope inner, _Scope s) {
     final size = ro.size;
     final side = math.min(size.width, size.height);
+    final images = _showsImages(s);
     final circle = _element(
       _id(element, 2),
       'left:${px((size.width - side) / 2)};top:${px((size.height - side) / 2)};'
           'width:${px(side)};height:${px(side)};'
-          '${decorationCss(decoration, Size.square(side), direction, images: networkImages && !s.blockImages)}',
+          '${decorationCss(decoration, Size.square(side), direction, images: images)}',
       const [],
+      cls: decorationImagePlaceholder(decoration, images: images) ? 'im' : null,
     );
     final children = <VNode>[];
     final foreground = ro.position == DecorationPosition.foreground;
@@ -648,7 +720,7 @@ class WireframeCapture {
 
   /// A SegmentedButton paints its outline and the lines between its
   /// segments itself, over them: as nodes after them.
-  void _segmentedOutline(
+  void _segmented(
       Element element,
       _SegmentedHint hint,
       ContainerRenderObjectMixin<RenderBox, ContainerBoxParentData<RenderBox>>
@@ -719,7 +791,7 @@ class WireframeCapture {
 
   // ---- leaves ---------------------------------------------------------------
 
-  void _paragraph(
+  void _text(
       Element element, RenderParagraph ro, _Affine t, _Scope s) {
     final size = ro.size;
     final span = ro.text;
@@ -752,7 +824,7 @@ class WireframeCapture {
     if (plain) {
       final text = runs.map((r) => r.text).join();
       if (text.isNotEmpty) {
-        children.add(_text(_id(element, 1), _mask(text, s.maskText)));
+        children.add(_textNode(_id(element, 1), _mask(text, s.maskText)));
       }
     } else {
       for (var i = 0; i < runs.length; i++) {
@@ -760,7 +832,7 @@ class WireframeCapture {
         children.add(_element(
           _id(element, 2 + 2 * i),
           _spanCss(run.style ?? base, base, ro.textScaler),
-          [_text(_id(element, 3 + 2 * i), _mask(run.text, s.maskText))],
+          [_textNode(_id(element, 3 + 2 * i), _mask(run.text, s.maskText))],
           tag: 'span',
         ));
       }
@@ -771,7 +843,7 @@ class WireframeCapture {
     s.out.add(_element(_id(element), geometry + css.$1, children, cls: css.$2));
   }
 
-  void _editable(Element element, RenderEditable ro, _Affine t, _Scope s) {
+  void _field(Element element, RenderEditable ro, _Affine t, _Scope s) {
     final span = ro.text;
     final base = (span is TextSpan ? span.style : null) ?? const TextStyle();
     var text = span?.toPlainText(includeSemanticsLabels: false) ?? '';
@@ -787,7 +859,7 @@ class WireframeCapture {
     s.out.add(_element(
       _id(element),
       _geometry(s.origin, t, ro.size) + css.$1,
-      [if (text.isNotEmpty) _text(_id(element, 1), text)],
+      [if (text.isNotEmpty) _textNode(_id(element, 1), text)],
       cls: css.$2,
     ));
   }
@@ -798,9 +870,8 @@ class WireframeCapture {
     final opacity = ro.opacity?.value;
     final fade = opacity != null && opacity < 1 ? 'opacity:${num3(opacity)};' : '';
     final provider = s.image;
-    final url = provider != null && networkImages && !s.blockImages
-        ? networkImageUrl(provider)
-        : null;
+    final url =
+        provider != null && _showsImages(s) ? networkImageUrl(provider) : null;
     if (url != null) {
       s.out.add(_element(
         _id(element, 1),
@@ -817,7 +888,7 @@ class WireframeCapture {
   /// A view the platform draws (a web view, a map, a native control) or a
   /// texture (video, camera): its pixels never pass through Flutter, so it
   /// is a labeled placeholder.
-  void _native(Element element, RenderBox ro, _Affine t, _Scope s) {
+  void _nativePlaceholder(Element element, RenderBox ro, _Affine t, _Scope s) {
     final hint = s.hint;
     final label = hint is _NativeHint
         ? hint.label
@@ -827,7 +898,7 @@ class WireframeCapture {
     s.out.add(_element(
       _id(element),
       _geometry(s.origin, t, ro.size),
-      [_text(_id(element, 1), label)],
+      [_textNode(_id(element, 1), label)],
       cls: 'pv',
     ));
   }
@@ -842,7 +913,7 @@ class WireframeCapture {
 
   /// Draws what a custom painter shows when the wireframe knows it. True
   /// when the subtree is done.
-  bool _customPaint(
+  bool _customDrawing(
       Element element, RenderCustomPaint ro, _Affine t, _Scope s) {
     final painter = ro.painter ?? ro.foregroundPainter;
     final hint = s.hint;
@@ -897,14 +968,17 @@ class WireframeCapture {
       final decoration = decorations[y];
       if (decoration == null) continue;
       final box = ro.getRowBox(y);
-      final css = decorationCss(decoration, box.size, direction,
-          images: networkImages && !s.blockImages);
+      final images = _showsImages(s);
+      final css = decorationCss(decoration, box.size, direction, images: images);
       if (css.isEmpty) continue;
       children.add(_element(
           _id(element, 1000000 + y),
           'left:${px(box.left)};top:${px(box.top)};'
           'width:${px(box.width)};height:${px(box.height)};$css',
-          const []));
+          const [],
+          cls: decorationImagePlaceholder(decoration, images: images)
+              ? 'im'
+              : null));
     }
     _visitChildren(
         element, s.copy(out: children, origin: t, ro: ro, transform: t));
@@ -1232,6 +1306,10 @@ class WireframeCapture {
   }
 
   // ---- helpers --------------------------------------------------------------
+
+  /// Whether an image under [s] is drawn from its URL: images are on and
+  /// no privacy mask above blocks them.
+  bool _showsImages(_Scope s) => networkImages && !s.blockImages;
 
   static bool _paints(RenderObject parent, RenderObject child) {
     if (parent is RenderIndexedStack) {

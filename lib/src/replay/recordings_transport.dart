@@ -75,6 +75,7 @@ class RecordingsTransport {
     http.Client? httpClient,
     List<int>? retryDelaysMs,
     this.maxQueuedBytes = _defaultMaxQueuedBytes,
+    this.onFailed,
   })  : _http = httpClient ?? http.Client(),
         _retryDelaysMs = retryDelaysMs ?? _defaultRetryDelaysMs;
 
@@ -83,6 +84,10 @@ class RecordingsTransport {
   final http.Client _http;
   final List<int> _retryDelaysMs;
   final int maxQueuedBytes;
+
+  /// Called when segments were given up: dropped from a full queue,
+  /// rejected by the server, or out of retries.
+  final void Function()? onFailed;
   final List<_Batch> _queue = [];
   int _queuedBytes = 0;
   Timer? _timer;
@@ -102,7 +107,7 @@ class RecordingsTransport {
     while (_queuedBytes > maxQueuedBytes && _queue.length > 1) {
       final dropped = _queue.removeAt(0);
       _queuedBytes -= dropped.bytes;
-      failedSegments += dropped.segments.length;
+      _failed(dropped);
     }
     _schedule(0);
   }
@@ -182,7 +187,7 @@ class RecordingsTransport {
       return null;
     }
     if (_permanentFailures.contains(response.statusCode)) {
-      failedSegments += batch.segments.length;
+      _failed(batch);
       return null;
     }
     final retryAfter = int.tryParse(response.headers['retry-after'] ?? '');
@@ -192,9 +197,14 @@ class RecordingsTransport {
 
   int? _retryDelay(_Batch batch, int? requested) {
     if (batch.attempts > _retryDelaysMs.length) {
-      failedSegments += batch.segments.length;
+      _failed(batch);
       return null;
     }
     return requested ?? _retryDelaysMs[batch.attempts - 1];
+  }
+
+  void _failed(_Batch batch) {
+    failedSegments += batch.segments.length;
+    onFailed?.call();
   }
 }

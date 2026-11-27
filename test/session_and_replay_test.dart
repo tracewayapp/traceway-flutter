@@ -6,11 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:traceway/src/core/settings.dart';
-import 'package:traceway/src/models/session_recording_payload.dart';
 import 'package:traceway/src/persistence/state_store.dart';
 import 'package:traceway/src/replay/collection_budget.dart';
 import 'package:traceway/src/replay/recordings_transport.dart';
 import 'package:traceway/src/replay/replay_controller.dart';
+import 'package:traceway/src/replay/replay_source.dart';
 import 'package:traceway/src/session/session_manager.dart';
 
 import 'support.dart';

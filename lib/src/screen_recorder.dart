@@ -11,8 +11,7 @@ import 'package:flutter_quick_video_encoder/flutter_quick_video_encoder.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'circular_buffer.dart';
-import 'models/session_recording_payload.dart';
-import 'replay/replay_controller.dart';
+import 'replay/replay_source.dart';
 import 'traceway_mask_mode.dart';
 import 'traceway_privacy_mask.dart';
 

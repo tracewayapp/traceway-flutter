@@ -10,7 +10,7 @@ import 'events/log_capture.dart';
 import 'events/network_capture.dart';
 import 'events/traceway_event.dart';
 import 'events/traceway_navigator_observer.dart';
-import 'replay/replay_controller.dart';
+import 'replay/replay_source.dart';
 import 'screen_recorder.dart';
 import 'traceway_client.dart';
 import 'traceway_interaction.dart';
@@ -49,10 +49,59 @@ class Traceway extends StatefulWidget {
     TracewayClient.instance?.track(eventName, attributes);
   }
 
+  /// Reports [error] as an issue, with its [stackTrace] (pass the one
+  /// `catch (e, st)` gives; without it the issue has no frames) and extra
+  /// [attributes]. Errors nobody catches are reported without this. Before
+  /// the SDK has started it does nothing.
+  static void captureException(Object error,
+          [StackTrace? stackTrace, Map<String, String>? attributes]) =>
+      TracewayClient.instance?.captureException(error, stackTrace, attributes);
+
+  /// Reports [message] as an issue of its own, without an exception.
+  static void captureMessage(String message,
+          [Map<String, String>? attributes]) =>
+      TracewayClient.instance?.captureMessage(message, attributes);
+
   /// Sets an attribute attached to every later record, e.g. `user.id`.
   static void setAttribute(String key, String value) {
     TracewayClient.instance?.setAttribute(key, value);
   }
+
+  /// Sets several attributes at once, like [setAttribute] for each.
+  static void setAttributes(Map<String, String> attributes) =>
+      TracewayClient.instance?.setAttributes(attributes);
+
+  /// Stops attaching the attribute [key] to later records.
+  static void removeAttribute(String key) =>
+      TracewayClient.instance?.removeAttribute(key);
+
+  /// Stops attaching every attribute set with [setAttribute]; the ones in
+  /// [TracewayOptions.attributes] go too.
+  static void clearAttributes() => TracewayClient.instance?.clearAttributes();
+
+  /// Sends what is waiting to be sent: records, replay clips and metrics.
+  /// Completes when they are sent, or after [timeoutMs] when given.
+  static Future<void> flush([int? timeoutMs]) async =>
+      TracewayClient.instance?.flush(timeoutMs);
+
+  /// Ends the session, sends what is waiting and stops the SDK. Calling it
+  /// again, or before the SDK has started, does nothing.
+  static Future<void> shutdown() async => TracewayClient.instance?.shutdown();
+
+  /// Asks the server for collection settings now instead of at the next
+  /// poll, e.g. right after sign-in set `user.id` for a rule that targets
+  /// it.
+  static Future<void> refreshConfig() async =>
+      TracewayClient.instance?.refreshConfig();
+
+  /// This installation's id (`service.instance.id`), which the dashboard
+  /// can aim a capture at; null before the SDK has started.
+  static String? getInstanceId() => TracewayClient.instance?.getInstanceId();
+
+  /// The current session's id (`session.id`); null before the SDK has
+  /// started or with sessions off.
+  static String? get currentSessionId =>
+      TracewayClient.instance?.currentSessionId;
 
   /// Records [message] as a log line at [level], e.g.
   /// `Traceway.log('payment declined', level: TracewayLogLevel.warn)`.

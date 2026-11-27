@@ -1,15 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
-import '../models/session_recording_payload.dart';
-import '../replay/replay_controller.dart';
-import 'capture.dart';
-import 'diff.dart';
-import 'glyphs.dart';
+import '../replay/replay_source.dart';
 import 'vnode.dart';
+import 'wireframe_capture.dart';
+import 'wireframe_css.dart';
+import 'wireframe_diff.dart';
+import 'wireframe_glyphs.dart';
+import 'wireframe_roots.dart';
 
 /// Records the screen as a wireframe in rrweb's format instead of as
 /// video: the app's widget tree becomes an HTML document, and what changes
@@ -30,14 +32,17 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     this.debug = false,
     this.screenName,
     DateTime Function()? now,
-  })  : _maxFrames = maxFrames < 2 ? 2 : maxFrames,
+  })  : _roots = WireframeRoots(rootKey),
+        _maxFrames = maxFrames < 2 ? 2 : maxFrames,
         _now = now ?? DateTime.now {
     // An icon's picture that becomes ready changes the screen.
-    _capture.glyphs = IconGlyphs()..onReady = () => _schedule(immediately: true);
+    _capture.glyphs =
+        WireframeGlyphs()..onReady = () => _schedule(immediately: true);
   }
 
   /// The key of the widget whose subtree is recorded.
   final GlobalKey rootKey;
+  final WireframeRoots _roots;
   final int fps;
   final bool debug;
 
@@ -47,7 +52,7 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
   final int _maxFrames;
   final WireframeCapture _capture = WireframeCapture();
   final List<WireframeFrame> _frames = [];
-  final List<_Pointer> _pointers = [];
+  final List<WireframePointer> _pointers = [];
   static const int _maxPointers = 4000;
   static const int _moveIntervalMs = 50;
 
@@ -87,6 +92,21 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
       _timer = null;
       _schedule(immediately: true);
     }
+  }
+
+  /// Draws images from the network by their URL. On by default; off when
+  /// the effective `replay.images` policy is `off`, and then every image is
+  /// a placeholder.
+  bool get networkImages => _capture.networkImages;
+  set networkImages(bool value) {
+    if (value == _capture.networkImages) return;
+    _capture.networkImages = value;
+    _capture.reset();
+    _timer?.cancel();
+    _timer = null;
+    // The frames held point at the images: none of them may go up now.
+    if (!value) _frames.clear();
+    _schedule(immediately: true);
   }
 
   /// Number of distinct screens held; never more than the ring's capacity.
@@ -176,13 +196,13 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
   void _captureNow() {
     _timer = null;
     if (!_running || _paused) return;
-    final context = rootKey.currentContext;
-    if (context is! Element || !context.mounted) return;
+    final root = _roots.root;
+    if (root == null) return;
     final now = _now();
     _lastCaptureMs = now.millisecondsSinceEpoch;
     try {
       _captureTime.start();
-      final frame = _capture.capture(context, now, href: screenName?.call());
+      final frame = _capture.capture(root, now, href: screenName?.call());
       _captureTime.stop();
       _captures++;
       if (frame != null) _push(frame);
@@ -230,7 +250,8 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     // up, and each press has a new one: forgotten here, or one id would be
     // kept per click. A pointer still down only loses its throttle once.
     _lastMoveMs.clear();
-    _addPointer(_Pointer(_PointerKind.down, position, _now(), touch));
+    _addPointer(
+        WireframePointer(WireframePointerKind.down, position, _now(), touch));
   }
 
   void pointerMove(int pointer, Offset position, {required bool touch}) {
@@ -239,22 +260,27 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     final last = _lastMoveMs[pointer];
     if (last != null && ms - last < _moveIntervalMs) return;
     _lastMoveMs[pointer] = ms;
-    _addPointer(_Pointer(_PointerKind.move, position, now, touch));
+    _addPointer(
+        WireframePointer(WireframePointerKind.move, position, now, touch));
   }
 
   void pointerUp(int pointer, Offset position,
       {required bool touch, required bool tap}) {
     _lastMoveMs.remove(pointer);
-    _addPointer(
-        _Pointer(tap ? _PointerKind.tap : _PointerKind.up, position, _now(), touch));
+    _addPointer(WireframePointer(
+        tap ? WireframePointerKind.tap : WireframePointerKind.up,
+        position,
+        _now(),
+        touch));
   }
 
   void pointerCancel(int pointer, Offset position, {required bool touch}) {
     _lastMoveMs.remove(pointer);
-    _addPointer(_Pointer(_PointerKind.cancel, position, _now(), touch));
+    _addPointer(
+        WireframePointer(WireframePointerKind.cancel, position, _now(), touch));
   }
 
-  void _addPointer(_Pointer pointer) {
+  void _addPointer(WireframePointer pointer) {
     if (!_running || _paused) return;
     _pointers.add(pointer);
     if (_pointers.length > _maxPointers) {
@@ -353,7 +379,7 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     }
 
     final pointerEvents = <Map<String, Object?>>[];
-    final moves = <_Pointer>[];
+    final moves = <WireframePointer>[];
     void flushMoves() {
       if (moves.isEmpty) return;
       pointerEvents.add(_moveEvent(moves));
@@ -362,7 +388,7 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
 
     for (final p in _pointers) {
       if (p.timestamp.isBefore(start) || !p.timestamp.isBefore(end)) continue;
-      if (p.kind != _PointerKind.move) {
+      if (p.kind != WireframePointerKind.move) {
         // A press or release stays between the moves before and after it.
         flushMoves();
         pointerEvents.addAll(_pointerEvents(p));
@@ -430,7 +456,7 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     return out;
   }
 
-  static List<Map<String, Object?>> _pointerEvents(_Pointer p) {
+  static List<Map<String, Object?>> _pointerEvents(WireframePointer p) {
     final ms = p.timestamp.millisecondsSinceEpoch;
     final x = p.position.dx.round(), y = p.position.dy.round();
     Map<String, Object?> interaction(int type) => {
@@ -446,15 +472,15 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
           'timestamp': ms,
         };
     switch (p.kind) {
-      case _PointerKind.down:
+      case WireframePointerKind.down:
         return [interaction(p.touch ? 7 : 1)];
-      case _PointerKind.move:
+      case WireframePointerKind.move:
         return [_moveEvent([p])];
-      case _PointerKind.up:
+      case WireframePointerKind.up:
         return [interaction(p.touch ? 9 : 0)];
-      case _PointerKind.tap:
+      case WireframePointerKind.tap:
         return [interaction(p.touch ? 9 : 0), interaction(2)];
-      case _PointerKind.cancel:
+      case WireframePointerKind.cancel:
         return [interaction(p.touch ? 10 : 0)];
     }
   }
@@ -463,7 +489,7 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
   /// as rrweb records it: stamped when the last position was reached, each
   /// position with its time before then as a negative `timeOffset`. The
   /// replayer moves the pointer to each at the event's time plus its offset.
-  static Map<String, Object?> _moveEvent(List<_Pointer> moves) {
+  static Map<String, Object?> _moveEvent(List<WireframePointer> moves) {
     final ms = moves.last.timestamp.millisecondsSinceEpoch;
     return {
       'type': 3,
@@ -490,6 +516,7 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
         {
           'id': 'tw',
           'style': 'width:${size.width.round()}px;height:${size.height.round()}px;'
+              'font-family:${wireframeFontStack(defaultTargetPlatform)};'
               'background:#1e1e1e',
         },
         [
@@ -506,12 +533,19 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
       );
 }
 
-enum _PointerKind { down, move, up, tap, cancel }
+/// What a pointer did. A tap is an up that the `Traceway` widget saw
+/// within the touch slop and before the long-press timeout; it also
+/// becomes rrweb's Click.
+enum WireframePointerKind { down, move, up, tap, cancel }
 
-class _Pointer {
-  _Pointer(this.kind, this.position, this.timestamp, this.touch);
-  final _PointerKind kind;
+/// One entry of the recorder's pointer log, in logical pixels of the
+/// screen. Moves are already throttled to one per 50 ms per pointer.
+class WireframePointer {
+  WireframePointer(this.kind, this.position, this.timestamp, this.touch);
+  final WireframePointerKind kind;
   final Offset position;
   final DateTime timestamp;
+
+  /// A finger or stylus (rrweb touch events) rather than a mouse.
   final bool touch;
 }

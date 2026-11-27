@@ -1,4 +1,5 @@
 import 'traceway_captured_error.dart';
+import 'traceway_image_policy.dart';
 import 'traceway_screen_capture_mode.dart';
 import 'traceway_telemetry.dart';
 
@@ -23,6 +24,14 @@ class TracewayOptions {
   /// in the other mode: then it applies from the next session, so one
   /// session's replay is all video or all wireframe.
   final TracewayScreenCaptureMode screenCaptureMode;
+
+  /// The most images a wireframe replay may show: the ceiling of the
+  /// `replay.images` setting (`off`, `wifi` by default, `always`), which
+  /// remote settings can lower but not raise. [TracewayImagePolicy.off]
+  /// draws every image as a placeholder. Flutter shows a network image by
+  /// its URL and uploads no pixels, so `wifi` and `always` are the same
+  /// here. Video recordings are not affected.
+  final TracewayImagePolicy replayImages;
   final bool debug;
 
   /// App version, sent as `service.version`.
@@ -191,6 +200,7 @@ class TracewayOptions {
     this.sampleRate = 1.0,
     this.screenCapture = false,
     this.screenCaptureMode = TracewayScreenCaptureMode.video,
+    this.replayImages = TracewayImagePolicy.always,
     this.debug = false,
     this.version = '',
     this.serviceName,

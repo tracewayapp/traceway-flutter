@@ -1,9 +1,11 @@
 import '../persistence/state_store.dart';
 
 /// Bounds what replay uploads per session, as the browser SDK does: 50 MiB
-/// and 10,000 events. A streaming capture that runs for hours stops
-/// uploading video once a session has used its budget; the counts are
-/// reported on the session's lifecycle events.
+/// and 10,000 events (a video clip is one event; a wireframe clip counts
+/// each of its rrweb events). A streaming capture that runs for hours stops
+/// uploading replay once a session has used its budget; the counts are
+/// reported on the session's lifecycle events and in
+/// `traceway.collection.health`.
 class CollectionBudget {
   CollectionBudget({
     this.maxBytes = 50 * 1024 * 1024,

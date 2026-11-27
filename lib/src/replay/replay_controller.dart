@@ -1,29 +1,9 @@
 import 'dart:async';
 
 import '../core/settings.dart';
-import '../models/session_recording_payload.dart';
 import 'collection_budget.dart';
 import 'recordings_transport.dart';
-
-/// What the controller needs from a screen recorder: the video recorder or
-/// the wireframe recorder. Lets tests stand in for both.
-abstract class ReplaySource {
-  bool get isRunning;
-  void start();
-  void stop();
-  void clearBuffer();
-
-  /// Whether any frame was captured at or after [since] and before [until].
-  bool hasFrames({DateTime? since, DateTime? until});
-
-  /// Makes one clip of what was on screen at or after [since] and before
-  /// [until]. The frames are chosen when this is called.
-  Future<SessionRecordingPayload?> captureRecording(
-    String clipId, {
-    DateTime? since,
-    DateTime? until,
-  });
-}
+import 'replay_source.dart';
 
 /// Runs the screen recording according to the replay mode, like the browser
 /// SDK runs rrweb:
@@ -49,6 +29,7 @@ class ReplayController {
     this.segmentMs = 8000,
     CollectionBudget? budget,
     DateTime Function()? now,
+    this.onBudgetExceeded,
   })  : budget = budget ?? CollectionBudget(),
         _now = now ?? DateTime.now;
 
@@ -56,6 +37,9 @@ class ReplayController {
   final String? Function() sessionId;
   final int Function() nextSegmentIndex;
   final CollectionBudget budget;
+
+  /// Called when a clip is dropped because its session used its budget.
+  final void Function()? onBudgetExceeded;
 
   /// How long a streamed segment is. Must stay below the frame ring buffer's
   /// length, or frames are evicted before they are uploaded.
@@ -274,6 +258,7 @@ class ReplayController {
         );
         if (!budget.admit(
             budgetSession, 256 + segment.bytes, clip.events.length)) {
+          onBudgetExceeded?.call();
           return;
         }
         transport.send([segment]);

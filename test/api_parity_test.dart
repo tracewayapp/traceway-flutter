@@ -1,6 +1,6 @@
-// The browser SDK's API the Flutter SDK now has too: ignored errors and
-// beforeCapture, interactions (manual spans), route templates and turning
-// device info off.
+// The browser SDK's API the Flutter SDK now has too: the static facade,
+// ignored errors and beforeCapture, interactions (manual spans), route
+// templates and turning device info off.
 import 'dart:async';
 import 'dart:io';
 
@@ -60,6 +60,57 @@ NetworkEvent request(String url) => NetworkEvent(
 
 void main() {
   tearDown(TracewayClient.resetForTest);
+
+  group('the Traceway facade', () {
+    test('does nothing before the SDK has started', () async {
+      expect(TracewayClient.instance, isNull);
+      Traceway.captureException(StateError('early'), StackTrace.current);
+      Traceway.captureMessage('early');
+      Traceway.setAttributes({'a': '1'});
+      Traceway.removeAttribute('a');
+      Traceway.clearAttributes();
+      await Traceway.flush(10);
+      await Traceway.refreshConfig();
+      await Traceway.shutdown();
+      expect(Traceway.getInstanceId(), isNull);
+      expect(Traceway.currentSessionId, isNull);
+    });
+
+    test('passes through to the running client', () async {
+      final h = await startHarness();
+      await h.client.flush();
+      Traceway.setAttributes({'user.id': 'u1', 'team': 'acme', 'plan': 'pro'});
+      Traceway.removeAttribute('team');
+      Traceway.captureException(
+          StateError('static'), StackTrace.current, {'step': 'pay'});
+      Traceway.captureMessage('static message', {'step': 'done'});
+      await Traceway.flush(5000);
+
+      final exception = h.named(eventException).single;
+      expect(attr(exception, 'exception.message'), 'Bad state: static');
+      expect(attr(exception, 'step'), 'pay');
+      expect(attr(exception, 'user.id'), 'u1');
+      expect(attr(exception, 'plan'), 'pro');
+      expect(attr(exception, 'team'), isNull);
+      expect(attr(exception, 'exception.stacktrace'), isNotNull);
+      final message = h.named(eventMessage).single;
+      expect(message.body, 'static message');
+      expect(attr(message, 'step'), 'done');
+
+      Traceway.clearAttributes();
+      Traceway.captureMessage('after clear');
+      await Traceway.flush();
+      expect(attr(h.named(eventMessage).last, 'user.id'), isNull);
+
+      expect(Traceway.getInstanceId(), h.client.getInstanceId());
+      expect(Traceway.currentSessionId, h.client.currentSessionId);
+      expect(Traceway.currentSessionId, isNotNull);
+      await Traceway.refreshConfig();
+      await Traceway.shutdown();
+      expect(TracewayClient.instance, isNull);
+      expect(h.named('session.end'), hasLength(1));
+    });
+  });
 
   group('ignoreErrors', () {
     test('network failures are ignored by default, bugs are not', () async {

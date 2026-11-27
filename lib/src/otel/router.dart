@@ -127,12 +127,32 @@ class TelemetryRouter {
   final bool Function(ReadableLogRecord)? persistIssue;
   final double Function() _random;
 
+  /// The dashboard's captures running now: their ids go on every record
+  /// (`traceway.capture.ids`), which is how the server tells a capture's
+  /// data from the rest. Captures triggers start on the device are not
+  /// listed, as in the browser SDK.
   List<String> _activeCaptureIds() {
     final now = DateTime.now();
     return [
       for (final capture in control.settings.captures)
         if (capture.until.isAfter(now)) capture.id,
     ];
+  }
+
+  /// Adds [ids] to the capture ids [record] already carries.
+  static void _markCaptures(ReadWriteLogRecord record, List<String> ids) {
+    final merged = <String>{};
+    final existing = _attr(record.attributes, attrCaptureIds);
+    if (existing is String) {
+      try {
+        merged.addAll((jsonDecode(existing) as List).whereType<String>());
+      } catch (_) {}
+    }
+    final before = merged.length;
+    merged.addAll(ids);
+    if (merged.length == before && existing != null) return;
+    record.addAttribute(
+        OTel.attributeString(attrCaptureIds, jsonEncode(merged.toList())));
   }
 
   void routeLog(ReadWriteLogRecord record) {
@@ -144,8 +164,8 @@ class TelemetryRouter {
     if (signal != signalControl) {
       final captureIds = _activeCaptureIds();
       if (captureIds.isNotEmpty) {
-        record.addAttribute(OTel.attributeString(
-            'traceway.capture.ids', jsonEncode(captureIds)));
+        record.addAttribute(
+            OTel.attributeString(attrCaptureIds, jsonEncode(captureIds)));
       }
     }
     if (!hooks.enrichLog(record, signal)) return;
@@ -182,7 +202,7 @@ class TelemetryRouter {
     if (sessionId != null) span.setStringAttribute(attrSessionId, sessionId);
     final captureIds = _activeCaptureIds();
     if (captureIds.isNotEmpty) {
-      span.setStringAttribute('traceway.capture.ids', jsonEncode(captureIds));
+      span.setStringAttribute(attrCaptureIds, jsonEncode(captureIds));
     }
     final baselineRate = control.settings.baselineSampleRate;
     span.setStringAttribute(
@@ -232,12 +252,20 @@ class TelemetryRouter {
   /// processors' queues are bounded and drop what does not fit, and a full
   /// buffer holds more than they do. The newest breadcrumbs, the ones right
   /// before the error, would be the ones lost.
+  ///
+  /// What a capture's lookback uploads was recorded before the capture
+  /// existed, so its log records get the running captures' ids here, as the
+  /// browser SDK does: the server counts a capture as delivered by the ids
+  /// on the data it receives. Spans keep the ids they were recorded with:
+  /// an ended span cannot take attributes.
   int flushBuffered(int sinceMs, Set<String>? signals, [int? untilMs]) {
     final entries = buffer.take(sinceMs, signals, untilMs);
+    final captureIds = _activeCaptureIds();
     for (final entry in entries) {
       if (!control.canExport(entry.signal)) continue;
       switch (entry.item) {
         case LogItem(:final record):
+          if (captureIds.isNotEmpty) _markCaptures(record, captureIds);
           if (!_persistIssue(record)) _flushedLogs.add(record);
         case SpanItem(:final span):
           _flushedSpans.add(span);

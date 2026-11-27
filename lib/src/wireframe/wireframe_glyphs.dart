@@ -17,8 +17,8 @@ import 'package:flutter/painting.dart';
 /// Every full snapshot carries the pictures of the icons on screen, so they
 /// are kept small: the glyph's coverage as 16 levels of gray, a luminance
 /// mask, about 250 bytes for a 24 px icon.
-class IconGlyphs {
-  IconGlyphs({this.pixelRatio = 1.5, this.maxGlyphs = 300});
+class WireframeGlyphs {
+  WireframeGlyphs({this.pixelRatio = 1.5, this.maxGlyphs = 300});
 
   /// Pixels per logical pixel of the pictures.
   final double pixelRatio;
