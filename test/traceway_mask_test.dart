@@ -81,12 +81,12 @@ void main() {
     final blanked = GlobalKey();
     await tester.pumpWidget(app(Column(children: [
       const SizedBox(height: 10),
-      Container(
+      SizedBox(
         key: const ValueKey('traceway-mask'),
         height: 40,
         child: SizedBox(key: blurred, width: 100),
       ),
-      Container(
+      SizedBox(
         key: const ValueKey('traceway-blank'),
         height: 30,
         // Nothing under a blank mask is listed: its box covers it.
