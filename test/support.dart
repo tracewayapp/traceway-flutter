@@ -7,7 +7,9 @@ import 'package:dartastic_opentelemetry/testing.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:traceway/src/opamp/messages.dart';
+import 'package:flutter/widgets.dart' show Offset;
 import 'package:traceway/src/replay/replay_source.dart';
+import 'package:traceway/src/replay/video_recorder.dart';
 import 'package:traceway/src/traceway_client.dart';
 import 'package:traceway/src/traceway_options.dart';
 
@@ -151,3 +153,36 @@ class FakeReplaySource implements ReplaySource {
     );
   }
 }
+
+/// What the add-on would register, recording nothing.
+class FakeVideoRecorder extends FakeReplaySource implements TracewayVideoRecorder {
+  FakeVideoRecorder(this.config);
+  final TracewayVideoRecorderConfig config;
+  bool masked = true;
+  Offset? touch;
+
+  @override
+  set maskAllInputs(bool value) => masked = value;
+
+  @override
+  void setTouchPosition(Offset position) => touch = position;
+
+  @override
+  void clearTouchPosition() => touch = null;
+}
+
+class FakeVideoBackend implements TracewayVideoBackend {
+  FakeVideoBackend({this.isSupported = true});
+  final List<FakeVideoRecorder> made = [];
+
+  @override
+  final bool isSupported;
+
+  @override
+  TracewayVideoRecorder createRecorder(TracewayVideoRecorderConfig config) {
+    final recorder = FakeVideoRecorder(config);
+    made.add(recorder);
+    return recorder;
+  }
+}
+

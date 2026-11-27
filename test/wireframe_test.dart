@@ -18,7 +18,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:traceway/src/core/merge.dart';
 import 'package:traceway/src/core/settings.dart';
-import 'package:traceway/src/screen_recorder.dart';
+import 'package:traceway/src/replay/video_recorder.dart';
 import 'package:traceway/src/traceway_client.dart';
 import 'package:traceway/src/traceway_options.dart';
 import 'package:traceway/src/traceway_screen_capture_mode.dart';
@@ -31,6 +31,8 @@ import 'package:traceway/src/wireframe/wireframe_css.dart';
 import 'package:traceway/src/wireframe/wireframe_diff.dart';
 import 'package:traceway/src/wireframe/wireframe_glyphs.dart';
 import 'package:traceway/src/wireframe/wireframe_recorder.dart';
+
+import 'support.dart' show FakeVideoBackend;
 
 /// What rrweb's replayer does with a page, closely enough to tell whether
 /// our events rebuild the screen: a mirror of ids to nodes, a full snapshot
@@ -1127,7 +1129,7 @@ void main() {
       // Under a mask an image is a placeholder anyway.
       expect(jsonEncode(serializeDocument(screen)), isNot(contains('blocked')));
 
-      capture.networkImages = false;
+      capture.imagePolicy = TracewayImagePolicy.off;
       screen = _capture(capture);
       expect(jsonEncode(serializeDocument(screen)), isNot(contains('cdn.test')));
       expect(allNodes(screen).where((n) => n.tag == 'img'), isEmpty);
@@ -1136,6 +1138,120 @@ void main() {
       expect(placeholders, hasLength(3));
       expect(placeholders[1].attributes['style'],
           contains('background-color:rgba(158,158,158,.22);'));
+    });
+  });
+
+  group('keyboard', () {
+    const neutral = 'background-color:#d1d3d9;color:#6d6d72;display:flex;'
+        'align-items:center;justify-content:center;font-size:13px;';
+
+    test('the recorder\'s own nodes have the ids every platform uses', () {
+      expect([
+        awayScreenTextBoxId,
+        awayScreenTextId,
+        keyboardNodeId,
+        keyboardLabelBoxId,
+        keyboardLabelTextId,
+        firstCapturedNodeId,
+      ], [9, 10, 12, 13, 14, 16]);
+    });
+
+    VNode? keyboardIn(VNode screen) {
+      for (final n in allNodes(screen)) {
+        if (n.id == keyboardNodeId) return n;
+      }
+      return null;
+    }
+
+    void showKeyboard(WidgetTester tester, double? height) {
+      if (height == null) {
+        tester.view.resetViewInsets();
+      } else {
+        tester.view.viewInsets =
+            FakeViewPadding(bottom: height * tester.view.devicePixelRatio);
+      }
+    }
+
+    testWidgets(
+        'the keyboard is a neutral box at the bottom while the view\'s '
+        'bottom inset is up', (tester) async {
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(_app(const Scaffold(
+          body: TextField(decoration: InputDecoration(hintText: 'Name')))));
+      final capture = WireframeCapture();
+      expect(keyboardIn(_capture(capture)), isNull);
+      showKeyboard(tester, 300);
+      await tester.pump();
+      final screen = _capture(capture);
+      final keyboard = keyboardIn(screen)!;
+      final label = keyboard.children.single;
+      expect(label.id, keyboardLabelTextId);
+      expect(label.text, 'Keyboard');
+      // Over everything else, as wide as the screen, as tall as the inset.
+      expect(identical(screen.children.last, keyboard), isTrue);
+      expect(keyboard.attributes['style'],
+          'left:0px;top:300px;width:800px;height:300px;$neutral');
+      expect(identical(keyboardIn(_capture(capture)), keyboard), isTrue,
+          reason: 'an unchanged keyboard is the same node');
+      // The app laid out above it, as with a real keyboard.
+      expect(allText(screen), contains('Name'));
+      showKeyboard(tester, null);
+      await tester.pump();
+      expect(keyboardIn(_capture(capture)), isNull);
+    });
+
+    testWidgets('the keyboard is dark in dark mode, and cut to the screen',
+        (tester) async {
+      addTearDown(tester.view.reset);
+      addTearDown(tester.platformDispatcher.clearPlatformBrightnessTestValue);
+      tester.platformDispatcher.platformBrightnessTestValue = Brightness.dark;
+      await tester.pumpWidget(_app(const Scaffold(body: Text('dark'))));
+      showKeyboard(tester, 900);
+      await tester.pump();
+      final keyboard = keyboardIn(_capture(WireframeCapture()))!;
+      expect(keyboard.attributes['style'],
+          'left:0px;top:0px;width:800px;height:600px;'
+          'background-color:#2c2c2e;color:#8e8e93;display:flex;'
+          'align-items:center;justify-content:center;font-size:13px;');
+    });
+
+    testWidgets('a clip replays the keyboard coming and going', (tester) async {
+      addTearDown(tester.view.reset);
+      var now = DateTime.utc(2026, 1, 1, 12);
+      await tester.pumpWidget(_app(const Scaffold(
+          body: TextField(decoration: InputDecoration(hintText: 'Message')))));
+      final recorder = WireframeRecorder(
+          rootKey: _rootKey, maxFrames: 50, fps: 10, now: () => now);
+      final start = now;
+      recorder.start();
+      await tester.pump(const Duration(milliseconds: 1));
+      for (final height in [260.0, null]) {
+        now = now.add(const Duration(milliseconds: 500));
+        showKeyboard(tester, height);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+      now = now.add(const Duration(seconds: 1));
+      final clip =
+          (await recorder.captureRecording('k', since: start, until: now))!;
+      final events = clip.events.cast<Map<String, Object?>>();
+      final mirror = Mirror();
+      var shown = false;
+      for (final event in events) {
+        mirror.play([event]);
+        if (event['type'] == 2 || event['type'] == 3) {
+          final box = mirror.byId[keyboardNodeId];
+          if (box != null) {
+            shown = true;
+            expect(box.parent, same(mirror.screen));
+            expect(box.attributes['style'], contains('top:340px;'));
+            expect(box.children.single.text, 'Keyboard');
+          }
+        }
+      }
+      expect(shown, isTrue);
+      expect(mirror.byId[keyboardNodeId], isNull);
+      recorder.stop();
     });
   });
 
@@ -1265,7 +1381,7 @@ void main() {
       expect(recorder.bufferedFrameCount, 1);
 
       now = now.add(const Duration(seconds: 1));
-      recorder.networkImages = false;
+      recorder.imagePolicy = TracewayImagePolicy.off;
       // Taken again at once, though the app draws nothing.
       await tester.pump(const Duration(milliseconds: 1));
       expect(recorder.bufferedFrameCount, 1);
@@ -1275,7 +1391,7 @@ void main() {
       expect(jsonEncode(off.events), isNot(contains('cdn.test')));
       expect(jsonEncode(off.events), contains('"class":"im"'));
 
-      recorder.networkImages = true;
+      recorder.imagePolicy = TracewayImagePolicy.wifi;
       await tester.pump(const Duration(milliseconds: 1));
       now = now.add(const Duration(seconds: 1));
       final on = (await recorder.captureRecording('d',
@@ -1524,7 +1640,11 @@ void main() {
         );
     const video = TracewayScreenCaptureMode.video;
     const wireframe = TracewayScreenCaptureMode.wireframe;
-    const capture = TracewayOptions(remoteConfig: false, screenCapture: true);
+    // Video is the traceway_video add-on: a stand-in is registered.
+    setUp(() => registerTracewayVideoBackend(FakeVideoBackend()));
+    tearDown(() => registerTracewayVideoBackend(null));
+    const capture = TracewayOptions(
+        remoteConfig: false, screenCapture: true, screenCaptureMode: video);
     Map<String, Object?> asWireframe = {
       'replay': {'captureMode': 'wireframe'}
     };
@@ -1661,12 +1781,12 @@ void main() {
           child: Directionality(
               textDirection: TextDirection.ltr, child: Text('screen'))));
       await tester.pump();
-      expect(app.screenRecorder, isA<ScreenRecorder>());
+      expect(app.screenRecorder, isA<TracewayVideoRecorder>());
       app.control.applyRemote(asWireframe);
       expect(app.screenRecorder, isA<WireframeRecorder>());
       expect(app.screenRecorder!.isRunning, isTrue);
       app.control.applyRemote({});
-      expect(app.screenRecorder, isA<ScreenRecorder>());
+      expect(app.screenRecorder, isA<TracewayVideoRecorder>());
       await tester.pumpWidget(const SizedBox());
       expect(app.screenRecorder, isNull);
       await tester.runAsync(app.shutdown);

@@ -31,6 +31,10 @@ class WireframeGlyphs {
 
   final Map<String, Glyph> _glyphs = {};
   int _next = 0;
+  int _drawing = 0;
+
+  /// Whether a glyph is being drawn.
+  bool get busy => _drawing > 0;
 
   /// The glyph [span] draws in a box of [size], drawn now if it is new;
   /// null when too many have been drawn.
@@ -45,7 +49,10 @@ class WireframeGlyphs {
     if (glyph == null) {
       if (_glyphs.length >= maxGlyphs) return null;
       glyph = _glyphs[key] = Glyph._('g${_next++}');
-      _draw(glyph, span, size, direction, scaler);
+      _drawing++;
+      _draw(glyph, span, size, direction, scaler)
+          .whenComplete(() => _drawing--)
+          .ignore();
     }
     return glyph;
   }

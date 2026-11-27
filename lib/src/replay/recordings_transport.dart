@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show gzip;
+import 'dart:isolate';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import '../guarded.dart';
@@ -59,7 +61,18 @@ class _Batch {
   final List<RecordingSegment> segments;
   int bytes = 0;
   int attempts = 0;
+
+  /// The gzipped request body, made once for every attempt.
+  List<int>? body;
 }
+
+/// Batches up to this size are encoded where they are sent; larger ones
+/// (clips with pictures) in a background isolate, so the UI isolate never
+/// JSON-encodes and gzips them.
+const int inlineEncodeMaxBytes = 16 * 1024;
+
+List<int> _encodeBody(Map<String, Object?> body) =>
+    gzip.encode(JsonUtf8Encoder().convert(body));
 
 const List<int> _defaultRetryDelaysMs = [5000, 30000, 120000];
 const Set<int> _permanentFailures = {400, 401, 403, 404, 413, 422};
@@ -98,6 +111,33 @@ class RecordingsTransport {
 
   int failedSegments = 0;
   int sentSegments = 0;
+
+  /// Upload bodies encoded in a background isolate so far.
+  @visibleForTesting
+  static int backgroundEncodes = 0;
+
+  Future<List<int>> _body(_Batch batch) async {
+    final ready = batch.body;
+    if (ready != null) return ready;
+    final body = <String, Object?>{
+      'segments': batch.segments.map((s) => s.toJson()).toList(),
+    };
+    final List<int> encoded;
+    if (batch.bytes <= inlineEncodeMaxBytes) {
+      encoded = _encodeBody(body);
+    } else {
+      backgroundEncodes++;
+      List<int>? background;
+      try {
+        background = await Isolate.run(() => _encodeBody(body),
+            debugName: 'traceway replay upload');
+      } catch (_) {
+        // No isolate to be had (a platform or a test without one): here.
+      }
+      encoded = background ?? _encodeBody(body);
+    }
+    return batch.body = encoded;
+  }
 
   int get pending => _queue.fold(0, (n, b) => n + b.segments.length);
 
@@ -167,9 +207,7 @@ class RecordingsTransport {
     batch.attempts++;
     http.Response response;
     try {
-      final body = gzip.encode(utf8.encode(jsonEncode({
-        'segments': batch.segments.map((s) => s.toJson()).toList(),
-      })));
+      final body = await _body(batch);
       response = await _http
           .post(
             Uri.parse(url),

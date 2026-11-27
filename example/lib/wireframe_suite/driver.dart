@@ -9,7 +9,39 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
+// The suite waits for the recorder: a test harness may look inside.
+// ignore: implementation_imports
+import 'package:traceway/src/wireframe/wireframe_recorder.dart';
 import 'package:traceway/traceway.dart';
+
+/// The height of the soft keyboard the suite shows, 0 while it is down.
+///
+/// A desktop engine has no soft keyboard, so the suite's binding puts a
+/// `MediaQuery` with this bottom inset between the view and the app (see
+/// `SuiteBinding` in main.dart): the app lays out above it as above a real
+/// keyboard, and the recorder reads the same inset the view would report.
+final simulatedKeyboard = ValueNotifier<double>(0);
+
+/// Wraps the app so its view reports [simulatedKeyboard] as its bottom
+/// inset.
+class SimulatedKeyboard extends StatelessWidget {
+  const SimulatedKeyboard({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<double>(
+        valueListenable: simulatedKeyboard,
+        child: child,
+        builder: (context, height, child) {
+          final data = MediaQuery.of(context);
+          return MediaQuery(
+            data: data.copyWith(
+                viewInsets: data.viewInsets.copyWith(bottom: height)),
+            child: child!,
+          );
+        },
+      );
+}
 
 /// Thrown when a step of a scenario cannot be done: what it needed was not
 /// on screen.
@@ -326,17 +358,30 @@ class Driver {
     }
   }
 
-  /// Waits until no frame was drawn for [quietMs] and none is scheduled.
+  /// Waits until no frame was drawn for [quietMs] and none is scheduled,
+  /// and the wireframe recorder has taken the screen as it is: no capture
+  /// due and no icon or image picture being made.
   Future<bool> settle({int quietMs = 300, int timeoutMs = 6000}) async {
     final deadline = _clock.elapsedMilliseconds + timeoutMs;
     while (_clock.elapsedMilliseconds < deadline) {
       await pause(50);
       final quiet = (_clock.elapsedMicroseconds - _lastFrameUs) ~/ 1000;
-      if (quiet >= quietMs && !SchedulerBinding.instance.hasScheduledFrame) {
+      final recorder = TracewayClient.instance?.screenRecorder;
+      if (quiet >= quietMs &&
+          !SchedulerBinding.instance.hasScheduledFrame &&
+          (recorder is! WireframeRecorder || recorder.isSettled)) {
         return true;
       }
     }
     return false;
+  }
+
+  /// Shows the soft keyboard [height] logical pixels tall, or hides it
+  /// (0), and waits for the screen to settle.
+  Future<void> keyboard(double height) async {
+    simulatedKeyboard.value = height;
+    await pause(300);
+    await settle();
   }
 
   // ---- checkpoints --------------------------------------------------------

@@ -7,6 +7,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 import 'dart:ui' show ErrorCallback, PlatformDispatcher;
 
 import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
@@ -32,11 +33,16 @@ import 'package:traceway/src/opamp/messages.dart';
 import 'package:traceway/src/otel/events.dart';
 import 'package:traceway/src/persistence/buffer_persistence.dart';
 import 'package:traceway/src/persistence/state_store.dart';
+import 'package:traceway/src/replay/network_state.dart';
 import 'package:traceway/src/replay/replay_source.dart';
-import 'package:traceway/src/screen_recorder.dart';
+import 'package:traceway/src/replay/video_recorder.dart';
 import 'package:traceway/src/traceway_client.dart'
     show TracewayTestOverrides;
 import 'package:traceway/src/traceway_mask.dart';
+import 'package:traceway/src/wireframe/vnode.dart';
+import 'package:traceway/src/wireframe/wireframe_capture.dart';
+import 'package:traceway/src/wireframe/wireframe_images.dart';
+import 'package:traceway/src/wireframe/wireframe_recorder.dart';
 import 'package:traceway/traceway.dart';
 
 import 'support.dart';
@@ -536,7 +542,8 @@ void main() {
       try {
         for (var i = 0; i < 2; i++) {
           Traceway.run(
-            connectionString: connectionString,
+            token: 'test-token',
+            baseUrl: 'https://traceway.test',
             child: const SizedBox(),
           );
         }
@@ -672,17 +679,20 @@ void main() {
     });
 
     test('the video recorder follows replay.maskAllInputs', () async {
-      ScreenRecorder.encoderOverride = null;
       final h = await startHarness(
           options: const TracewayOptions(
               remoteConfig: false, screenCapture: true));
-      final recorder =
-          ScreenRecorder(repaintBoundaryKey: GlobalKey(), maxFrames: 10);
+      final recorder = FakeVideoRecorder(TracewayVideoRecorderConfig(
+          repaintBoundaryKey: GlobalKey(),
+          maxFrames: 10,
+          pixelRatio: 1,
+          fps: 15,
+          debug: false));
       h.client.screenRecorder = recorder;
-      expect(recorder.maskAllInputs, isTrue);
+      expect(recorder.masked, isTrue);
       h.client.control.applyRemote(
           parseSettingsDocument('{"replay":{"maskAllInputs":false}}'));
-      expect(recorder.maskAllInputs, isFalse);
+      expect(recorder.masked, isFalse);
       h.client.screenRecorder = null;
     });
   });
@@ -827,6 +837,7 @@ void main() {
       Traceway.metric('checkout.duration', 2, {'plan': 'pro'});
       Traceway.count('cart.add');
       Traceway.setMetricDimension('arm', 'b');
+      Traceway.tracer?.startSpan('app span').end();
       await Traceway.refreshConfig();
       await Traceway.flush(1000);
     }
@@ -950,9 +961,158 @@ void main() {
       expect(errors, isEmpty);
     });
   });
+
+  group('replay images, the keyboard and the tracer (§14)', () {
+    final root = GlobalKey();
+    Widget screen(Widget child) => RepaintBoundary(
+        key: root,
+        child: Directionality(
+            textDirection: TextDirection.ltr,
+            child: Align(alignment: Alignment.topLeft, child: child)));
+
+    testWidgets(
+        'an image encoder, a budget and an unmetered check that throw cost '
+        'the picture, not the frame', (tester) async {
+      final photo = (await tester.runAsync(() => _opaqueImage(40, 30)))!;
+      await tester.pumpWidget(screen(SizedBox(
+          width: 40, height: 30, child: Image(image: _Picture(photo)))));
+      for (final images in [
+        WireframeImages(encoder: (rgba, w, h) => throw StateError('encoder')),
+        WireframeImages(
+            encoder: (rgba, w, h) async => throw StateError('encoder')),
+        WireframeImages()..budget = _ThrowingBudget(),
+      ]) {
+        final capture = WireframeCapture()
+          ..images = images
+          ..imagePolicy = TracewayImagePolicy.wifi
+          ..unmetered = () => true;
+        // An uncaught error in the test's zone would fail the test.
+        await tester.runAsync(() async {
+          for (var i = 0; i < 3; i++) {
+            final frame =
+                capture.capture(root.currentContext! as Element, DateTime.now())!;
+            // The image still has its node: the placeholder.
+            expect(
+                _nodes(frame.screen!).where(
+                    (n) => (n.attributes['class'] ?? '').startsWith('im')),
+                hasLength(1));
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+          }
+        });
+        expect(tester.takeException(), isNull);
+        expect(capture.lastError, isNull);
+      }
+      final throwingCheck = WireframeCapture()
+        ..images = WireframeImages()
+        ..imagePolicy = TracewayImagePolicy.wifi
+        ..unmetered = () => throw StateError('unmetered');
+      expect(throwingCheck.capture(root.currentContext! as Element, DateTime.now()),
+          isNotNull);
+    });
+
+    test('an isUnmeteredNetwork that throws, at once or later, is metered',
+        () async {
+      final errors = await _zoneErrors(() async {
+        final sync = NetworkState(isUnmetered: () => throw StateError('sync'));
+        expect(sync.unmetered(), isFalse);
+        final async = NetworkState(
+            isUnmetered: () async => throw StateError('async'),
+            maxAge: Duration.zero);
+        expect(async.unmetered(), isFalse);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(async.unmetered(), isFalse);
+        final interfaces = NetworkState(
+            interfaces: () async => throw const SocketException('down'),
+            operatingSystem: 'android');
+        interfaces.unmetered();
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(interfaces.unmetered(), isFalse);
+      });
+      expect(errors, isEmpty);
+    });
+
+    testWidgets(
+        'the client records with an isUnmeteredNetwork that throws, and a '
+        'keyboard inset that is not a number draws no keyboard', (tester) async {
+      final app = (await tester.runAsync(() => TracewayClient.initializeForTest(
+            connectionString,
+            TracewayOptions(
+              remoteConfig: false,
+              screenCapture: true,
+              screenCaptureMode: TracewayScreenCaptureMode.wireframe,
+              isUnmeteredNetwork: () => throw StateError('isUnmeteredNetwork'),
+            ),
+            overrides: TracewayTestOverrides(
+                httpClient: MockClient((_) async => http.Response('{}', 200))),
+          )))!;
+      _stopAfter(tester);
+      final photo = (await tester.runAsync(() => _opaqueImage(40, 30)))!;
+      await tester.pumpWidget(Traceway(
+          child: Directionality(
+              textDirection: TextDirection.ltr,
+              child: SizedBox(
+                  width: 40, height: 30, child: Image(image: _Picture(photo))))));
+      await tester.pump(const Duration(milliseconds: 200));
+      final recorder = app.screenRecorder! as WireframeRecorder;
+      expect(recorder.bufferedFrameCount, greaterThan(0));
+      expect(tester.takeException(), isNull);
+
+      for (final bottom in [double.nan, double.infinity, -50.0]) {
+        await tester.pumpWidget(MediaQuery(
+            data: MediaQueryData(viewInsets: EdgeInsets.only(bottom: bottom)),
+            child: screen(const Text('typing'))));
+        final frame = WireframeCapture()
+            .capture(root.currentContext! as Element, DateTime.now())!;
+        expect(_nodes(frame.screen!).where((n) => n.id == keyboardNodeId),
+            isEmpty);
+      }
+    });
+  });
 }
 
 int _beforeCaptureCalls = 0;
+
+/// A replay image budget that fails at everything.
+class _ThrowingBudget implements ImageBudget {
+  @override
+  String? get sessionId => throw StateError('sessionId');
+
+  @override
+  bool hasRoom(String? sessionId) => throw StateError('hasRoom');
+
+  @override
+  bool admit(String? sessionId, int bytes) => throw StateError('admit');
+}
+
+/// An image provider that hands out [picture] at once.
+class _Picture extends ImageProvider<_Picture> {
+  _Picture(this.picture);
+  final ui.Image picture;
+
+  @override
+  Future<_Picture> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture<_Picture>(this);
+
+  @override
+  ImageStreamCompleter loadImage(_Picture key, ImageDecoderCallback decode) =>
+      OneFrameImageStreamCompleter(
+          SynchronousFuture(ImageInfo(image: picture.clone())));
+}
+
+Future<ui.Image> _opaqueImage(int w, int h) {
+  final done = Completer<ui.Image>();
+  ui.decodeImageFromPixels(
+      Uint8List.fromList(List.filled(w * h * 4, 200)), w, h,
+      ui.PixelFormat.rgba8888, done.complete);
+  return done.future;
+}
+
+Iterable<VNode> _nodes(VNode n) sync* {
+  yield n;
+  for (final c in n.children) {
+    yield* _nodes(c);
+  }
+}
 
 /// Sends every request to the proxy listening on [port].
 class _LoopbackProxy extends HttpOverrides {

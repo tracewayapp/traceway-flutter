@@ -6,7 +6,7 @@ How the Flutter SDK records a session as a wireframe (`TracewayScreenCaptureMode
 
 A wireframe records what the app paints, not its pixels. After a frame the app drew, at most `fps` times a second and not at all while nothing changes, the recorder walks the elements under the `Traceway` widget and turns every render object that draws something into an absolutely positioned HTML element. Consecutive frames share every node that did not change. A clip is assembled when it is asked for: a full snapshot of the screen at the clip's start, then the mutations, pointer events and a closing custom event up to its end. The dashboard replays it with rrweb, like a browser session.
 
-Video replay (`ScreenRecorder`, Flutter only) shares everything after the recorder: `ReplaySource` is the interface both recorders implement, and `ReplayController` cuts clips and segments from either.
+Video replay (`ScreenRecorder` of the `traceway_video` add-on, Flutter only) shares everything after the recorder: `ReplaySource` is the interface both recorders implement (the add-on's through `TracewayVideoRecorder`, `package:traceway/video.dart`), and `ReplayController` cuts clips and segments from either.
 
 | File (`lib/src/`) | Type | Role |
 |---|---|---|
@@ -17,6 +17,9 @@ Video replay (`ScreenRecorder`, Flutter only) shares everything after the record
 | `wireframe/wireframe_css.dart` | `wireframeCss` and the CSS builders | inline CSS, the shared stylesheet |
 | `wireframe/wireframe_diff.dart` | `diffScreens` | two frames → an rrweb mutation |
 | `wireframe/wireframe_glyphs.dart` | `WireframeGlyphs` | icon glyph masks |
+| `wireframe/wireframe_images.dart` | `WireframeImages`, `WireframePicture`, `ImagePlacement`, `ImageBudget` | the pictures images inline: placement, dedup, eviction, budget |
+| `wireframe/wireframe_image_codec.dart` | `WireframeImageEncoding`, `encodeReplayPicture` | sizes and limits; the pure-Dart JPEG and PNG encoders |
+| `replay/network_state.dart` | `NetworkState`, `unmeteredInterfaces` | whether the network is unmetered, for `wifi` |
 | `replay/replay_source.dart` | `ReplaySource`, `SessionRecordingPayload` | recorder interface, the clip handed to the controller |
 | `replay/replay_controller.dart` | `ReplayController` | mode, segments, clips |
 | `replay/recordings_transport.dart` | `RecordingsTransport`, `RecordingSegment` | upload to `/api/recordings` |
@@ -48,7 +51,7 @@ roots → walk → convert → VNodes (stable ids, shared unchanged subtrees) �
 | 7 | `body` |
 | 8 | the screen, `div#tw`, sized to the window; every pointer event targets it |
 | 9, 10 | the away screen's label and its text ("App in the background") |
-| 12–14 | reserved for the keyboard box of the Android and iOS SDKs; Flutter does not draw the keyboard |
+| 12, 14 | the keyboard box and its "Keyboard" text (13 is reserved), as on Android and iOS |
 | 16 | the first captured node; later ones count up |
 
 The ids are the same on the three platforms, and `test/wireframe_test.dart` asserts them.
@@ -79,30 +82,42 @@ The converters inside `WireframeCapture` are named after what they draw, with th
 |---|---|---|
 | `text` | `RenderParagraph` (`Text`, `RichText`) | a `div.t` (`t n` single line, `e`/`k` when Flutter cut it) with font size, line height as laid out, weight, italic, decoration, letter spacing, monospace, background, `direction:rtl`, alignment; styled runs are `<span>`s; `WidgetSpan` children inside it |
 | `field` | `RenderEditable` (`TextField`, `SelectableText`) | text like `text`; masked (see [Privacy](#privacy)) |
-| `image` | `RenderImage` | an `<img src>` for a network image, else a `div.im` (see [Images](#images)) |
+| `image` | `RenderImage` | a `div.im p<N>` showing its picture, an `<img src>` for a network image, or a `div.im` placeholder (see [Images](#images)) |
 | `toggle` | `ToggleablePainter` of `Checkbox`, `Radio`, `Switch`, `CupertinoSwitch` and others | the box, circle or track and knob drawn from the painter's state and colors |
 | `slider` | `Slider`, `RangeSlider`, `CupertinoSlider` | track, active part and thumbs from the widget's values |
 | `progress` | `LinearProgressIndicator`, `CircularProgressIndicator` (determinate as a conic gradient), `CupertinoActivityIndicator` | drawn from the widget |
 | `segmented` | `SegmentedButton` | the segments as laid out, plus its outline and dividers |
 | `nativePlaceholder` | `PlatformViewRenderBox`, `RenderDarwinPlatformView`, `TextureBox` | a `div.pv` labeled `Web view`, `Map`, `Video`, `Camera` or `Native view` from the view type |
 | `customDrawing` | `RenderCustomPaint` without a child | a `div.cp`; `InputDecorator` borders and toggles are drawn instead |
+| `keyboard` | the view's bottom inset (`MediaQuery.viewInsets.bottom` at the root) | a neutral box, ids 12 and 14 (see [Windows, dialogs and the keyboard](#windows-dialogs-and-the-keyboard)) |
 | `group` | `ColoredBox`, `RenderDecoratedBox`, `RenderPhysicalModel`/`Shape`, clips (`ClipRect`, `ClipRRect`, `ClipOval`, `ClipPath`), opacity, `ImageFiltered`, `ColorFiltered`, `BackdropFilter` | a container node holding its children: background, gradients, borders, radii, shadows, `overflow:hidden`, `clip-path:path(…)`, `opacity`, `filter`, `backdrop-filter`; any other render object is folded |
 | `scroll` | a viewport | see [Scrolling](#scrolling) |
 | `table` (Flutter) | `RenderTable` | row decorations under the cells, inside and outside borders over them |
 | `circle` (Flutter) | a circle `BoxDecoration` on a box that is not square | a circle node as wide as the box is short |
 
-Perspective transforms (3D cards, `ListWheelScrollView`, `CupertinoPicker`) get a wrapper node with `matrix3d`; a wheel dims its off-center items. Icons (`Icon`, or text in an icon font) are a `div.ic` whose glyph `WireframeGlyphs` draws once, off the capture, into a 4-bit gray PNG used as a CSS luminance mask in the icon's color; the `<style>` nodes of the glyphs on screen come first in `div#tw` and stay 10 s after their icon left. A render object that throws drops its own subtree from that frame only.
+Perspective transforms (3D cards, `ListWheelScrollView`, `CupertinoPicker`) get a wrapper node with `matrix3d`; a wheel dims its off-center items. Icons (`Icon`, or text in an icon font) are a `div.ic` whose glyph `WireframeGlyphs` draws once, off the capture, into a 4-bit gray PNG used as a CSS luminance mask in the icon's color; the `<style>` nodes of the glyphs on screen come first in `div#tw` (with those of the pictures, in id order) and stay 10 s after their icon left. A render object that throws drops its own subtree from that frame only.
 
 ## Images
 
 The `replay.images` setting (`off`, `wifi` by default, `always`) under the `TracewayOptions.replayImages` ceiling (default `always`) gives the policy; the lower of the two applies, in the order `off < wifi < always`.
 
-- Flutter never uploads image pixels. A network image (`NetworkImage`, through up to four `ResizeImage` wrappers, with an `http(s)` URL) is an `<img src="…">` with `object-fit` from its `BoxFit`, and a `DecorationImage` of one is `background-image:url(…)` with `background-size` from its fit. `wifi` and `always` keep these URLs: the browser that plays the replay loads them, and Flutter has no network type to tell them apart.
-- Under `off` both become the `.im` placeholder. `WireframeRecorder.networkImages` switches when the setting changes: the frames held that showed URLs are dropped and the screen is captured again at once, as when `maskAllInputs` turns on.
-- Memory, file and asset images are always `.im` placeholders (a decoration image keeps the placeholder's gray as its inline background), and so is every image inside a blur mask.
-- Session events carry the policy in effect (`traceway.replay.images`; `off` when the screen is not recorded).
+What a frame does with an image is decided when it is captured, so a picture recorded on Wi-Fi stays in its clip:
 
-The Android and iOS SDKs inline pictures of image views as data URIs under the same policy, `wifi` meaning an unmetered network; Flutter does not.
+| Policy | Network | `RenderImage` | `DecorationImage` |
+|---|---|---|---|
+| `off` | any | `.im` placeholder | `.im` placeholder |
+| `wifi` | metered or unknown | network image: `<img src>`; others: placeholder | network image: `background-image:url(…)`; others: placeholder |
+| `wifi` | unmetered | its picture inlined; until it is ready or if it fails, as above | as above |
+| `always` | any | its picture inlined; until it is ready or if it fails, as above | as above |
+
+- **The picture** (`WireframeImages`, the same encoding as Android and iOS): from the decoded `ui.Image` of the `RenderImage` (network, asset, memory, file: whatever the provider), never a screenshot. `ImagePlacement` computes what `paintImage` draws: the source rectangle its `fit` and `alignment` show, the destination in the box, mirroring (`matchTextDirection` in right-to-left), `repeat` and `centerSlice`. On the UI isolate the capture records a `ui.Picture` of that source drawn at the destination's size (one pixel per logical pixel, never more pixels than the source has, longest side at most 384), with the image's tint (`color`/`colorBlendMode`) and `invertColors`; the raster thread draws it (`Picture.toImage`) and a background isolate (`Isolate.run`) encodes it: JPEG at quality 0.45 with 4:2:0 chroma; a picture with see-through pixels is never JPEG (it would replay over white) but PNG, resampled there so its longest side is at most 192 px. Flutter has no JPEG encoder of its own and the SDK takes no image dependency, so a baseline JPEG encoder (standard tables) is in `wireframe_image_codec.dart`. An encoding over 48 KiB is tried once at half size, then dropped.
+- **DOM**: the image's node (the placeholder's id, so the swap is an attribute change) gets the classes `im p<N>` and an inline `background-size` and `background-position` of the destination (and `background-repeat` when it repeats); a `<style>` node first in `div#tw` holds `.im.p<N>{background:url(data:image/jpeg;base64,…) center/cover no-repeat}`, as on Android and iOS. Its style stays 30 s after the image left the screen.
+- **Dedup and bounds**: one picture per decoded image (`ui.Image.isCloneOf`, so the same photo in every cell of a list is encoded once) and per source, size and tint. At most 8 new pictures per frame and 4 being made at a time; at most 128 per recorder, the one shown longest ago evicted to make room. An image that changes more than 3 times within a second (an animated GIF) is not recorded frame by frame: it falls back.
+- **Budget**: each encoded byte counts against the session's 4 MiB in `CollectionBudget` (`imageBytes`, saved with the replay budget); a picture shown again in a new session counts there too. Past it, images fall back. Sessions report `traceway.replay.image_bytes`.
+- **Unmetered** (`NetworkState`): `TracewayOptions.isUnmeteredNetwork` when the app sets it, else the interfaces up with an address (Android `wlan*`/`eth*`, iOS `en0`, macOS `en*`, Linux `wl*`/`eth*`/`en*`, Windows Wi-Fi/Ethernet names). Asked once per frame under `wifi`; the answer is cached for 2 s and refreshed in the background, metered until known.
+- Under `off` the frames held are dropped and the screen is captured again at once (`WireframeRecorder.imagePolicy`), as when `maskAllInputs` turns on; no picture style stays on the page.
+- Every image inside a blur mask is a placeholder, and nothing of it is drawn or encoded.
+- Session events carry the policy in effect (`traceway.replay.images`; `off` when the screen is not recorded).
 
 ## Privacy
 
@@ -118,7 +133,7 @@ A viewport becomes two nodes: one that clips (`overflow:hidden`, unless the view
 
 ## Windows, dialogs and the keyboard
 
-Flutter draws its dialogs, bottom sheets, menus, snack bars and tooltips in the `Navigator`'s overlay, inside the one root, so they are nodes of the same screen in paint order; a `BackdropFilter` behind a dialog is `backdrop-filter`. Routes under an opaque one are left out (their repaint boundary has no layer). The system keyboard is drawn by the platform, outside Flutter, and is not in the wireframe (the Android and iOS SDKs draw a neutral "Keyboard" box, ids 12–14); the app's layout under it (a `Scaffold` resized above it) is recorded as usual. A change of the window's size gives a new Meta and FullSnapshot. While the app is in the background (lifecycle `hidden`, `paused`, `detached`; `inactive` keeps recording) the clip shows the away screen, ids 9 and 10.
+Flutter draws its dialogs, bottom sheets, menus, snack bars and tooltips in the `Navigator`'s overlay, inside the one root, so they are nodes of the same screen in paint order; a `BackdropFilter` behind a dialog is `backdrop-filter`. Routes under an opaque one are left out (their repaint boundary has no layer). The soft keyboard is drawn by the platform, outside Flutter. While the view's bottom inset is above 0 (read from the `MediaQuery` above the root, else the `FlutterView`), the wireframe draws the neutral box the Android and iOS SDKs draw: the last child of `div#tw`, id 12 with the text "Keyboard" (id 14), over the bottom of the view as wide as it and as tall as the inset, cut to the screen, `background-color:#d1d3d9;color:#6d6d72` (`#2c2c2e`/`#8e8e93` when the platform is dark), `display:flex;align-items:center;justify-content:center;font-size:13px`. The app's layout above it (a `Scaffold` resized for it) is recorded as usual. A change of the window's size gives a new Meta and FullSnapshot. While the app is in the background (lifecycle `hidden`, `paused`, `detached`; `inactive` keeps recording) the clip shows the away screen, ids 9 and 10.
 
 ## Pointers
 
@@ -139,10 +154,12 @@ The recorder keeps a ring of `maxBufferFrames` frames (default 150, at least 2);
 - 50 MiB and 10,000 rrweb events of replay per session (`CollectionBudget`); past it clips are dropped, counted, and reported in `traceway.collection.health`.
 - 10 MiB of segments waiting to upload; the oldest go first.
 - Glyphs: at most 300 per recorder, drawn at 1.5 pixels per logical pixel, at most 512 × 512 pixels.
+- Pictures: longest side 384 px, 48 KiB each after one retry at half size, 128 per recorder, 8 new per frame, 4 in the making, 4 MiB per session.
 - 4000 pointer log entries; one move per 50 ms per pointer.
-- Not drawn: the system keyboard, the content of platform views and textures, custom painting (an outline), images other than network ones. Text is drawn in the browser's font, with Flutter's line heights.
+- Not drawn: the keys of the soft keyboard (a neutral box), the content of platform views and textures, custom painting (an outline), the pixels of a `DecorationImage` (its URL or a placeholder) and the frames of an animated image. Text is drawn in the browser's font, with Flutter's line heights.
 
 ## Testing
 
 - `test/wireframe_test.dart`: a strict model of rrweb's replayer (`Mirror`) checks that every recording rebuilds the screen; a fuzzer of 400 random tree edits checks `diffScreens`; widget tests cover each converter, the node ids, the stylesheet against `test/fixtures/wireframe.css`, the font stack, images under each policy, masks, scrolling, overlays, the recorder's clips, pointers and lifecycle, and the remote settings.
-- `tool/e2e/wireframe`: the regression suite. A gallery app (`example/lib/wireframe_suite`, 25 scenarios and over 100 checkpoints) drives itself with real pointer events on Linux desktop; `run.py` checks the events, replays every checkpoint in rrweb-player and compares it with the app's own picture (SSIM, edges, color) and with a baseline, and checks that no secret reaches the recording. See its README.
+- `test/wireframe_images_test.dart`: the JPEG and PNG encoders decoded back by the engine, the size rules and the half-size retry, the interface heuristic and `isUnmeteredNetwork`, `ImagePlacement` against what `paintImage` draws for every fit and alignment, and pictures in the wireframe under each policy, under masks, deduplicated, evicted, over budget, failing and animated.
+- `tool/e2e/wireframe`: the regression suite. A gallery app (`example/lib/wireframe_suite`, 26 scenarios and over 100 checkpoints, pictures inlined with `replay.images = always`) drives itself with real pointer events on Linux desktop; a checkpoint waits until the recorder has taken the screen and made its pictures (`WireframeRecorder.isSettled`). The `keyboard` scenario shows a soft keyboard through `SuiteBinding`, which puts a `MediaQuery` with the inset between the view and the app; `run.py` checks the events, replays every checkpoint in rrweb-player and compares it with the app's own picture (SSIM, edges, color) and with a baseline, and checks that no secret reaches the recording. See its README.

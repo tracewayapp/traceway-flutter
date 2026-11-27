@@ -4,7 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:traceway/src/screen_recorder.dart';
+import 'package:traceway_video/src/screen_recorder.dart';
 
 /// Keeps what it is given and writes a stand-in MP4.
 class _FakeEncoder implements VideoEncoder {

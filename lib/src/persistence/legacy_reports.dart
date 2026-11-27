@@ -1,104 +1,102 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:http/http.dart' as http;
+/// One exception or message a 1.x build saved and never delivered.
+class LegacyReport {
+  const LegacyReport({
+    required this.stackTrace,
+    required this.recordedAt,
+    required this.attributes,
+    required this.isMessage,
+  });
 
-import '../core/endpoints.dart';
-import 'outbox.dart' show isTransientFailure;
+  /// `Type: message` and the formatted frames (a message: its text).
+  final String stackTrace;
+  final DateTime recordedAt;
+  final Map<String, String> attributes;
+  final bool isMessage;
+}
 
-/// 1.x saved each exception together with its clip, without saving its project.
+/// 1.x saved each exception, with its video clip, as a JSON file in
+/// `traceway_pending`, without its project (2.0 betas moved some into a
+/// directory per destination there). Nothing is sent to the 1.x
+/// `/api/report` endpoint any more: every report still within 1.x's
+/// 12 hours becomes a record of the running SDK, through its normal path
+/// ([emit]: OTLP, the current project), and every file goes, read or not.
+/// The clips are not converted: 1.x video is not a replay segment.
 class LegacyReports {
-  LegacyReports(this.pending, this.destination, this.httpClient);
+  LegacyReports(this.pending, this.emit);
 
   final Directory pending;
-  final OtlpDestination? destination;
-  final http.Client httpClient;
+  final void Function(LegacyReport report) emit;
   Future<void>? _running;
 
-  Future<void> drain() =>
-      _running ??= _drain().whenComplete(() => _running = null);
+  static const Duration maxAge = Duration(hours: 12);
 
-  Future<void> _drain() async {
-    final target = destination;
-    final claimed =
-        target == null ? null : Directory('${pending.path}/${target.key}');
-    final cutoff = DateTime.now().subtract(const Duration(hours: 12));
+  Future<void> convert() =>
+      _running ??= _convert().whenComplete(() => _running = null);
+
+  Future<void> _convert() async {
     try {
-      if (await pending.exists()) {
-        await for (final file in pending.list(followLinks: false)) {
-          if (file is Directory && file.path != claimed?.path) {
-            await for (final old in file.list(followLinks: false)) {
-              if (old is File &&
-                  old.path.endsWith('.json') &&
-                  (await old.lastModified()).isBefore(cutoff)) {
-                await old.delete();
-              }
-            }
-            if (await file.list().isEmpty) await file.delete();
-          }
-          if (file is! File || !file.path.endsWith('.json')) continue;
-          if ((await file.lastModified()).isBefore(cutoff)) {
-            await file.delete();
-          } else if (claimed != null) {
-            await claimed.create(recursive: true);
-            await file.rename('${claimed.path}/${file.uri.pathSegments.last}');
-          }
+      if (!await pending.exists()) return;
+      final cutoff = DateTime.now().subtract(maxAge);
+      final directories = <Directory>[];
+      await for (final entry in pending.list(recursive: true, followLinks: false)) {
+        if (entry is Directory) {
+          directories.add(entry);
+          continue;
         }
+        if (entry is! File) continue;
+        if (entry.path.endsWith('.json')) {
+          final report = await _read(entry, cutoff);
+          if (report != null) emit(report);
+        }
+        await _delete(entry);
       }
-      if (target == null || claimed == null || !await claimed.exists()) return;
-      await for (final file in claimed.list(followLinks: false)) {
-        if (file is! File || !file.path.endsWith('.json')) continue;
-        if ((await file.lastModified()).isBefore(cutoff)) {
-          await file.delete();
-          continue;
-        }
-        final dynamic entry;
+      // Deepest first, then the directory itself, when nothing is left.
+      directories.sort((a, b) => b.path.length.compareTo(a.path.length));
+      for (final dir in [...directories, pending]) {
         try {
-          entry = jsonDecode(await file.readAsString());
-        } on Exception {
-          // Corrupt or unreadable: kept, it would stop every drain here.
-          await _delete(file);
-          continue;
+          if (await dir.list().isEmpty) await dir.delete();
+        } on FileSystemException {
+          // Not empty after all, or gone: the next start looks again.
         }
-        if (entry is! Map ||
-            entry['exception'] is! Map ||
-            (DateTime.tryParse(entry['createdAt'].toString())
-                    ?.isAfter(cutoff) !=
-                true)) {
-          await file.delete();
-          continue;
-        }
-        final body = jsonEncode({
-          'collectionFrames': [
-            {
-              'stackTraces': [entry['exception']],
-              if (entry['recording'] is Map)
-                'sessionRecordings': [entry['recording']],
-            }
-          ],
-        });
-        final response = await httpClient
-            .post(
-              Uri.parse(target.url),
-              headers: {
-                ...target.headers,
-                'Content-Type': 'application/json',
-                'Content-Encoding': 'gzip'
-              },
-              body: gzip.encode(utf8.encode(body)),
-            )
-            .timeout(const Duration(seconds: 10));
-        final status = response.statusCode;
-        final delivered = status >= 200 && status < 300;
-        final rejected =
-            status >= 400 && status < 500 && !isTransientFailure(status);
-        // Throttled or a server error: the next drain sends it again.
-        if (!delivered && !rejected) return;
-        // Delivered, or rejected for good: either way it is done.
-        await file.delete();
       }
     } catch (_) {
-      // A concurrent migration or interrupted upload can be retried on resume.
+      // Unreadable storage: the next start tries again.
+    }
+  }
+
+  /// The report in [file], or null when it is too old, damaged or not a
+  /// 1.x report.
+  static Future<LegacyReport?> _read(File file, DateTime cutoff) async {
+    try {
+      if ((await file.lastModified()).isBefore(cutoff)) return null;
+      final entry = jsonDecode(await file.readAsString());
+      if (entry is! Map) return null;
+      final createdAt = DateTime.tryParse('${entry['createdAt']}');
+      final exception = entry['exception'];
+      if (createdAt == null || !createdAt.isAfter(cutoff) || exception is! Map) {
+        return null;
+      }
+      final stackTrace = exception['stackTrace'];
+      if (stackTrace is! String || stackTrace.trim().isEmpty) return null;
+      final recordedAt =
+          DateTime.tryParse('${exception['recordedAt']}') ?? createdAt;
+      final attributes = exception['attributes'];
+      return LegacyReport(
+        stackTrace: stackTrace,
+        recordedAt: recordedAt,
+        attributes: {
+          if (attributes is Map)
+            for (final MapEntry(:key, :value) in attributes.entries)
+              if (value != null) '$key': '$value',
+        },
+        isMessage: exception['isMessage'] == true,
+      );
+    } catch (_) {
+      // Unreadable or not JSON: dropped with the file.
+      return null;
     }
   }
 
@@ -106,7 +104,7 @@ class LegacyReports {
     try {
       await file.delete();
     } on FileSystemException {
-      // Gone already, or stuck: either way the drain goes on.
+      // Gone already, or stuck: either way the conversion goes on.
     }
   }
 }

@@ -9,8 +9,8 @@
 /// - **walk**: [WireframeCapture] visits the element tree in paint order.
 /// - **convert**: each render object that draws becomes nodes, by kind:
 ///   `text`, `field`, `image`, `toggle`, `slider`, `progress`, `segmented`,
-///   `nativePlaceholder`, `customDrawing`, `group`, `scroll`, and Flutter's
-///   own `table` and `circle`.
+///   `nativePlaceholder`, `customDrawing`, `keyboard`, `group`, `scroll`, and
+///   Flutter's own `table` and `circle`.
 /// - **VNodes**: an element keeps its node ids from frame to frame, and an
 ///   unchanged subtree is the previous frame's very object (`vnode.dart`).
 /// - **CSS**: geometry and paint inline on each node, the shared rules in
@@ -22,6 +22,7 @@
 library;
 
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 // The SDK supports Flutter releases from before material_ui and
 // cupertino_ui existed.
@@ -57,11 +58,15 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform, mergeSort;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
+import '../guarded.dart';
+import '../traceway_image_policy.dart';
 import '../traceway_mask_mode.dart';
 import '../traceway_mask.dart';
 import 'vnode.dart';
 import 'wireframe_css.dart';
 import 'wireframe_glyphs.dart';
+import 'wireframe_image_codec.dart';
+import 'wireframe_images.dart';
 
 /// One captured screen: the wireframe DOM of what the app painted.
 class WireframeFrame {
@@ -99,11 +104,27 @@ class WireframeCapture {
   /// Text in editable fields is masked, as rrweb's `maskAllInputs` does.
   bool maskAllInputs = true;
 
-  /// Load images that came from the network in the replay, by their URL:
-  /// the browser that plays it fetches them. Off (`replay.images = off`),
-  /// every image is a placeholder (`.im`). Images from memory, files and
-  /// assets are always placeholders: nothing of theirs is uploaded.
-  bool networkImages = true;
+  /// What the replay may show of the app's images: the `replay.images`
+  /// policy in effect (under `TracewayOptions.replayImages`).
+  ///
+  /// - [TracewayImagePolicy.off]: every image is the `.im` placeholder.
+  /// - Otherwise an image loaded from the network is shown by its URL (the
+  ///   browser that plays the replay fetches it), and images from memory,
+  ///   files and assets are placeholders.
+  /// - [TracewayImagePolicy.always], and [TracewayImagePolicy.wifi] while
+  ///   [unmetered] says so when the frame is captured: the pixels of every
+  ///   image are inlined ([images]); one whose picture is not ready, or
+  ///   could not be made, falls back to the above.
+  TracewayImagePolicy imagePolicy = TracewayImagePolicy.always;
+
+  /// Whether the device is on an unmetered network now, for
+  /// [TracewayImagePolicy.wifi]. Asked once per frame.
+  bool Function() unmetered = _metered;
+
+  static bool _metered() => false;
+
+  /// Makes the pictures images inline; without it no pixels are inlined.
+  WireframeImages? images;
 
   /// Draws the shapes of icons; without it every icon is a square.
   WireframeGlyphs? glyphs;
@@ -117,6 +138,12 @@ class WireframeCapture {
   static const glyphLinger = Duration(seconds: 10);
 
   final Set<Glyph> _shownGlyphs = {};
+
+  /// Whether this frame shows network images by their URL, and whether it
+  /// inlines pictures; decided when it is captured.
+  bool _urls = true;
+  bool _pictures = false;
+  final Expando<_ImageHistory> _imageHistory = Expando('traceway image history');
   final Expando<Map<int, int>> _ids = Expando('traceway wireframe ids');
   int _nextId = firstCapturedNodeId;
   Map<int, VNode> _previous = {};
@@ -125,6 +152,7 @@ class WireframeCapture {
 
   late RenderObject _root;
   late List<VNode> _deferred;
+  DateTime _timestamp = DateTime.fromMillisecondsSinceEpoch(0);
   late Rect _screenRect;
 
   /// The wireframe of what [rootElement] paints, or null when it is not
@@ -134,10 +162,18 @@ class WireframeCapture {
     final root = rootElement.renderObject;
     if (root is! RenderBox || !root.attached || !root.hasSize) return null;
     _root = root;
+    _timestamp = timestamp;
     _deferred = [];
     _current = {};
     _shownGlyphs.clear();
     _screenRect = Offset.zero & root.size;
+    _urls = imagePolicy != TracewayImagePolicy.off;
+    final images = this.images;
+    _pictures = images != null &&
+        _urls &&
+        (imagePolicy == TracewayImagePolicy.always ||
+            guardedOr('unmetered network', false, unmetered));
+    if (_pictures) images!.beginCapture(timestamp);
     final children = <VNode>[];
     try {
       _visit(
@@ -155,7 +191,9 @@ class WireframeCapture {
       rethrow;
     }
     children.addAll(_deferred);
-    children.insertAll(0, _glyphStyles(timestamp));
+    final keyboard = guardedOr('keyboard', null, () => _keyboard(rootElement, root));
+    if (keyboard != null) children.add(keyboard);
+    children.insertAll(0, _styles(timestamp));
     final screen = _intern(VNode.element(
       screenNodeId,
       'div',
@@ -174,28 +212,80 @@ class WireframeCapture {
   /// Forgets the previous frame, so the next capture shares nothing with it.
   void reset() => _previous = {};
 
-  /// A style node for each drawn glyph shown lately, first on the screen
-  /// (a style draws nothing), in a stable order.
-  List<VNode> _glyphStyles(DateTime timestamp) {
-    final glyphs = this.glyphs;
-    if (glyphs == null) return const [];
-    for (final glyph in _shownGlyphs) {
-      glyph.lastShown = timestamp;
-    }
+  /// A style node for each drawn glyph and each picture shown lately, first
+  /// on the screen (a style draws nothing), in a stable order.
+  List<VNode> _styles(DateTime timestamp) {
     final styles = <VNode>[];
-    for (final glyph in glyphs.all) {
-      final css = glyph.css;
-      final shown = glyph.lastShown;
-      if (css == null ||
-          shown == null ||
-          timestamp.difference(shown) > glyphLinger) {
-        continue;
+    final glyphs = this.glyphs;
+    if (glyphs != null) {
+      for (final glyph in _shownGlyphs) {
+        glyph.lastShown = timestamp;
       }
-      styles.add(_intern(VNode.element(
-          glyph.styleId ??= _nextId++, 'style', {'_cssText': css}, const [])));
+      for (final glyph in glyphs.all) {
+        final css = glyph.css;
+        final shown = glyph.lastShown;
+        if (css == null ||
+            shown == null ||
+            timestamp.difference(shown) > glyphLinger) {
+          continue;
+        }
+        styles.add(_intern(VNode.element(
+            glyph.styleId ??= _nextId++, 'style', {'_cssText': css}, const [])));
+      }
+    }
+    // Only while pictures are allowed: once images are off, none of their
+    // data stays on the page.
+    final images = this.images;
+    if (_pictures && images != null) {
+      for (final picture in images.lingering(timestamp)) {
+        styles.add(_intern(VNode.element(picture.styleId ??= _nextId++,
+            'style', {'_cssText': picture.css!}, const [])));
+      }
     }
     styles.sort((a, b) => a.id.compareTo(b.id));
     return styles;
+  }
+
+  /// The soft keyboard as a neutral box over the bottom of the screen while
+  /// the view's bottom inset says it is up, the box the Android and iOS
+  /// SDKs draw: its keys are the platform's and are never recorded. Its
+  /// ids are fixed (12, its label 14).
+  VNode? _keyboard(Element rootElement, RenderBox root) {
+    final media = rootElement.getInheritedWidgetOfExactType<MediaQuery>()?.data;
+    double inset;
+    Size viewSize;
+    bool dark;
+    if (media != null) {
+      inset = media.viewInsets.bottom;
+      viewSize = media.size;
+      dark = media.platformBrightness == Brightness.dark;
+    } else {
+      final view = rootElement.findAncestorWidgetOfExactType<View>()?.view;
+      if (view == null || view.devicePixelRatio <= 0) return null;
+      inset = view.viewInsets.bottom / view.devicePixelRatio;
+      viewSize = view.physicalSize / view.devicePixelRatio;
+      dark = view.platformDispatcher.platformBrightness == Brightness.dark;
+    }
+    if (!(inset > 0) || !inset.isFinite) return null;
+    // The view's bottom, in the screen's coordinates, cut to the screen.
+    final topLeft = root.globalToLocal(Offset(0, viewSize.height - inset));
+    final bottomRight = root.globalToLocal(Offset(viewSize.width, viewSize.height));
+    final screen = _screenRect;
+    final rect = Rect.fromLTRB(
+      topLeft.dx.clamp(0, screen.width),
+      topLeft.dy.clamp(0, screen.height),
+      bottomRight.dx.clamp(0, screen.width),
+      bottomRight.dy.clamp(0, screen.height),
+    );
+    if (rect.height <= 0 || rect.width <= 0) return null;
+    return _element(
+      keyboardNodeId,
+      'left:${px(rect.left)};top:${px(rect.top)};'
+          'width:${px(rect.width)};height:${px(rect.height)};'
+          '${dark ? 'background-color:#2c2c2e;color:#8e8e93;' : 'background-color:#d1d3d9;color:#6d6d72;'}'
+          'display:flex;align-items:center;justify-content:center;font-size:13px;',
+      [_textNode(keyboardLabelTextId, 'Keyboard')],
+    );
   }
 
   /// The id of the node playing [role] for [element]; the same in every
@@ -867,10 +957,19 @@ class WireframeCapture {
   }
 
   void _image(Element element, RenderImage ro, _Affine t, _Scope s) {
-    if (ro.image == null) return;
+    final image = ro.image;
+    if (image == null) return;
     final geometry = _geometry(s.origin, t, ro.size);
     final opacity = ro.opacity?.value;
     final fade = opacity != null && opacity < 1 ? 'opacity:${num3(opacity)};' : '';
+    if (_pictures && _showsImages(s)) {
+      final picture = guardedOr('image picture', null, () => _picture(ro, image));
+      if (picture != null) {
+        s.out.add(_element(_id(element), '$geometry$fade${picture.$2}',
+            const [], cls: 'im ${picture.$1.cls}'));
+        return;
+      }
+    }
     final provider = s.image;
     final url =
         provider != null && _showsImages(s) ? networkImageUrl(provider) : null;
@@ -885,6 +984,39 @@ class WireframeCapture {
     } else {
       s.out.add(_element(_id(element), geometry + fade, const [], cls: 'im'));
     }
+  }
+
+  /// The picture of [image], which [ro] shows, and the inline CSS that
+  /// places it in the image's node; null while it is made, or when it
+  /// cannot be (an animated image, a full picture budget).
+  (WireframePicture, String)? _picture(RenderImage ro, ui.Image image) {
+    final images = this.images;
+    if (images == null) return null;
+    // An animated image (a GIF) is a new image every frame: its frames are
+    // not recorded, it falls back to its URL or the placeholder.
+    final history = _imageHistory[ro] ??= _ImageHistory();
+    if (history.animated(image, _timestamp)) return null;
+    final placement = ImagePlacement.of(ro);
+    if (placement == null) return null;
+    final dest = placement.destination;
+    final size = WireframeImageEncoding.pixelSize(
+        dest.width, dest.height, placement.source.width, placement.source.height);
+    if (size == null) return null;
+    final (width, height) = size;
+    final picture = images.lookup(image, placement.key(width, height, ro),
+        width, height, () => placement.record(ro, image, width, height));
+    if (picture == null) return null;
+    final repeat = switch (placement.repeat) {
+      ImageRepeat.noRepeat => '',
+      ImageRepeat.repeat => 'background-repeat:repeat;',
+      ImageRepeat.repeatX => 'background-repeat:repeat-x;',
+      ImageRepeat.repeatY => 'background-repeat:repeat-y;',
+    };
+    return (
+      picture,
+      'background-size:${px(dest.width)} ${px(dest.height)};'
+          'background-position:${px(dest.left)} ${px(dest.top)};$repeat',
+    );
   }
 
   /// A view the platform draws (a web view, a map, a native control) or a
@@ -1309,9 +1441,9 @@ class WireframeCapture {
 
   // ---- helpers --------------------------------------------------------------
 
-  /// Whether an image under [s] is drawn from its URL: images are on and
-  /// no mask above blocks them.
-  bool _showsImages(_Scope s) => networkImages && !s.blockImages;
+  /// Whether an image under [s] is drawn (from its URL or its picture):
+  /// images are on and no mask above blocks them.
+  bool _showsImages(_Scope s) => _urls && !s.blockImages;
 
   static bool _paints(RenderObject parent, RenderObject child) {
     if (parent is RenderIndexedStack) {
@@ -1534,6 +1666,28 @@ class WireframeCapture {
         CupertinoSwitch() => _Toggle.cupertinoSwitch,
         _ => null,
       };
+}
+
+/// The images one `RenderImage` showed lately, to tell an animated one.
+class _ImageHistory {
+  ui.Image? _last;
+  final List<DateTime> _changes = [];
+  bool _animated = false;
+
+  /// Whether the render object animates: it showed 3 new images within a
+  /// second. Then it stays so.
+  bool animated(ui.Image image, DateTime now) {
+    if (_animated) return true;
+    final last = _last;
+    if (last == null || (!identical(last, image) && !last.isCloneOf(image))) {
+      _last = image;
+      _changes
+        ..add(now)
+        ..removeWhere((at) => now.difference(at) > const Duration(seconds: 1));
+      if (_changes.length > 3) _animated = true;
+    }
+    return _animated;
+  }
 }
 
 class _Run {

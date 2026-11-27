@@ -90,6 +90,14 @@ jobs:
         if: steps.plan.outputs.release == 'true'
         run: flutter test
 
+      - name: Analyze and test the video add-on
+        if: steps.plan.outputs.release == 'true'
+        working-directory: packages/traceway_video
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos
+          flutter test
+
       - name: Tag and push
         if: steps.plan.outputs.release == 'true'
         env:

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'traceway_captured_error.dart';
 import 'traceway_image_policy.dart';
 import 'traceway_screen_capture_mode.dart';
@@ -13,12 +15,15 @@ class TracewayOptions {
   /// [screenCaptureMode] picks video or a wireframe.
   final bool screenCapture;
 
-  /// How [screenCapture] records: [TracewayScreenCaptureMode.video] (the
-  /// default) or [TracewayScreenCaptureMode.wireframe], the widget tree
-  /// replayed as HTML.
+  /// How [screenCapture] records: [TracewayScreenCaptureMode.wireframe]
+  /// (the default), the widget tree replayed as HTML, or
+  /// [TracewayScreenCaptureMode.video].
   ///
-  /// Video needs a video encoder (Android, iOS and macOS); elsewhere the
-  /// screen is recorded as a wireframe instead. `replay.captureMode`
+  /// Video needs the `traceway_video` add-on (add it to `pubspec.yaml` and
+  /// call `TracewayVideo.register()` before `Traceway.run`) and a video
+  /// encoder (Android, iOS and macOS). Without the add-on the SDK prints one
+  /// warning and records a wireframe; where there is no encoder it records
+  /// a wireframe too. `replay.captureMode`
   /// (`video` or `wireframe`) in the remote settings overrides this. A
   /// change applies at once, unless the session has already uploaded replay
   /// in the other mode: then it applies from the next session, so one
@@ -28,10 +33,25 @@ class TracewayOptions {
   /// The most images a wireframe replay may show: the ceiling of the
   /// `replay.images` setting (`off`, `wifi` by default, `always`), which
   /// remote settings can lower but not raise. [TracewayImagePolicy.off]
-  /// draws every image as a placeholder. Flutter shows a network image by
-  /// its URL and uploads no pixels, so `wifi` and `always` are the same
-  /// here. Video recordings are not affected.
+  /// draws every image as a placeholder; `always`, and `wifi` on an
+  /// unmetered network ([isUnmeteredNetwork]), inline the pixels of the
+  /// images on screen; `wifi` on a metered or unknown network keeps network
+  /// images as URL references. Video recordings are not affected.
   final TracewayImagePolicy replayImages;
+
+  /// Whether the device is on an unmetered network (Wi-Fi, Ethernet) now,
+  /// for `replay.images = wifi`. Without it the SDK guesses from the
+  /// network interfaces that are up (Android `wlan*`/`eth*`, iOS `en0`),
+  /// which takes a hotspot shared by a phone for Wi-Fi; answer it from a
+  /// connectivity plugin to tell them apart. Asked at most every 2 seconds
+  /// while wireframe images may be recorded, never waited for: until it
+  /// first answers, and when it throws, the network counts as metered.
+  ///
+  /// ```dart
+  /// isUnmeteredNetwork: () async => (await Connectivity().checkConnectivity())
+  ///     .any((c) => c == ConnectivityResult.wifi || c == ConnectivityResult.ethernet),
+  /// ```
+  final FutureOr<bool> Function()? isUnmeteredNetwork;
   final bool debug;
 
   /// App version, sent as `service.version`.
@@ -59,10 +79,6 @@ class TracewayOptions {
   /// Keep SDK state (instance id, last remote config, session) and telemetry
   /// that failed to send on disk so they survive app restarts.
   final bool persistToDisk;
-
-  /// The previous 1.x project's connection string. Set during an upgrade to
-  /// drain its pending errors and clips. Those files contain no project ID.
-  final String? legacyConnectionString;
 
   /// Capture every `print` / `debugPrint` line as a log record (level
   /// info), every `package:logging` record with its level, and
@@ -142,10 +158,10 @@ class TracewayOptions {
   /// How long finished records wait before they are sent as one batch.
   final int exportDelayMs;
 
-  /// Send logs, spans and metrics to another OpenTelemetry backend (an
+  /// Send logs, spans and metrics to another OpenTelemetry provider (an
   /// OTLP/HTTP receiver such as an OpenTelemetry Collector) instead of
-  /// Traceway. With a connection string, exceptions, messages, sessions,
-  /// OpAMP and screen recordings stay on Traceway; without one the SDK runs
+  /// Traceway. With a token, exceptions, messages, sessions, remote config
+  /// and screen recordings stay on Traceway; without one the SDK runs
   /// standalone and this receives everything. See [TracewayTelemetry].
   ///
   /// ```dart
@@ -196,11 +212,20 @@ class TracewayOptions {
   /// test hang reporting with a debug build.
   final bool reportHangsInDebug;
 
+  /// Report hangs as the `app.hang` metric. Flutter reports no `AppHang`
+  /// issue: no stack can be taken from the blocked UI isolate.
+  final bool captureAppHangs;
+
+  /// How long the UI isolate must be blocked, in milliseconds, before it
+  /// counts as a hang (`app.hang`); at least 250.
+  final int appHangThresholdMs;
+
   const TracewayOptions({
     this.sampleRate = 1.0,
     this.screenCapture = false,
-    this.screenCaptureMode = TracewayScreenCaptureMode.video,
+    this.screenCaptureMode = TracewayScreenCaptureMode.wireframe,
     this.replayImages = TracewayImagePolicy.always,
+    this.isUnmeteredNetwork,
     this.debug = false,
     this.version = '',
     this.serviceName,
@@ -210,7 +235,6 @@ class TracewayOptions {
     this.maxBufferFrames = 150,
     this.fps = 15,
     this.persistToDisk = true,
-    this.legacyConnectionString,
     this.captureLogs = true,
     this.captureNetwork = true,
     this.captureNavigation = true,
@@ -229,5 +253,7 @@ class TracewayOptions {
     this.beforeCapture,
     this.captureDeviceInfo = true,
     this.reportHangsInDebug = false,
+    this.captureAppHangs = true,
+    this.appHangThresholdMs = 2000,
   }) : assert(fps >= 1 && fps < 60, 'fps must be >= 1 and < 60');
 }

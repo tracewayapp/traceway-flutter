@@ -64,7 +64,8 @@ class OpampHttpClient {
     }
   }
 
-  /// The server's OpAMP endpoint, e.g. https://host/api/otel/v1/opamp.
+  /// The server's OpAMP endpoint, e.g.
+  /// https://cloud.tracewayapp.com/api/otel/v1/opamp.
   final String endpoint;
   final Map<String, String> headers;
   final int capabilities;

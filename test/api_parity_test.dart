@@ -5,7 +5,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart'
-    show SpanStatusCode;
+    show OTel, SimpleSpanProcessor, SpanStatusCode;
 import 'package:dartastic_opentelemetry/testing.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -296,6 +296,77 @@ void main() {
       idle.captureException(StateError('nowhere to go'));
       idle.end();
       expect(idle.isEnded, isTrue);
+    });
+  });
+
+  group('tracer', () {
+    const streaming = TracewayOptions(
+        remoteConfig: false,
+        collection: {
+          'signals': {
+            'network': {'mode': 'stream'}
+          }
+        });
+
+    test('is null before the SDK starts and after it stops', () async {
+      await TracewayClient.resetForTest();
+      expect(Traceway.tracer, isNull);
+      final h = await startHarness();
+      expect(Traceway.tracer, isNotNull);
+      expect(Traceway.tracer, same(h.client.tracer));
+      await h.client.shutdown();
+      expect(Traceway.tracer, isNull);
+      expect(h.client.tracer, isNull);
+    });
+
+    test(
+        'the app\'s spans go through Traceway with the session id, and nest '
+        'under the interaction they are made in', () async {
+      final h = await startHarness(options: streaming);
+      final tracer = Traceway.tracer!;
+      tracer.startSpan('load-catalog').end();
+      final checkout = Traceway.startInteraction('checkout');
+      await checkout.run(() async {
+        await Future<void>.delayed(Duration.zero);
+        // After an await too: the interaction is the active context.
+        tracer.startSpan('price-cart').end();
+      });
+      checkout.end();
+      await h.client.flush();
+      final spans = h.spans.spans;
+      final own = spans.singleWhere((s) => s.name == 'load-catalog');
+      expect(own.attributes.toMap()['session.id']!.value,
+          h.client.currentSessionId);
+      expect(own.parentSpanContext?.isValid ?? false, isFalse);
+      final inner = spans.singleWhere((s) => s.name == 'price-cart');
+      expect(inner.spanContext.traceId.hexString, checkout.traceId);
+      expect(inner.parentSpanContext?.spanId.hexString, checkout.spanId);
+      expect(inner.attributes.toMap()['session.id']!.value,
+          h.client.currentSessionId);
+    });
+
+    test('is not the app\'s OpenTelemetry, and leaves it alone', () async {
+      final h = await startHarness(options: streaming);
+      // The app sets its own OpenTelemetry up after Traceway started (the
+      // other order is in host_otel_test).
+      final hostSpans = InMemorySpanExporter();
+      await OTel.initialize(
+        serviceName: 'host',
+        enableMetrics: false,
+        detectPlatformResources: false,
+        spanProcessor: SimpleSpanProcessor(hostSpans),
+      );
+      Traceway.tracer!.startSpan('ours').end();
+      OTel.tracerProvider()
+          .getTracer('host')
+          .startSpan('theirs', root: true)
+          .end();
+      await h.client.flush();
+      await Future<void>.delayed(Duration.zero);
+      expect(h.spans.spans.map((s) => s.name), contains('ours'));
+      expect(h.spans.spans.map((s) => s.name), isNot(contains('theirs')));
+      expect(hostSpans.spans.map((s) => s.name), ['theirs']);
+      expect(Traceway.tracer, isNot(same(OTel.tracer())));
     });
   });
 

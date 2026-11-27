@@ -952,7 +952,9 @@ void main() {
     test('initialize returns the running client', () async {
       final h = await startHarness();
       final again = TracewayClient.initialize(
-          connectionString, const TracewayOptions(remoteConfig: false));
+          token: 'test-token',
+          baseUrl: 'https://traceway.test',
+          options: const TracewayOptions(remoteConfig: false));
       expect(again, same(h.client));
     });
 

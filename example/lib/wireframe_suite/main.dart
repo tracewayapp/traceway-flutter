@@ -11,6 +11,9 @@
 // --dart-define=TRACEWAY_DSN (mobile). E2E_ONLY=forms,overlays runs only
 // those scenarios; E2E_SHOTS is where the app saves its own pictures.
 //
+// The app runs on SuiteBinding, which can show a soft keyboard on desktop
+// (driver.dart's `simulatedKeyboard`).
+//
 // Prints, one per line: E2E_WINDOW, E2E_SESSION, E2E_SECRET <json>,
 // E2E_VIEW <size>, E2E_SCENARIO <id> <ms>, E2E_CHECKPOINT <json>,
 // E2E_SCENARIO_FAILED <id> <error>, E2E_TOUR_DONE and E2E_DONE.
@@ -24,6 +27,7 @@ import 'package:traceway/traceway.dart';
 import 'driver.dart';
 import 'scenario.dart';
 import 'scenes/forms.dart';
+import 'scenes/keyboard.dart';
 import 'scenes/layout.dart';
 import 'scenes/media.dart';
 import 'scenes/motion.dart';
@@ -62,7 +66,16 @@ final List<Scenario> scenarios = [
   ...mediaScenarios,
   ...motionScenarios,
   ...privacyScenarios,
+  ...keyboardScenarios,
 ];
+
+/// The binding of the suite: Flutter's, with [SimulatedKeyboard] between
+/// the view and the app, so a desktop run can show a soft keyboard.
+class SuiteBinding extends WidgetsFlutterBinding {
+  @override
+  Widget wrapWithDefaultView(Widget rootWidget) =>
+      super.wrapWithDefaultView(SimulatedKeyboard(child: rootWidget));
+}
 
 void main() {
   if (_dsn.isEmpty) {
@@ -71,8 +84,11 @@ void main() {
   }
   // A blinking caret would keep a focused field from ever settling.
   EditableText.debugDeterministicCursor = true;
+  SuiteBinding();
+  final at = _dsn.indexOf('@');
   Traceway.run(
-    connectionString: _dsn,
+    token: _dsn.substring(0, at < 0 ? 0 : at),
+    baseUrl: _dsn.substring(at + 1),
     options: const TracewayOptions(
       screenCapture: true,
       screenCaptureMode: TracewayScreenCaptureMode.wireframe,
@@ -81,6 +97,10 @@ void main() {
       debug: true,
       version: 'wireframe-suite',
       fps: 10,
+      // Pictures are inlined whatever the network.
+      collection: {
+        'replay': {'images': 'always'},
+      },
     ),
     child: RepaintBoundary(key: _shotKey, child: const SuiteApp()),
   );

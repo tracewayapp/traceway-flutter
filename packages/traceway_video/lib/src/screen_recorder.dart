@@ -9,11 +9,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_quick_video_encoder/flutter_quick_video_encoder.dart';
 import 'package:path_provider/path_provider.dart';
-
-import 'circular_buffer.dart';
-import 'replay/replay_source.dart';
-import 'traceway_mask_mode.dart';
-import 'traceway_mask.dart';
+import 'package:traceway/video.dart';
 
 class CapturedFrame {
   final Uint8List pngBytes;
@@ -83,19 +79,26 @@ class PlatformVideoEncoder implements VideoEncoder {
   Future<void> finish() => FlutterQuickVideoEncoder.finish();
 }
 
-class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
-  /// Replaces the platform encoder, for platforms it does not support and
-  /// for tests.
+/// Records the screen as video: frames of the `RepaintBoundary` around the
+/// app, kept in a ring and encoded to MP4 when a clip is asked for.
+class ScreenRecorder
+    with WidgetsBindingObserver
+    implements TracewayVideoRecorder {
+  /// Replaces the platform encoder, for tests.
   @visibleForTesting
   static VideoEncoder? encoderOverride;
 
   /// Whether clips can be encoded here: the hardware encoder exists on
-  /// Android, iOS and macOS. Elsewhere the SDK records no frames at all.
+  /// Android, iOS and macOS. Elsewhere the SDK records a wireframe.
   static bool get isVideoSupported {
     if (encoderOverride != null) return true;
     if (kIsWeb) return false;
     return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
   }
+
+  /// The encoder of this recorder's clips: [encoderOverride], else the one
+  /// it was made with, else the platform's.
+  final VideoEncoder? encoder;
 
   final GlobalKey repaintBoundaryKey;
   final double pixelRatio;
@@ -107,6 +110,7 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
   /// and rrweb's `maskAllInputs` does; the settings turn it off
   /// (`replay.maskAllInputs`). Obscured and read-only fields are left as
   /// they are drawn.
+  @override
   bool maskAllInputs = true;
 
   late final int _captureIntervalMs = 1000 ~/ fps;
@@ -140,12 +144,15 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
     this.pixelRatio = 0.5,
     this.fps = 15,
     this.debug = false,
+    this.encoder,
   }) : _buffer = CircularBuffer<CapturedFrame>(maxFrames);
 
+  @override
   void setTouchPosition(Offset position) {
     _touchPosition = position;
   }
 
+  @override
   void clearTouchPosition() {
     _touchPosition = null;
   }
@@ -477,7 +484,8 @@ class ScreenRecorder with WidgetsBindingObserver implements ReplaySource {
       final outputPath = '${tempDir.path}/traceway_$clipId.mp4';
       videoFile = File(outputPath);
 
-      final encoder = encoderOverride ?? const PlatformVideoEncoder();
+      final encoder =
+          encoderOverride ?? this.encoder ?? const PlatformVideoEncoder();
       await encoder.setup(
         width: maxWidth,
         height: maxHeight,

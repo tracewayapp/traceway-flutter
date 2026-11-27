@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart'
+    show Tracer;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/scheduler.dart';
@@ -12,7 +14,7 @@ import 'events/traceway_event.dart';
 import 'events/traceway_navigator_observer.dart';
 import 'guarded.dart';
 import 'replay/replay_source.dart';
-import 'screen_recorder.dart';
+import 'replay/video_recorder.dart';
 import 'traceway_client.dart';
 import 'traceway_interaction.dart';
 import 'traceway_log_level.dart';
@@ -199,14 +201,62 @@ class Traceway extends StatefulWidget {
   static void setMetricDimension(String key, String? value) =>
       TracewayClient.instance?.setMetricDimension(key, value);
 
-  /// Starts the SDK and runs [child]. [connectionString]
-  /// (`<token>@<server>`) connects it to Traceway; leave it out to run
-  /// standalone with [TracewayOptions.telemetry] as the only destination.
+  /// The SDK's OpenTelemetry tracer, for spans of the app's own; null until
+  /// the SDK has started and after [shutdown]. See [TracewayClient.tracer].
+  ///
+  /// ```dart
+  /// final span = Traceway.tracer?.startSpan('load-catalog');
+  /// try {
+  ///   await loadCatalog();
+  /// } finally {
+  ///   span?.end();
+  /// }
+  /// ```
+  static Tracer? get tracer => TracewayClient.instance?.tracer;
+
+  /// The running client, or null before [run] and after [shutdown]; the
+  /// same as [TracewayClient.instance].
+  static TracewayClient? get client => TracewayClient.instance;
+
+  /// Completes when the SDK has started (it reads its state from disk
+  /// first), at once when it is not running. [tracer] is null until then.
+  static Future<void> get ready =>
+      TracewayClient.instance?.ready ?? Future<void>.value();
+
+  /// Starts the SDK and runs [child] inside the [Traceway] widget.
+  ///
+  /// [token] is the project token from the dashboard's Connection page;
+  /// [baseUrl] is the Traceway server, needed only when it is not Traceway
+  /// Cloud (`https://cloud.tracewayapp.com`). Without a token the SDK runs
+  /// standalone, with [TracewayOptions.telemetry] as the only destination.
+  ///
+  /// ```dart
+  /// Traceway.run(
+  ///   token: const String.fromEnvironment('TRACEWAY_TOKEN'),
+  ///   child: const MyApp(),
+  /// );
+  /// ```
+  ///
+  /// [connectionString] (`YOUR_TOKEN@https://cloud.tracewayapp.com`) is
+  /// deprecated: it is read as [token] and [baseUrl], with one warning.
+  /// With a connection string or [baseUrl] it cannot use, the SDK prints
+  /// one warning and the app runs without it; other settings it cannot use
+  /// (no token and no telemetry destination, a malformed telemetry URL) are
+  /// reported as a [FlutterError], and the app runs without it too. On the
+  /// web the app runs without it.
   static void run({
+    String? token,
+    String? baseUrl,
+    @Deprecated('Pass token: (and baseUrl: for a self-hosted server) instead')
     String? connectionString,
     required Widget child,
     TracewayOptions options = const TracewayOptions(),
   }) {
+    if (kIsWeb) {
+      debugPrint(TracewayClient.webUnsupportedMessage);
+      runApp(child);
+      return;
+    }
     // One handler and one HTTP override per process, however often `run`
     // is called (an integration test runs `main` per test): an error or a
     // request is recorded once.
@@ -218,9 +268,21 @@ class Traceway extends StatefulWidget {
 
     void start() {
       try {
-        TracewayClient.initialize(connectionString, options);
+        final client = TracewayClient.initialize(
+          token: token,
+          baseUrl: baseUrl,
+          options: options,
+          // ignore: deprecated_member_use_from_same_package
+          connectionString: connectionString,
+        );
+        // An unusable connection string or server URL, already warned
+        // about: the app runs without the SDK.
+        if (client == null) {
+          runApp(child);
+          return;
+        }
       } catch (error, stack) {
-        // A malformed connection string or telemetry destination must not
+        // A missing token or a malformed telemetry destination must not
         // take the app down with it: report it and run without the SDK.
         FlutterError.reportError(FlutterErrorDetails(
           exception: error,
@@ -268,7 +330,7 @@ class _TracewayState extends State<Traceway> {
   /// The client this widget records for: the running one, followed when it
   /// is shut down or another starts.
   TracewayClient? _client;
-  ScreenRecorder? _screenRecorder;
+  TracewayVideoRecorder? _screenRecorder;
   WireframeRecorder? _wireframeRecorder;
   ValueListenable<TracewayScreenCaptureMode?>? _captureMode;
 
@@ -355,13 +417,21 @@ class _TracewayState extends State<Traceway> {
           screenName: () => client.currentScreen,
         );
       case TracewayScreenCaptureMode.video:
-        _screenRecorder = ScreenRecorder(
-          repaintBoundaryKey: _repaintBoundaryKey,
-          maxFrames: client.options.maxBufferFrames.clamp(1, 100000),
-          pixelRatio: client.options.capturePixelRatio,
-          fps: client.options.fps.clamp(1, 59),
-          debug: client.debug,
-        );
+        // The client asks for video only with the add-on registered.
+        final backend = tracewayVideoBackend;
+        _screenRecorder = backend == null
+            ? null
+            : guardedOr<TracewayVideoRecorder?>(
+                'video recorder',
+                null,
+                () => backend.createRecorder(TracewayVideoRecorderConfig(
+                      repaintBoundaryKey: _repaintBoundaryKey,
+                      maxFrames:
+                          client.options.maxBufferFrames.clamp(1, 100000),
+                      pixelRatio: client.options.capturePixelRatio,
+                      fps: client.options.fps.clamp(1, 59),
+                      debug: client.debug,
+                    )));
       case null:
     }
     return _recorder;

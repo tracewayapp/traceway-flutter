@@ -2,19 +2,20 @@
 /// setting, and the `TracewayOptions.replayImages` ceiling. The effective
 /// policy is the lower of the two, in the order `off < wifi < always`.
 ///
-/// Flutter's wireframe never uploads image pixels: an image loaded from the
-/// network is shown by its URL, which the browser that plays the replay
-/// fetches. So [wifi] and [always] both keep those URLs, and [off] draws a
-/// placeholder instead. Images from memory, files and assets are always
-/// placeholders, and video recordings are not affected. The Android and iOS
-/// SDKs, which upload pictures, upload them only on an unmetered network
-/// under [wifi].
+/// Under [always], and under [wifi] on an unmetered network, the wireframe
+/// inlines a small picture of every image's decoded pixels (network, asset,
+/// memory and file images; at most 384 px, JPEG, or PNG up to 192 px when the
+/// image has transparency). Under [wifi] on a metered or unknown network,
+/// network images stay URL references and no pixels are uploaded; [off] draws
+/// placeholders. Anything under a mask is never encoded, and video recordings
+/// are not affected. Android and iOS follow the same rules.
 enum TracewayImagePolicy {
   /// Every image is a placeholder.
   off,
 
   /// Images on an unmetered network (Wi-Fi, Ethernet); the default
-  /// setting. On Flutter, the same as [always].
+  /// setting. On a metered or unknown network Flutter keeps network images
+  /// as URL references and uploads no pixels.
   wifi,
 
   /// Images on any network; the default ceiling.

@@ -35,10 +35,11 @@ import 'persistence/buffer_persistence.dart';
 import 'persistence/legacy_reports.dart';
 import 'persistence/outbox.dart';
 import 'persistence/state_store.dart';
+import 'replay/network_state.dart';
 import 'replay/recordings_transport.dart';
 import 'replay/replay_controller.dart';
 import 'replay/replay_source.dart';
-import 'screen_recorder.dart';
+import 'replay/video_recorder.dart';
 import 'session/session_manager.dart';
 import 'stack_trace_formatter.dart';
 import 'sdk_version.dart';
@@ -47,6 +48,7 @@ import 'traceway_interaction.dart';
 import 'traceway_log_level.dart';
 import 'traceway_options.dart';
 import 'traceway_screen_capture_mode.dart';
+import 'wireframe/wireframe_images.dart';
 import 'wireframe/wireframe_recorder.dart';
 
 export 'sdk_version.dart' show tracewaySdkName, tracewaySdkVersion;
@@ -89,6 +91,8 @@ class TracewayTestOverrides {
     this.videoSupported = true,
     this.appVitals = false,
     this.collectionHealthDelayMs,
+    this.networkInterfaces,
+    this.startGate,
   });
 
   final LogRecordExporter? logExporter;
@@ -102,8 +106,9 @@ class TracewayTestOverrides {
   final double Function()? random;
   final int? opampMinPollIntervalMs;
 
-  /// Whether the platform can encode video; tests attach a fake source.
-  final bool videoSupported;
+  /// Whether the registered video backend can encode here (null: ask it).
+  /// Without a backend (no `traceway_video`) there is no video either way.
+  final bool? videoSupported;
 
   /// Whether the frame, start and hang instrumentation runs. Metrics the
   /// app reports and requests, sessions and errors are recorded either way.
@@ -111,31 +116,31 @@ class TracewayTestOverrides {
 
   /// The first delay of `traceway.collection.health` (1 s by default).
   final int? collectionHealthDelayMs;
+
+  /// The network interfaces the `wifi` image policy looks at; none (a
+  /// metered network) by default, so tests do not depend on the machine.
+  final NetworkInterfaceLister? networkInterfaces;
+
+  /// Holds `initializeForTest` back after the client is the instance and
+  /// before it starts: what the app does in the first moments after
+  /// `Traceway.run`, while the SDK reads its state.
+  final Future<void>? startGate;
 }
 
 class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   TracewayClient._(
-    String? connectionString,
+    TracewayStart start,
     this._options,
     this._overrides,
-  ) : _standalone = connectionString == null {
+  ) : _standalone = start.token == null {
     guardedDebugLogging = _options.debug;
-    if (connectionString != null) {
-      final parsed = parseConnectionString(connectionString);
-      _token = parsed.token;
-      _endpoints = resolveEndpoints(parsed.apiUrl);
-    } else if (_options.telemetry?.coversAllSignals != true) {
-      throw ArgumentError('Without a connection string, TracewayOptions.'
-          'telemetry needs a base url or all three signal endpoints');
+    final token = start.token;
+    if (token != null) {
+      _token = token;
+      _endpoints = resolveEndpoints(start.baseUrl);
     }
     _routes = TelemetryRoutes.resolve(_endpoints, _token, _options.telemetry);
     _globalAttributes.addAll(_options.attributes);
-    if (_options.captureLogs) {
-      _loggingSubscription = logging.Logger.root.onRecord.listen(
-        (record) => guarded('logging record', () => _onLoggingRecord(record)),
-        onError: (Object _) {},
-      );
-    }
 
     var defaults = defaultSettings(
       baselineSampleRate: _options.baselineSampleRate,
@@ -153,14 +158,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         debugPrint('Traceway: ignoring TracewayOptions.collection: $e');
       }
     }
-    _videoSupported =
-        _overrides?.videoSupported ?? ScreenRecorder.isVideoSupported;
-    if (_screenCapture &&
-        _options.screenCaptureMode == TracewayScreenCaptureMode.video &&
-        !_videoSupported) {
-      _log('this platform has no video encoder: the screen is recorded as '
-          'a wireframe');
-    }
+    // Video comes from the traceway_video add-on; without it, or where it
+    // cannot encode, the screen is recorded as a wireframe.
+    final video = tracewayVideoBackend;
+    _hasVideoAddOn = video != null;
+    _videoSupported = video != null &&
+        (_overrides?.videoSupported ??
+            guardedOr('video support', false, () => video.isSupported));
     _control = ControlState(
       defaults,
       ceilingsFrom(
@@ -217,7 +221,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       _metrics,
       currentScreen: () => _metricsScreen,
       // A breakpoint or a hot reload stops a debug build like a hang does.
-      reportHangs: !kDebugMode || _options.reportHangsInDebug,
+      reportHangs: _options.captureAppHangs &&
+          (!kDebugMode || _options.reportHangsInDebug),
+      hangThresholdMs: max(250, _options.appHangThresholdMs),
     );
     if (_options.captureMetrics && (_overrides?.appVitals ?? true)) {
       _vitals.watchColdStart(
@@ -225,7 +231,22 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         processStartMs: AppVitals.readProcessStartMs(),
       );
     }
+    final overrides = _overrides;
+    _network = NetworkState(
+      isUnmetered: _options.isUnmeteredNetwork,
+      interfaces: overrides == null
+          ? null
+          : overrides.networkInterfaces ?? () async => const [],
+    );
     _control.onChange(_onSettingsChanged);
+    // Last: a constructor that failed before here leaves no listener behind
+    // on a client nobody holds.
+    if (_options.captureLogs) {
+      _loggingSubscription = logging.Logger.root.onRecord.listen(
+        (record) => guarded('logging record', () => _onLoggingRecord(record)),
+        onError: (Object _) {},
+      );
+    }
   }
 
   static TracewayClient? _instance;
@@ -239,7 +260,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   final TracewayOptions _options;
   final TracewayTestOverrides? _overrides;
 
-  /// Without a connection string the SDK runs standalone: no OpAMP, no
+  /// Without a token the SDK runs standalone: no OpAMP, no
   /// replay uploads, no session rows, and every record goes to the
   /// [TracewayOptions.telemetry] receivers.
   final bool _standalone;
@@ -253,6 +274,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   late final RecordingsTransport _recordings;
   late final ReplayController _replay;
   late final bool _videoSupported;
+  late final bool _hasVideoAddOn;
   late final MetricsRecorder _metrics;
   late final AppVitals _vitals;
 
@@ -298,6 +320,11 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   SpanExporter? _spanExporter;
   OTelLogger? _logger;
   Tracer? _tracer;
+
+  /// Whether the device is on an unmetered network, for `replay.images =
+  /// wifi`.
+  late final NetworkState _network;
+  late final ImageBudget _imageBudget = _SessionImageBudget(this);
   OpampHttpClient? _opamp;
   Uint8List _instanceUid = Uint8List(16);
   ReplaySource? _screenRecorder;
@@ -359,9 +386,37 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final requested =
         _captureModeNamed(_control.settings.replayCaptureMode) ??
             _options.screenCaptureMode;
-    return requested == TracewayScreenCaptureMode.video && !_videoSupported
-        ? TracewayScreenCaptureMode.wireframe
-        : requested;
+    if (requested != TracewayScreenCaptureMode.video || _videoSupported) {
+      return requested;
+    }
+    if (!_hasVideoAddOn) {
+      _warnNoVideoAddOn();
+    } else if (!_noEncoderLogged) {
+      _noEncoderLogged = true;
+      _log('this platform has no video encoder: the screen is recorded as '
+          'a wireframe');
+    }
+    return TracewayScreenCaptureMode.wireframe;
+  }
+
+  bool _noEncoderLogged = false;
+
+  /// Printed once per process, debug output or not: the app asked for
+  /// something it does not get.
+  static bool _noVideoAddOnWarned = false;
+
+  @visibleForTesting
+  static void resetVideoWarningForTest() => _noVideoAddOnWarned = false;
+
+  static void _warnNoVideoAddOn() {
+    if (_noVideoAddOnWarned) return;
+    _noVideoAddOnWarned = true;
+    guarded(
+        'video warning',
+        () => debugPrint('Traceway: video replay needs the traceway_video '
+            'add-on: add traceway_video to pubspec.yaml and call '
+            'TracewayVideo.register() before Traceway.run. The screen is '
+            'recorded as a wireframe instead.'));
   }
 
   static TracewayScreenCaptureMode? _captureModeNamed(Object? name) =>
@@ -421,6 +476,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   ControlState get control => _control;
 
   @visibleForTesting
+  AppVitals get vitals => _vitals;
+
+  @visibleForTesting
   int get bufferedCount {
     _recordPrinted();
     return _buffer.length;
@@ -435,11 +493,24 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// The current session, or null when sessions are off.
   String? get currentSessionId => _sessions?.currentId;
 
+  /// The OpenTelemetry tracer of this installation, for spans of the app's
+  /// own. They go through Traceway's pipeline like its request spans: they
+  /// carry the session id (`session.id`), and one started inside a
+  /// [TracewayInteraction.run] is that interaction's child. Null until the
+  /// SDK has started (see [ready]) and after [shutdown].
+  ///
+  /// It is Traceway's own tracer, not the global `OTel.tracer()`: the
+  /// app's OpenTelemetry set-up, if it has one, stays the app's, and spans
+  /// it makes do not go to Traceway.
+  Tracer? get tracer =>
+      guardedOr('tracer', null, () => _ready && !_shutdown ? _tracer : null);
+
   @visibleForTesting
   ReplayController get replay => _replay;
 
   /// The screen recorder of the mounted [Traceway] widget, if any: a
-  /// [ScreenRecorder] or a [WireframeRecorder].
+  /// [TracewayVideoRecorder] of the `traceway_video` add-on or a
+  /// [WireframeRecorder].
   ReplaySource? get screenRecorder => _screenRecorder;
   set screenRecorder(ReplaySource? recorder) {
     _screenRecorder = recorder;
@@ -448,11 +519,14 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   }
 
   /// What the settings say about privacy, for the recorder of either kind.
-  static void _configureRecorder(ReplaySource? recorder, Settings settings) {
+  void _configureRecorder(ReplaySource? recorder, Settings settings) {
     if (recorder is WireframeRecorder) {
-      recorder.maskAllInputs = settings.replayMaskAllInputs;
-      recorder.networkImages = settings.replayImages != TracewayImagePolicy.off;
-    } else if (recorder is ScreenRecorder) {
+      recorder
+        ..maskAllInputs = settings.replayMaskAllInputs
+        ..unmetered = _network.unmetered
+        ..imageBudget = _imageBudget
+        ..imagePolicy = settings.replayImages;
+    } else if (recorder is TracewayVideoRecorder) {
       recorder.maskAllInputs = settings.replayMaskAllInputs;
     }
   }
@@ -463,32 +537,76 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _replay.attach(source);
   }
 
-  /// Starts the SDK. Without [connectionString] it runs standalone and
-  /// sends everything to [TracewayOptions.telemetry].
-  static TracewayClient initialize(
+  /// Starts the SDK without wrapping the app, for an app that runs
+  /// `runApp` and its error handlers itself; `Traceway.run` calls it.
+  /// [token] is the project token and [baseUrl] the Traceway server
+  /// (Traceway Cloud, `https://cloud.tracewayapp.com`, by default). Without
+  /// a token it runs standalone and sends everything to
+  /// [TracewayOptions.telemetry]. Returns the running client when there is
+  /// one, and null, after one printed warning, when the connection string
+  /// or [baseUrl] is not one it can use: the SDK stays off. Throws an
+  /// [ArgumentError] for other settings it cannot use (no token and no
+  /// telemetry destination, a malformed telemetry URL), and an
+  /// [UnsupportedError] on the web.
+  ///
+  /// [connectionString] (`YOUR_TOKEN@https://cloud.tracewayapp.com`) is
+  /// deprecated: it is read as [token] and [baseUrl], with one warning.
+  static TracewayClient? initialize({
+    String? token,
+    String? baseUrl,
+    TracewayOptions options = const TracewayOptions(),
+    @Deprecated('Pass token: (and baseUrl: for a self-hosted server) instead')
     String? connectionString,
-    TracewayOptions options,
-  ) {
+  }) {
+    if (kIsWeb) throw UnsupportedError(webUnsupportedMessage);
     final existing = _instance;
     if (existing != null && !existing._shutdown && existing._stopping == null) {
       return existing;
     }
-    final client = TracewayClient._(connectionString, options, null);
+    final start = resolveStart(
+      token: token,
+      baseUrl: baseUrl,
+      connectionString: connectionString,
+      telemetry: options.telemetry,
+    );
+    // An unusable connection string or server URL: warned, the SDK is off.
+    if (start == null) return null;
+    final client = TracewayClient._(start, options, null);
     _setInstance(client);
     unawaited(client._start());
     return client;
   }
+
+  /// Why the SDK does nothing in a Flutter web build.
+  static const String webUnsupportedMessage =
+      'Traceway: Flutter web is not supported; the app runs without the SDK. '
+      'Use @tracewayapp/frontend for the web build (see the README, '
+      'Platform support).';
 
   @visibleForTesting
   static Future<TracewayClient> initializeForTest(
     String? connectionString,
     TracewayOptions options, {
     TracewayTestOverrides? overrides,
+    String? token,
+    String? baseUrl,
   }) async {
     await resetForTest();
-    final client = TracewayClient._(
-        connectionString, options, overrides ?? TracewayTestOverrides());
+    final start = resolveStart(
+      token: token,
+      baseUrl: baseUrl,
+      connectionString: connectionString,
+      telemetry: options.telemetry,
+    );
+    if (start == null) {
+      throw ArgumentError('the SDK stays off with this connection string or '
+          'baseUrl');
+    }
+    final client =
+        TracewayClient._(start, options, overrides ?? TracewayTestOverrides());
     _setInstance(client);
+    final gate = client._overrides?.startGate;
+    if (gate != null) await gate;
     await client._start();
     return client;
   }
@@ -528,25 +646,15 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         destination: _routes.traceway?.key ?? _bufferDestination);
     await _store.load();
     _replay.budget.store = _store;
+    // What a 1.x build left in `traceway_pending` becomes records of this
+    // one: nothing is sent to the 1.x `/api/report` any more.
     final legacyDirectory = _overrides == null && stateDir != null
         ? Directory('${stateDir.parent.path}/traceway_pending')
         : _overrides?.legacyDirectory;
     if (legacyDirectory != null) {
-      OtlpDestination? target;
-      final previous = _options.legacyConnectionString;
-      if (previous != null) {
-        try {
-          final parsed = parseConnectionString(previous);
-          target = OtlpDestination(
-              parsed.apiUrl, {'Authorization': 'Bearer ${parsed.token}'});
-        } on ArgumentError {
-          _log(
-              'Invalid 1.x connection string; legacy reports will expire on device.');
-        }
-      }
-      final legacy =
-          _legacyReports = LegacyReports(legacyDirectory, target, _http);
-      unawaited(guardedAsync('legacy reports', legacy.drain));
+      final legacy = _legacyReports = LegacyReports(legacyDirectory,
+          (report) => guarded('legacy report', () => _emitLegacy(report)));
+      unawaited(guardedAsync('legacy reports', legacy.convert));
     }
 
     final storedUid = _store.get('instanceUid');
@@ -904,6 +1012,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     StackTrace? stackTrace,
     Map<String, String>? attributes,
   ) {
+    _hintNoScreen();
     final attrs = <String, Object>{..._screenContext(), ...?attributes};
     final message = safeToString(error);
     if (!_reports(TracewayCapturedError(
@@ -973,6 +1082,60 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     );
   }
 
+  /// A report a 1.x build saved, as the record 2.x makes of it, with the
+  /// time it happened. It is not an error of this run: it fires no trigger,
+  /// so it uploads no breadcrumbs or replay of this one.
+  void _emitLegacy(LegacyReport report) {
+    if (!_ready) {
+      _queue(() => guarded('legacy report', () => _emitLegacy(report)),
+          keep: true);
+      return;
+    }
+    final attrs = <String, Object>{
+      ...report.attributes,
+      'traceway.legacy_report': true,
+      attrExceptionId: uuidv4(),
+    };
+    _legacyDepth++;
+    try {
+      if (report.isMessage) {
+        _emit(
+          eventName: eventMessage,
+          severity: Severity.INFO,
+          severityText: 'INFO',
+          body: report.stackTrace,
+          attributes: attrs,
+          time: report.recordedAt,
+        );
+        return;
+      }
+      final trace = report.stackTrace;
+      final first = trace.split('\n').first.trim();
+      final headed = RegExp(r'^([A-Za-z_$][\w$<>, ?.]*): (.*)$').firstMatch(first);
+      if (headed != null && !isNonSymbolicTrace(trace)) {
+        attrs['exception.type'] = headed.group(1)!;
+        attrs['exception.message'] = headed.group(2)!;
+      } else {
+        attrs['exception.message'] = first;
+      }
+      attrs['exception.stacktrace'] = trace;
+      final buildId = extractBuildId(trace);
+      if (buildId != null) attrs['flutter.build_id'] = buildId;
+      _emit(
+        eventName: eventException,
+        severity: Severity.ERROR,
+        severityText: 'ERROR',
+        attributes: attrs,
+        time: report.recordedAt,
+      );
+    } finally {
+      _legacyDepth--;
+    }
+  }
+
+  /// Set while a 1.x report is emitted: [observe] runs no trigger for it.
+  int _legacyDepth = 0;
+
   /// Whether [captured] is reported: not matched by
   /// [TracewayOptions.ignoreErrors] and not dropped by
   /// [TracewayOptions.beforeCapture].
@@ -986,7 +1149,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final before = _options.beforeCapture;
     if (before == null) return true;
     try {
-      return before(captured);
+      final kept = before(captured);
+      if (!kept) {
+        debugOnce('beforeCapture',
+            () => 'Traceway: ${line.split('\n').first} dropped by beforeCapture');
+      }
+      return kept;
     } catch (e) {
       _log('beforeCapture threw, the record is kept: $e');
       return true;
@@ -997,10 +1165,17 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// requests made in its [TracewayInteraction.run] are children of, and
   /// that the exceptions and logs recorded there point to. Call
   /// [TracewayInteraction.end] when the action is over. One started inside
-  /// another's `run` is its child. Before the SDK has started (see
-  /// [ready]) it records nothing.
+  /// another's `run` is its child. One started before the SDK is ready
+  /// (see [ready]) is recorded once it is, from when it started.
   TracewayInteraction startInteraction(String name,
       {Map<String, Object>? attributes}) {
+    if (!_ready && !_shutdown && name.isNotEmpty) {
+      return TracewayInteraction.internal(null,
+          captureException: captureException,
+          name: name,
+          attributes: attributes,
+          onReady: (bind) => _queue(() => bind(_tracer), keep: true));
+    }
     final tracer = _tracer;
     Span? span;
     if (tracer != null && _ready && !_shutdown && name.isNotEmpty) {
@@ -1025,6 +1200,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// A pattern of the app's that throws matches nothing.
   bool _ignored(String line) {
     final first = line.split('\n').first;
+    final defaults = _options.ignoreErrors == null;
     for (final pattern in _options.ignoreErrors ?? defaultIgnoreErrors) {
       if (guardedOr(
           'ignoreErrors pattern',
@@ -1032,10 +1208,28 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
           () => pattern is String
               ? first.contains(pattern)
               : pattern.allMatches(first).isNotEmpty)) {
+        debugOnce('ignoreErrors $pattern', () {
+          final shown = pattern is RegExp ? '/${pattern.pattern}/' : '"$pattern"';
+          return 'Traceway: $first not reported: it matches ignoreErrors '
+              'pattern $shown'
+              '${defaults ? ' (the default list; set ignoreErrors: [] to report everything)' : ''}';
+        });
         return true;
       }
     }
     return false;
+  }
+
+  /// With debug output on, says once that nothing names the screen yet,
+  /// when a tap or an exception is recorded before any navigation.
+  void _hintNoScreen() {
+    if (_currentScreen != null) return;
+    debugOnce(
+        'no screen',
+        () => 'Traceway: no screen is known yet. Add '
+            'Traceway.navigatorObserver to MaterialApp.navigatorObservers (or '
+            'GoRouter(observers: …)), or call Traceway.recordNavigation, so '
+            'issues, taps and screen metrics name the screen.');
   }
 
   /// Where the app was when an issue happened: the screen on top (popups
@@ -1554,6 +1748,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
 
   void _recordTap(Offset position, {int? viewId}) {
     if (_shutdown || !_options.captureUserActions) return;
+    _hintNoScreen();
     _sessions?.markActivity();
     final wantsTriggers = _ready && _sequenceKinds.contains('click');
     if (!wantsTriggers && _control.modeFor('userActions') == Mode.off) return;
@@ -1653,9 +1848,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   static const int _maxRequestSpans = 256;
 
   bool _isOwnRequest(String url) =>
-      _endpoints?.isOwn(url) == true ||
-      _routes.isOwn(url) ||
-      _legacyReports?.destination?.url == url;
+      _endpoints?.isOwn(url) == true || _routes.isOwn(url);
 
   /// The W3C `traceparent` to send with a request to [url], or null when
   /// [TracewayOptions.propagateTraceHeaderUrls] does not select it. Starts
@@ -1714,7 +1907,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void _recordNetworkEvent(NetworkEvent event) {
     if (_isOwnRequest(event.url)) return;
     if (!_ready) {
-      _queue(() => recordNetworkEvent(event));
+      // Made inside an interaction started before the SDK was ready: its
+      // span is made first, then this one's under it.
+      final interaction = currentInteraction;
+      _queue(() => interaction == null
+          ? recordNetworkEvent(event)
+          : interaction.run(() => recordNetworkEvent(event)));
       return;
     }
     final tracer = _tracer;
@@ -1791,6 +1989,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   Future<void> _flush() async {
     guarded('printed lines', _recordPrinted);
     await ready;
+    await guardedAsync('legacy reports', () => _legacyReports?.convert());
     _flushTimer?.cancel();
     _flushTimer = null;
     await guardedAsync('logs flush', () => _logSink?.forceFlush());
@@ -1804,7 +2003,6 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     await guardedAsync('logs flush', () => _logSink?.forceFlush());
     await guardedAsync('logs export', () => _logExporter?.forceFlush());
     await guardedAsync('metrics flush', _metrics.flush);
-    await guardedAsync('legacy reports', () => _legacyReports?.drain());
     await guardedAsync('outbox drain', () => _outbox?.drain());
     await guardedAsync('outbox drain', () => _tracewayOutbox?.drain());
     await guardedAsync('buffer save', _persistBuffer);
@@ -1896,6 +2094,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     // Lines printed before this record are recorded before it.
     if (_printed.isNotEmpty) _recordPrinted();
     if (!_ready) {
+      // An interaction started before the SDK was ready has its trace only
+      // once it is.
+      final interaction = context == null ? currentInteraction : null;
       _queue(
           () => _emit(
                 eventName: eventName,
@@ -1904,7 +2105,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
                 body: body,
                 attributes: attributes,
                 time: timestamp,
-                context: traced,
+                context: interaction?.context ?? traced,
               ),
           keep: _keptBeforeReady.contains(eventName));
       return;
@@ -2091,11 +2292,20 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final now = DateTime.now().millisecondsSinceEpoch;
     if (key == _lastErrorKey && now - _lastErrorMs < _duplicateErrorWindowMs) {
       _suppressedErrors++;
+      debugOnce(
+          'duplicate error',
+          () => 'Traceway: an exception was not reported: the same one was '
+              'reported less than a second ago (sent once, with '
+              'traceway.error.suppressed_count on the next)');
       return false;
     }
     _errorTimes.removeWhere((t) => now - t > 60000);
     if (_errorTimes.length >= _maxErrorsPerMinute) {
       _suppressedErrors++;
+      debugOnce(
+          'error flood',
+          () => 'Traceway: an exception was not reported: more than '
+              '$_maxErrorsPerMinute this minute');
       return false;
     }
     _errorTimes.add(now);
@@ -2108,10 +2318,17 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void observe(ObservedRecord observed) {
     if (observed.signal == signalControl) return;
     if (!_control.enabled) return;
+    if (_legacyDepth > 0) return;
     // An error or message left out by its sample rate is as if it never
     // happened: it must not upload breadcrumbs or a clip of its own.
     if (observed.routed == Routed.filtered &&
         (observed.signal == 'errors' || observed.signal == 'messages')) {
+      final signal = observed.signal;
+      debugOnce(
+          'sampled $signal',
+          () => 'Traceway: ${signal == 'errors' ? 'an exception' : 'a message'}'
+              ' was not reported: not sampled (sampleRate '
+              '${_control.sampleRate(signal)})');
       return;
     }
     if (observed.signal == 'navigation' &&
@@ -2713,7 +2930,6 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       guarded('replay resume', _replay.onResumed);
       guarded('session activity', () => _sessions?.markActivity());
       unawaited(guardedAsync('config poll', () => _opamp?.pollIfDue()));
-      unawaited(guardedAsync('legacy reports', () => _legacyReports?.drain()));
       unawaited(guardedAsync('outbox drain', () => _outbox?.drain()));
       unawaited(guardedAsync('outbox drain', () => _tracewayOutbox?.drain()));
     } else if (state == AppLifecycleState.inactive) {
@@ -2740,6 +2956,25 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   void _log(String message) {
     if (_options.debug) debugPrint('Traceway: $message');
   }
+}
+
+/// The replay image budget of the client's current session, in its
+/// [CollectionBudget].
+class _SessionImageBudget implements ImageBudget {
+  _SessionImageBudget(this._client);
+
+  final TracewayClient _client;
+
+  @override
+  String? get sessionId => _client.currentSessionId;
+
+  @override
+  bool hasRoom(String? sessionId) =>
+      _client._replay.budget.hasImageRoom(sessionId);
+
+  @override
+  bool admit(String? sessionId, int bytes) =>
+      _client._replay.budget.admitImage(sessionId, bytes);
 }
 
 /// The OpenTelemetry factory the SDK installs when the app has none: the

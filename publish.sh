@@ -42,7 +42,9 @@ echo ""
 echo "Bumping version to $NEW_VERSION..."
 sed -i.bak "s/^version: .*/version: $NEW_VERSION/" pubspec.yaml
 sed -i.bak "s/^const String tracewaySdkVersion = .*/const String tracewaySdkVersion = '$NEW_VERSION';/" lib/src/sdk_version.dart
-rm -f pubspec.yaml.bak lib/src/sdk_version.dart.bak
+# The video add-on ships with the same version.
+sed -i.bak "s/^version: .*/version: $NEW_VERSION/" packages/traceway_video/pubspec.yaml
+rm -f pubspec.yaml.bak lib/src/sdk_version.dart.bak packages/traceway_video/pubspec.yaml.bak
 
 # --- 6. Update CHANGELOG.md ---
 echo ""
@@ -61,28 +63,19 @@ if [[ -z "$CHANGES" ]]; then
   exit 1
 fi
 
-DATE=$(date +%Y-%m-%d)
-if grep -q '^## Unreleased' CHANGELOG.md; then
-  # Notes collected under "Unreleased" belong to this release.
-  HEADING="## $NEW_VERSION — $DATE" NOTES="$(echo -e "$CHANGES")" awk '
-    !done && /^## Unreleased/ {
-      print ENVIRON["HEADING"]; print ""; print ENVIRON["NOTES"]
-      done = 1; next
-    }
-    { print }
-  ' CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
-else
-  CHANGELOG_ENTRY="## $NEW_VERSION — $DATE\n\n$CHANGES"
-  # Prepend to CHANGELOG.md
-  echo -e "$CHANGELOG_ENTRY" | cat - CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
-fi
+NOTES_FILE=$(mktemp)
+echo -e "$CHANGES" > "$NOTES_FILE"
+# "## Unreleased" or "## $NEW_VERSION — unreleased" becomes this release's
+# heading; there is never a second one.
+bash tool/update_changelog.sh "$NEW_VERSION" "$NOTES_FILE"
+rm -f "$NOTES_FILE"
 echo ""
 echo "CHANGELOG.md updated."
 
 # --- 6b. Commit version bump before publish ---
 echo ""
 echo "Committing version bump and changelog..."
-git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart
+git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart packages/traceway_video/pubspec.yaml
 git commit -m "v$NEW_VERSION"
 
 # --- 7. Run analysis and tests ---
@@ -121,6 +114,9 @@ echo ""
 echo "========================================"
 echo "  Published traceway v$NEW_VERSION"
 echo "========================================"
+echo ""
+echo "Publish the video add-on with the same version once traceway is live:"
+echo "  (cd packages/traceway_video && dart pub publish)"
 echo ""
 echo "Don't forget to push commits and tags:"
 echo "  git push && git push --tags"

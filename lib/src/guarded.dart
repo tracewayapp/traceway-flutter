@@ -65,3 +65,16 @@ void _contained(String where, Object error) {
     debugPrint('Traceway: $where failed: ${safeToString(error)}');
   } catch (_) {}
 }
+
+/// The reasons [debugOnce] already printed.
+final Set<String> _explained = {};
+
+/// Prints [message] once per [reason] when debug output is on: why the SDK
+/// left something out (an ignored or sampled error, a dropped picture),
+/// which the app would otherwise never see.
+void debugOnce(String reason, String Function() message) {
+  if (!guardedDebugLogging || !_explained.add(reason)) return;
+  try {
+    debugPrint(message());
+  } catch (_) {}
+}

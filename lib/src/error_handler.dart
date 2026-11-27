@@ -41,15 +41,23 @@ class ErrorHandler {
     if (!details.silent) _captureError(details.exception, details.stack);
 
     final client = TracewayClient.instance;
+    final previous = _previousFlutterErrorHandler;
     // The dump is the exception just reported, not lines the app logged.
     _quietly(() {
-      if (client != null && client.debug) {
+      // Flutter's own handlers print it already; a second dump would read
+      // "Another exception was thrown".
+      if (client != null && client.debug && !_printsErrors(previous)) {
         guarded('FlutterError dump',
             () => FlutterError.dumpErrorToConsole(details));
       }
-      _previousFlutterErrorHandler?.call(details);
+      previous?.call(details);
     });
   }
+
+  /// Whether [handler] is one of Flutter's, which print the error.
+  static bool _printsErrors(FlutterExceptionHandler? handler) =>
+      handler == FlutterError.presentError ||
+      handler == FlutterError.dumpErrorToConsole;
 
   bool _handlePlatformError(Object error, StackTrace stackTrace) {
     if (!_wasHandedOn(error)) _captureError(error, stackTrace);

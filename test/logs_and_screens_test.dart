@@ -513,8 +513,7 @@ void main() {
       final stopping = h.client.shutdown();
       expect(identical(h.client.shutdown(), stopping), isTrue);
       final next = TracewayClient.initialize(
-          null,
-          const TracewayOptions(
+          options: const TracewayOptions(
             remoteConfig: false,
             persistToDisk: false,
             captureMetrics: false,
@@ -523,7 +522,7 @@ void main() {
       expect(identical(next, h.client), isFalse);
       await stopping;
       expect(identical(TracewayClient.instance, next), isTrue);
-      await next.ready;
+      await next!.ready;
     });
   });
 }

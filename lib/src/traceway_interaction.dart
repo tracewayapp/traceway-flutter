@@ -31,21 +31,67 @@ TracewayInteraction? get currentInteraction {
 /// }
 /// ```
 ///
-/// Before the SDK has started, or once it has shut down, an interaction
-/// records nothing; [run] still runs its code.
+/// One started in the first moments after `Traceway.run`, while the SDK
+/// reads its state, is recorded once the SDK is ready, with the time it
+/// started; its [traceId] and [spanId] are null until then. Once the SDK
+/// has shut down, an interaction records nothing; [run] still runs its
+/// code.
 class TracewayInteraction {
+  /// Made by the SDK. [onReady] defers the span of an interaction started
+  /// before the SDK was ready: the SDK calls the function it is given with
+  /// its tracer once it is.
   TracewayInteraction.internal(
-    this._span, {
+    Span? span, {
     required void Function(Object error, StackTrace? stackTrace,
             Map<String, String>? attributes)
         captureException,
-  })  : _capture = captureException,
-        _context = _span == null ? null : Context.current.withSpan(_span);
+    String? name,
+    Map<String, Object>? attributes,
+    void Function(void Function(Tracer? tracer) bind)? onReady,
+  })  : _span = span,
+        _capture = captureException,
+        _context = span == null ? null : Context.current.withSpan(span) {
+    if (span == null && onReady != null && name != null && name.isNotEmpty) {
+      _pending = _PendingSpan(
+          name, {...?attributes}, DateTime.now(), currentInteraction);
+      onReady(_bind);
+    }
+  }
 
-  final Span? _span;
-  final Context? _context;
+  Span? _span;
+  Context? _context;
+  _PendingSpan? _pending;
   final void Function(Object, StackTrace?, Map<String, String>?) _capture;
   bool _failed = false;
+
+  /// The SDK is ready: the span of an interaction started before is made
+  /// now, from when it started, and ended if it already was.
+  void _bind(Tracer? tracer) => guarded('interaction start', () {
+        final pending = _pending;
+        _pending = null;
+        if (pending == null || tracer == null) return;
+        final parent = pending.parent?.context;
+        final span = tracer.startSpan(
+          pending.name,
+          kind: SpanKind.internal,
+          context: parent,
+          root: parent == null,
+          startTime: pending.startedAt,
+          attributes: OTel.attributesFromMap(
+              {...pending.attributes, 'traceway.interaction': true}),
+        );
+        _span = span;
+        _context = Context.current.withSpan(span);
+        final endedAt = pending.endedAt;
+        if (endedAt != null) {
+          span.end(
+            endTime: endedAt,
+            spanStatus: _failed || pending.failed
+                ? SpanStatusCode.Error
+                : SpanStatusCode.Ok,
+          );
+        }
+      });
 
   /// The trace this interaction starts (32 hex digits), or null when it
   /// records nothing. Look it up in a trace view, or log it.
@@ -73,8 +119,14 @@ class TracewayInteraction {
 
   /// Sets an attribute on the interaction's span.
   void setAttribute(String key, Object value) => guarded('setAttribute', () {
+        if (key.isEmpty) return;
+        final pending = _pending;
+        if (pending != null) {
+          if (!_ended) pending.attributes[key] = value;
+          return;
+        }
         final span = _span;
-        if (span == null || span.isEnded || key.isEmpty) return;
+        if (span == null || span.isEnded) return;
         switch (value) {
           case bool():
             span.setBoolAttribute(key, value);
@@ -101,6 +153,13 @@ class TracewayInteraction {
   void end({bool failed = false}) {
     if (isEnded) return;
     _ended = true;
+    final pending = _pending;
+    if (pending != null) {
+      pending
+        ..endedAt = DateTime.now()
+        ..failed = _failed || failed;
+      return;
+    }
     final span = _span;
     if (span == null) return;
     // Ending a span must never break the app.
@@ -111,4 +170,16 @@ class TracewayInteraction {
                   _failed || failed ? SpanStatusCode.Error : SpanStatusCode.Ok,
             ));
   }
+}
+
+/// An interaction started before the SDK was ready, until it is.
+class _PendingSpan {
+  _PendingSpan(this.name, this.attributes, this.startedAt, this.parent);
+
+  final String name;
+  final Map<String, Object> attributes;
+  final DateTime startedAt;
+  final TracewayInteraction? parent;
+  DateTime? endedAt;
+  bool failed = false;
 }

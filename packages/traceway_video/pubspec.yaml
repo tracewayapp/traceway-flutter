@@ -1,0 +1,29 @@
+name: traceway_video
+description: Video session replay for the Traceway Flutter SDK, an add-on to the traceway package (which records wireframes on its own).
+version: 2.1.0
+homepage: https://tracewayapp.com
+repository: https://github.com/tracewayapp/traceway-flutter/tree/main/packages/traceway_video
+
+environment:
+  sdk: '>=3.10.0 <4.0.0'
+  flutter: '>=3.38.1'
+
+platforms:
+  android:
+  ios:
+  macos:
+
+dependencies:
+  flutter:
+    sdk: flutter
+  traceway: ^2.1.0
+  # The hardware H.264 encoder (Android, iOS, macOS). Its 1.7.2 declares
+  # compileSdk 33: see the README's Android setup.
+  flutter_quick_video_encoder: ^1.7.2
+  path_provider: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  http: ^1.5.0
+  flutter_lints: ^5.0.0

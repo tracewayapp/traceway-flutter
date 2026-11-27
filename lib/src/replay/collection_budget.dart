@@ -5,21 +5,28 @@ import '../persistence/state_store.dart';
 /// each of its rrweb events). A streaming capture that runs for hours stops
 /// uploading replay once a session has used its budget; the counts are
 /// reported on the session's lifecycle events and in
-/// `traceway.collection.health`.
+/// `traceway.collection.health`. The pictures a wireframe inlines
+/// ([admitImage]) have a budget of their own inside it, [maxImageBytes] of
+/// encoded image data per session, as on Android and iOS.
 class CollectionBudget {
   CollectionBudget({
     this.maxBytes = 50 * 1024 * 1024,
     this.maxEvents = 10000,
+    this.maxImageBytes = defaultMaxImageBytes,
     StateStore? store,
   }) : _store = store;
 
+  static const int defaultMaxImageBytes = 4 * 1024 * 1024;
+
   final int maxBytes;
   final int maxEvents;
+  final int maxImageBytes;
   StateStore? _store;
   String? _sessionId;
   int _bytes = 0;
   int _events = 0;
   int _dropped = 0;
+  int _imageBytes = 0;
   bool _loaded = false;
 
   set store(StateStore store) => _store = store;
@@ -37,11 +44,27 @@ class CollectionBudget {
     return true;
   }
 
+  /// Whether [sessionId] may still record a picture.
+  bool hasImageRoom(String? sessionId) {
+    _switchTo(sessionId);
+    return _imageBytes < maxImageBytes;
+  }
+
+  /// Counts a picture of [bytes] encoded bytes against [sessionId]'s image
+  /// budget; false when it does not fit.
+  bool admitImage(String? sessionId, int bytes) {
+    _switchTo(sessionId);
+    if (bytes < 0 || _imageBytes + bytes > maxImageBytes) return false;
+    _imageBytes += bytes;
+    _save();
+    return true;
+  }
+
   void _switchTo(String? sessionId) {
     if (_loaded && sessionId == _sessionId) return;
     _loaded = true;
     _sessionId = sessionId;
-    _bytes = _events = _dropped = 0;
+    _bytes = _events = _dropped = _imageBytes = 0;
     final saved = _store?.get('budget');
     if (saved is Map && saved['sessionId'] == sessionId && sessionId != null) {
       int read(String key) {
@@ -52,6 +75,7 @@ class CollectionBudget {
       _bytes = read('bytes');
       _events = read('events');
       _dropped = read('dropped');
+      _imageBytes = read('imageBytes');
     }
   }
 
@@ -62,6 +86,7 @@ class CollectionBudget {
       'bytes': _bytes,
       'events': _events,
       'dropped': _dropped,
+      'imageBytes': _imageBytes,
     });
   }
 
@@ -79,6 +104,7 @@ class CollectionBudget {
       'traceway.collection.dropped': _dropped,
       'traceway.collection.max_bytes': maxBytes,
       'traceway.collection.max_events': maxEvents,
+      'traceway.replay.image_bytes': _imageBytes,
     };
   }
 }

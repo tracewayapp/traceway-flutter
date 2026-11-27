@@ -1,17 +1,19 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
 import '../guarded.dart';
+import '../replay/json_size.dart';
 import '../replay/replay_source.dart';
+import '../traceway_image_policy.dart';
 import 'vnode.dart';
 import 'wireframe_capture.dart';
 import 'wireframe_css.dart';
 import 'wireframe_diff.dart';
 import 'wireframe_glyphs.dart';
+import 'wireframe_images.dart';
 import 'wireframe_roots.dart';
 
 /// Records the screen as a wireframe in rrweb's format instead of as
@@ -36,10 +38,17 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
   })  : _roots = WireframeRoots(rootKey),
         _maxFrames = maxFrames < 2 ? 2 : maxFrames,
         _now = now ?? DateTime.now {
-    // An icon's picture that becomes ready changes the screen.
-    _capture.glyphs =
-        WireframeGlyphs()..onReady = () => _schedule(immediately: true);
+    // An icon's or an image's picture that becomes ready changes the
+    // screen.
+    _capture.glyphs = _glyphs..onReady = () => _schedule(immediately: true);
+    _capture
+      ..images = _images
+      ..imagePolicy = TracewayImagePolicy.wifi;
+    _images.onReady = () => _schedule(immediately: true);
   }
+
+  final WireframeGlyphs _glyphs = WireframeGlyphs();
+  final WireframeImages _images = WireframeImages();
 
   /// The key of the widget whose subtree is recorded.
   final GlobalKey rootKey;
@@ -95,20 +104,38 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
     }
   }
 
-  /// Draws images from the network by their URL. On by default; off when
-  /// the effective `replay.images` policy is `off`, and then every image is
-  /// a placeholder.
-  bool get networkImages => _capture.networkImages;
-  set networkImages(bool value) {
-    if (value == _capture.networkImages) return;
-    _capture.networkImages = value;
+  /// What the replay may show of the app's images: the effective
+  /// `replay.images` policy, `wifi` until the client sets it (see
+  /// [WireframeCapture.imagePolicy]). Whether a frame inlines pictures is
+  /// decided when it is captured, so a picture recorded on Wi-Fi stays in
+  /// its clip; `off` drops the frames held, which may show images, and
+  /// takes the screen again at once.
+  TracewayImagePolicy get imagePolicy => _capture.imagePolicy;
+  set imagePolicy(TracewayImagePolicy value) {
+    if (value == _capture.imagePolicy) return;
+    _capture.imagePolicy = value;
     _capture.reset();
     _timer?.cancel();
     _timer = null;
-    // The frames held point at the images: none of them may go up now.
-    if (!value) _frames.clear();
+    // The frames held show the images: none of them may go up now.
+    if (value == TracewayImagePolicy.off) _frames.clear();
     _schedule(immediately: true);
   }
+
+  /// Whether images are drawn at all (the policy is not `off`).
+  bool get networkImages => imagePolicy != TracewayImagePolicy.off;
+
+  /// Whether the device is on an unmetered network, for the `wifi` policy;
+  /// metered until the client says otherwise.
+  set unmetered(bool Function() value) => _capture.unmetered = value;
+
+  /// The session's replay image budget.
+  set imageBudget(ImageBudget? value) => _images.budget = value;
+
+  /// Whether nothing is left to do for the screen as it is: no capture is
+  /// due and no glyph or image picture is being made. The wireframe suite
+  /// waits for it before a checkpoint.
+  bool get isSettled => _timer == null && !_images.busy && !_glyphs.busy;
 
   /// Number of distinct screens held; never more than the ring's capacity.
   @visibleForTesting
@@ -417,7 +444,9 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
         'timestamp': endMs,
       });
     }
-    final bytes = jsonEncode(events).length;
+    // Measured, not encoded: a clip with pictures carries their base64,
+    // and the upload encodes it once, off the UI isolate.
+    final bytes = approxJsonLength(events);
     if (debug) {
       final average = _captures == 0
           ? 0
@@ -524,13 +553,13 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
         },
         [
           VNode.element(
-            9,
+            awayScreenTextBoxId,
             'div',
             const {
               'style': 'left:0;top:45%;width:100%;text-align:center;'
                   'color:#9e9e9e;font-size:14px',
             },
-            [VNode.text(10, 'App in the background')],
+            [VNode.text(awayScreenTextId, 'App in the background')],
           ),
         ],
       );

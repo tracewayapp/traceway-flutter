@@ -70,6 +70,16 @@ const int _bodyNodeId = 7;
 /// The element that holds the screen; every captured node is inside it.
 const int screenNodeId = 8;
 
+/// Fixed ids of the nodes the recorder draws itself, below the first
+/// captured id and the same on every platform: the screen shown while the
+/// app is in the background (its label and text), and the keyboard box
+/// (13 is reserved).
+const int awayScreenTextBoxId = 9;
+const int awayScreenTextId = 10;
+const int keyboardNodeId = 12;
+const int keyboardLabelBoxId = 13;
+const int keyboardLabelTextId = 14;
+
 /// The first id handed to a captured node.
 const int firstCapturedNodeId = 16;
 
