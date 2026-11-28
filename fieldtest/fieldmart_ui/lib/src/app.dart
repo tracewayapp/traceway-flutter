@@ -63,7 +63,10 @@ class _FieldmartAppState extends State<FieldmartApp> {
     final view = binding.platformDispatcher.implicitView;
     Markers.emit('FM_INFO lifecycle=${binding.lifecycleState?.name} '
         'size=${view == null ? '?' : '${view.physicalSize.width}x${view.physicalSize.height}'} '
-        'dpr=${view?.devicePixelRatio}');
+        'dpr=${view?.devicePixelRatio} '
+        // System bars the window lies under (physical px): which side of the
+        // screen the window starts on, for cropping screenshots to it.
+        'padTop=${view?.viewPadding.top} padBottom=${view?.viewPadding.bottom}');
     unawaited(_reportSession());
     if (widget.settings.autopilot) {
       _autopilot = Autopilot(

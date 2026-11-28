@@ -112,6 +112,64 @@ def merge_screen(args):
     print(f'screen.mp4: {len(pieces)} piece(s), {end:.1f} s, {w}x{h}')
 
 
+def crop_to_app(args):
+    """Screenshots and screen video show the whole screen; the app's window (what
+    the replay shows and the boxes are measured in) sits below the status bar.
+    Crops both to the window the app reported (FM_INFO size) and sets run.json
+    `device`. The window starts at the top of the screen when the app draws behind
+    the status bar (FM_INFO padTop > 0, the template's default); otherwise below
+    it. --top overrides. Originals stay as app-full/ and screen-full.mp4."""
+    d = args.run_dir
+    info = [l for l in open(os.path.join(d, 'app.log')) if 'FM_INFO' in l]
+    m = re.search(r'size=([\d.]+)x([\d.]+) dpr=([\d.]+)', info[0]) if info else None
+    if not m:
+        raise SystemExit('no FM_INFO window size in app.log')
+    vw, vh, dpr = float(m.group(1)), float(m.group(2)), float(m.group(3))
+    pad = re.search(r'padTop=([\d.]+)', info[0])
+    shots = sorted(f for f in os.listdir(os.path.join(d, 'app')) if f.endswith('.png')) if os.path.isdir(os.path.join(d, 'app')) else []
+
+    def size(path):
+        r = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v', '-show_entries', 'stream=width,height',
+                            '-of', 'csv=p=0', path], capture_output=True, text=True)
+        w, h = r.stdout.strip().split(',')[:2]
+        return int(w), int(h)
+
+    def crop(src, dst):
+        w, h = size(src)
+        if args.top is not None:
+            top = args.top
+        elif pad:
+            top = 0 if float(pad.group(1)) > 0 else h - int(round(vh))
+        else:
+            raise SystemExit('FM_INFO has no padTop: give --top')
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', src, '-vf', f'crop={int(round(vw))}:{int(round(vh))}:0:{top}',
+                        *(['-c:v', 'libx264', '-crf', '23', '-maxrate', '2M', '-bufsize', '4M', '-pix_fmt', 'yuv420p',
+                           '-movflags', '+faststart'] if dst.endswith('.mp4') else []), dst], check=True)
+        return top
+
+    top = None
+    if shots:
+        if not os.path.isdir(os.path.join(d, 'app-full')):
+            shutil.copytree(os.path.join(d, 'app'), os.path.join(d, 'app-full'))
+        for f in shots:
+            top = crop(os.path.join(d, 'app-full', f), os.path.join(d, 'app', f))
+    video = os.path.join(d, 'screen.mp4')
+    if os.path.exists(video) or os.path.exists(os.path.join(d, 'screen-full.mp4')):
+        if not os.path.exists(os.path.join(d, 'screen-full.mp4')):
+            shutil.move(video, os.path.join(d, 'screen-full.mp4'))
+        top = crop(os.path.join(d, 'screen-full.mp4'), video)
+        sj = json.load(open(os.path.join(d, 'screen.json')))
+        sj.update({'width': int(round(vw)), 'height': int(round(vh)), 'scale': dpr})
+        sj['notes'] = sj.get('notes', '').split(' Cropped to')[0] + (
+            f' Cropped to the app window: {int(round(vw))}x{int(round(vh))} px at y={top} of the screen; '
+            'the whole screen is screen-full.mp4.')
+        write_json(os.path.join(d, 'screen.json'), sj)
+    rj = json.load(open(os.path.join(d, 'run.json')))
+    rj['device'] = {'width': round(vw / dpr, 2), 'height': round(vh / dpr, 2), 'scale': dpr}
+    write_json(os.path.join(d, 'run.json'), rj)
+    print(f'app window {vw:.0f}x{vh:.0f} px @ {dpr} at y={top}; {len(shots)} screenshot(s) cropped')
+
+
 def install(args):
     adb = Adb(args.serial)
     adb.run('reverse', 'tcp:18190', 'tcp:18190', check=True)
@@ -288,8 +346,28 @@ class Run:
         self.adb.shell(f'am force-stop {self.pkg}')
         self.stop.set()
 
+    def device(self):
+        """The screen in logical pixels: `wm size` (an override wins) over `wm density` / 160."""
+        size = re.findall(r'(\d+)x(\d+)', self.adb.shell('wm size'))
+        dens = re.findall(r'(\d+)', self.adb.shell('wm density'))
+        if not size or not dens:
+            return None
+        w, h = map(int, size[-1])
+        scale = int(dens[-1]) / 160
+        return {'width': round(w / scale, 2), 'height': round(h / scale, 2), 'scale': scale}
+
+    def window(self, markers):
+        """The app's window in logical pixels, from its FM_INFO line."""
+        for line in open(os.path.join(self.dir, 'app.log')):
+            m = re.search(r'size=([\d.]+)x([\d.]+) dpr=([\d.]+)', line)
+            if m:
+                dpr = float(m.group(3))
+                return {'width': round(float(m.group(1)) / dpr, 2), 'height': round(float(m.group(2)) / dpr, 2), 'scale': dpr}
+        return None
+
     def execute(self):
         self.tck = int(self.adb.shell('getconf CLK_TCK').strip() or 100)
+        self.screen = self.device()
         jpath = os.path.join(FIELDTEST, 'fieldmart_ui', 'assets', 'journey.json')
         journey = common.load_journey(jpath)
         scenario_id, scenario = common.find_scenario(journey, self.args.scenario)
@@ -385,7 +463,8 @@ class Run:
             'platform': PLATFORM, 'target': self.args.target, 'scenario': self.args.scenario,
             'scenarioKey': scenario_id, 'variant': self.variant, 'block': self.block, 'orderInBlock': self.order,
             'evidence': self.evidence, 't0EpochMs': t0, 'endEpochMs': end, 'valid': valid, 'flags': self.flags,
-            'sessionId': m.session, 'projectId': None, 'metrics': metrics, 'units': 'see 03-MEASUREMENT.md §2',
+            'sessionId': m.session, 'projectId': None, 'device': self.window(m) or self.screen, 'metrics': metrics,
+            'units': 'see 03-MEASUREMENT.md §2',
             'build': {**common.git_state(REPO), 'package': self.pkg},
             'journeyHash': common.sha256_file(jpath),
             'driver': {'worstLateMs': worst, 'failedSteps': len(failed), 'steps': len(m.steps),
@@ -424,6 +503,9 @@ def main():
     sub = ap.add_subparsers(dest='cmd', required=True)
     ms = sub.add_parser('merge-screen')
     ms.add_argument('--run-dir', required=True)
+    ca = sub.add_parser('crop-to-app')
+    ca.add_argument('--run-dir', required=True)
+    ca.add_argument('--top', type=int, help='y of the app window on the screen, in pixels')
     i = sub.add_parser('install')
     i.add_argument('--apk-off', required=True)
     i.add_argument('--apk-sdk', required=True)
@@ -452,7 +534,8 @@ def main():
             r.add_argument('--repetitions', type=int, default=5)
             r.add_argument('--warmup', action='store_true')
     args = ap.parse_args()
-    {'install': install, 'run': run_cmd, 'block': block_cmd, 'plan': plan_cmd, 'merge-screen': merge_screen}[args.cmd](args)
+    {'install': install, 'run': run_cmd, 'block': block_cmd, 'plan': plan_cmd, 'merge-screen': merge_screen,
+     'crop-to-app': crop_to_app}[args.cmd](args)
 
 
 if __name__ == '__main__':
