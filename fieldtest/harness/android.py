@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -236,9 +237,11 @@ class Run:
         if self.relaunches():
             e['fmSessionIdleMs'] = str(self.args.expire_and_relaunch * 1000)
         e.update(more)
+        # The command runs in the device's shell: a value with a space (the target)
+        # must stay one word, or am stops reading extras there.
         out = []
         for k, v in e.items():
-            out += ['--es', k, v]
+            out += ['--es', k, shlex.quote(v)]
         return out
 
     # -- logcat
