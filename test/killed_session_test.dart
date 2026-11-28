@@ -152,4 +152,68 @@ void main() {
         lessThan(next.eventNames.indexOf('session.start')));
     expect(_memoryPeaks(next), [memory['b']]);
   });
+
+  /// Moves the stored session [by] ms into the past, as if the app had not
+  /// run for that long.
+  void age(int by) {
+    final disk = _read(state);
+    final stored = Map<String, dynamic>.from(disk['session'] as Map);
+    disk['session'] = {
+      ...stored,
+      'startedAtMs': (stored['startedAtMs'] as int) - by,
+      'lastActivityMs': (stored['lastActivityMs'] as int) - by,
+    };
+    state.writeAsStringSync(jsonEncode(disk));
+  }
+
+  test('a session shutdown ended is not ended again by a later launch',
+      () async {
+    final h = await startHarness(options: _withReplay, stateDirectory: dir);
+    final session = h.client.currentSessionId!;
+    await TracewayClient.resetForTest();
+    expect(_of(h, 'session.end', session), hasLength(1));
+    age(20 * 60 * 1000);
+    final next = await startHarness(options: _withReplay, stateDirectory: dir);
+    await next.client.flush();
+    expect(_of(next, 'session.end', session), isEmpty);
+    expect(next.client.currentSessionId, isNot(session));
+  });
+
+  test(
+      'a launch that reports no sessions still ends the one an earlier '
+      'launch reported', () async {
+    final (first, session) = await sessionWithReplay();
+    toBackground(first);
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    final disk = _read(state);
+    await TracewayClient.resetForTest();
+    state.writeAsStringSync(jsonEncode(disk));
+    age(20 * 60 * 1000);
+    final next = await startHarness(
+        options: const TracewayOptions(remoteConfig: false, sessions: false),
+        stateDirectory: dir);
+    await next.client.flush();
+    final end = _of(next, 'session.end', session).single;
+    expect(attr(end, 'traceway.collection.events'), 1);
+    expect(next.named('session.start'), isEmpty);
+  });
+
+  test('a shorter inactivity timeout ends a killed session sooner',
+      () async {
+    TracewayClient.sessionInactivityOverride =
+        const Duration(milliseconds: 400);
+    addTearDown(() => TracewayClient.sessionInactivityOverride = null);
+    final first = await startHarness(stateDirectory: dir);
+    final session = first.client.currentSessionId!;
+    toBackground(first);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    final disk = _read(state);
+    await TracewayClient.resetForTest();
+    state.writeAsStringSync(jsonEncode(disk));
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    final next = await startHarness(stateDirectory: dir);
+    await next.client.flush();
+    expect(_of(next, 'session.end', session), hasLength(1));
+    expect(next.client.currentSessionId, isNot(session));
+  });
 }

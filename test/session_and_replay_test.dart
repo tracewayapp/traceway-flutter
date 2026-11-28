@@ -25,6 +25,8 @@ void main() {
           onStart: (s, resumed) =>
               events.add('${resumed ? 'resume' : 'start'}:${s.id}'),
           onEnd: (s, endedAt) => events.add('end:${s.id}@$endedAt'),
+          onEndedBetweenRuns: (s, endedAt) =>
+              events.add('ended:${s.id}@$endedAt'),
         );
 
     setUp(() {
@@ -83,6 +85,59 @@ void main() {
       final c = manager(store)..start();
       expect(c.currentId, isNot(id));
       c.stop();
+    });
+
+    test(
+        'a launch after the stored session expired ends it at its last '
+        'activity, once, before the new one starts', () {
+      final store = StateStore(null);
+      final a = manager(store)..start();
+      final id = a.currentId!;
+      now += 60000;
+      a.markActivity();
+      final lastActivity = now;
+      // Killed in the background: what is stored is what the next launch has.
+      a.stop();
+      now += defaultInactivityMs + 1000;
+      final b = manager(store)..start();
+      final next = b.currentId!;
+      expect(next, isNot(id));
+      expect(events,
+          ['start:$id', 'ended:$id@$lastActivity', 'start:$next']);
+      b.stop();
+      now += defaultInactivityMs + 1000;
+      final c = manager(store)..start();
+      expect(events.where((e) => e.startsWith('ended:$id')), hasLength(1));
+      expect(events.where((e) => e.startsWith('ended:$next')), hasLength(1));
+      c.stop();
+    });
+
+    test('a session that ended while the app ran is not ended again', () {
+      final store = StateStore(null);
+      final a = manager(store)..start();
+      final id = a.currentId!;
+      now += defaultInactivityMs;
+      a.check();
+      expect(events.last, startsWith('end:$id'));
+      a.stop();
+      now += defaultInactivityMs;
+      manager(store)
+        ..start()
+        ..stop();
+      expect(events.where((e) => e.startsWith('ended:')), isEmpty);
+    });
+
+    test('persist stores the last activity as it is now', () {
+      final store = StateStore(null);
+      final m = manager(store)..start();
+      final started = now;
+      now += 2000;
+      // Within 5 s of the last write: not stored yet.
+      m.markActivity();
+      expect((store.get('session') as Map)['lastActivityMs'], started);
+      m.persist();
+      expect((store.get('session') as Map)['lastActivityMs'], now);
+      m.stop();
     });
   });
 

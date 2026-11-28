@@ -413,6 +413,12 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   @visibleForTesting
   static void resetVideoWarningForTest() => _noVideoAddOnWarned = false;
 
+  /// The session's inactivity timeout instead of 15 minutes, read when the
+  /// client starts: for tests that need a session to expire within a
+  /// minute, such as the field test's launch after a kill.
+  @visibleForTesting
+  static Duration? sessionInactivityOverride;
+
   static void _warnNoVideoAddOn() {
     if (_noVideoAddOnWarned) return;
     _noVideoAddOnWarned = true;
@@ -707,6 +713,9 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       store: _store,
       onStart: _onSessionStart,
       onEnd: _onSessionEnd,
+      onEndedBetweenRuns: _onSessionEndedBetweenRuns,
+      inactivityMs: sessionInactivityOverride?.inMilliseconds ??
+          defaultInactivityMs,
     )..start();
 
     if (stateDir != null) {
@@ -1390,15 +1399,82 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
               !_reportedSessions.contains(session.id)) {
             return;
           }
-          _emit(
-            eventName: eventSessionUpdate,
-            severity: Severity.INFO,
-            attributes: _sessionAttributes(session),
-          );
+          _emitSessionUpdate(session);
         }));
   }
 
   bool _sessionUpdateScheduled = false;
+
+  void _emitSessionUpdate(SessionInfo session) {
+    final attributes = _sessionAttributes(session);
+    _emit(
+      eventName: eventSessionUpdate,
+      severity: Severity.INFO,
+      attributes: attributes,
+    );
+    _sessionEventSent(session, attributes);
+  }
+
+  /// The session whose start was reported and whose end was not yet, with
+  /// the attributes it has now: what the next launch needs to end it when
+  /// the app is killed (`{id, attributes}`).
+  static const String _openSessionKey = 'openSession';
+
+  /// The collection counters the last session event of [_countersSession]
+  /// carried: a flush or a trip to the background sends an update only
+  /// when they changed.
+  String? _countersSession;
+  Map<String, int> _sentCounters = const {};
+
+  void _sessionEventSent(SessionInfo session, Map<String, Object> attributes) {
+    _countersSession = session.id;
+    _sentCounters = _replay.budget.snapshot(session.id);
+    _store.set(_openSessionKey, {'id': session.id, 'attributes': attributes});
+  }
+
+  void _sessionClosed(String session) {
+    final open = _store.get(_openSessionKey);
+    if (open is Map && open['id'] == session) {
+      _store.set(_openSessionKey, null);
+    }
+    if (_countersSession == session) {
+      _countersSession = null;
+      _sentCounters = const {};
+    }
+  }
+
+  /// An app killed in the background never ends its session itself: the
+  /// server learns what the session used now, in a
+  /// `traceway.session.update` when the counters changed since its last
+  /// session event, and the session is stored with its last activity, its
+  /// counters and its memory peak, for the launch that ends it. Returns
+  /// whether an update was sent.
+  bool _saveSession() {
+    final session = _sessions?.current;
+    if (_shutdown || session == null) return false;
+    _sessions?.persist();
+    if (_started) _rememberMemoryPeak();
+    if (!_reportedSessions.contains(session.id)) return false;
+    final counters = _replay.budget.snapshot(session.id);
+    if (_countersSession == session.id && mapEquals(counters, _sentCounters)) {
+      _store.set(_openSessionKey,
+          {'id': session.id, 'attributes': _sessionAttributes(session)});
+      return false;
+    }
+    _emitSessionUpdate(session);
+    return true;
+  }
+
+  /// The segment a trip to the background cut is counted once it is
+  /// encoded: the server learns of it while the app is still alive.
+  Future<void> _saveSessionAfterReplay() async {
+    await _replay.drain();
+    if (_shutdown) return;
+    if (guardedOr('session save', false, _saveSession)) {
+      await guardedAsync('logs flush', () => _logSink?.forceFlush());
+    }
+    await guardedAsync('state save', _store.flush);
+  }
 
   /// Asks the server for collection settings now instead of at the next poll.
   Future<void> refreshConfig() => guardedAsync('refreshConfig', () async {
@@ -1759,6 +1835,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     _metrics.memoryPeak(session, bytes);
   }
 
+  /// The peak an earlier run stored for [session], which ended since.
+  void _reportRememberedPeak(String session) {
+    final record = _store.get(_memoryKey);
+    if (record is! Map || record['s'] != session || record['b'] is! int) {
+      return;
+    }
+    _store.set(_memoryKey, null);
+    _metrics.memoryPeak(session, record['b'] as int);
+  }
+
   /// A session that ended while the app was not running.
   void _settleMemoryPeak(String current) {
     final record = _store.get(_memoryKey);
@@ -2031,6 +2117,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     await guardedAsync('logs export', () => _logExporter?.forceFlush());
     await guardedAsync('spans export', () => _spanExporter?.forceFlush());
     await guardedAsync('replay drain', _replay.drain);
+    guarded('session save', _saveSession);
     await guardedAsync('logs flush', () => _logSink?.forceFlush());
     await guardedAsync('logs export', () => _logExporter?.forceFlush());
     await guardedAsync('metrics flush', _metrics.flush);
@@ -2185,6 +2272,37 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       time: DateTime.fromMillisecondsSinceEpoch(endedAtMs),
       attributes: _sessionAttributes(session),
     );
+    _sessionClosed(session.id);
+  }
+
+  /// A session an earlier run left open (killed in the background, or
+  /// crashed) that expired before this launch: its memory peak, and, when
+  /// its start was reported, its `session.end` at its last activity with
+  /// the counters stored with it. Whatever the settings say now, as for an
+  /// end in the same run: the server never keeps a start without an end.
+  void _onSessionEndedBetweenRuns(SessionInfo session, int endedAtMs) {
+    if (_options.captureMetrics) {
+      guarded('memory peak', () => _reportRememberedPeak(session.id));
+    }
+    final open = _store.get(_openSessionKey);
+    if (open is! Map || open['id'] != session.id) return;
+    _store.set(_openSessionKey, null);
+    final saved = open['attributes'];
+    _emit(
+      eventName: eventSessionEnd,
+      severity: Severity.INFO,
+      time: DateTime.fromMillisecondsSinceEpoch(endedAtMs),
+      attributes: {
+        if (saved is Map)
+          for (final MapEntry(:key, :value) in saved.entries)
+            if (key is String &&
+                (value is String || value is num || value is bool))
+              key: value as Object,
+        ..._replay.budget.snapshot(session.id),
+        attrSessionId: session.id,
+        attrSessionStartedAt: session.startedAtMs,
+      },
+    );
   }
 
   /// What every session event carries: the session, how much of its
@@ -2263,14 +2381,16 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
     if (_control.settings.sessionsEnabled) {
       _reportedSessions.add(session.id);
+      final attributes = _sessionAttributes(session);
       _emit(
         eventName: resumed ? eventSessionUpdate : eventSessionStart,
         severity: Severity.INFO,
         time: resumed
             ? null
             : DateTime.fromMillisecondsSinceEpoch(session.startedAtMs),
-        attributes: _sessionAttributes(session),
+        attributes: attributes,
       );
+      _sessionEventSent(session, attributes);
     }
     guarded('replay apply', () => _applyReplay(sessionId: session.id));
     _scheduleRefresh();
@@ -2970,10 +3090,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     } else if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       guarded('replay pause', _replay.onPaused);
+      // The session and its memory peak are stored before the metrics are
+      // sent: the process may not live to see the answer.
+      guarded('session save', _saveSession);
       if (_options.captureMetrics && _started) {
-        guarded('memory peak', _rememberMemoryPeak);
-        // Stored before it is sent: the process may not live to see the
-        // answer.
         unawaited(
             guardedAsync('metrics flush', () => _metrics.flush(final_: true)));
       }
@@ -2981,6 +3101,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       unawaited(guardedAsync('buffer save', _persistBuffer));
       _sendNow();
       unawaited(guardedAsync('state save', _store.flush));
+      unawaited(guardedAsync('session save', _saveSessionAfterReplay));
     }
   }
 
