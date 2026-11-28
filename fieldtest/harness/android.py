@@ -64,6 +64,54 @@ class Adb:
         return int(self.shell('date +%s%3N').strip() or 0)
 
 
+def write_screen_json(run_dir, pieces, merged=False):
+    """screen.json as tools/schema/screen.schema.json wants it. With more than one
+    screenrecord piece, screen.mp4 is made afterwards by `merge-screen`."""
+    write_json(os.path.join(run_dir, 'screen.json'), {
+        'file': 'screen.mp4',
+        'startEpochMs': pieces[0]['deviceStartEpochMs'] if pieces else 0,
+        'source': 'adb screenrecord --bit-rate 4000000 in pieces of at most 170 s'
+                  + (', placed on one timeline by android.py merge-screen' if merged else ''),
+        'notes': 'startEpochMs is the device clock read just before screenrecord started; the first frame comes '
+                 'a little later (screenrecord start-up), so the alignment is good to about 0.2 s. '
+                 f'{len(pieces)} piece(s); between pieces the screen is black for the restart.',
+        'pieces': pieces,
+    })
+
+
+def merge_screen(args):
+    """Places the screenrecord pieces of an evidence run on one timeline that starts
+    with the first piece: screen.mp4 (H.264 as the shared tools encode it)."""
+    d = args.run_dir
+    info = json.load(open(os.path.join(d, 'screen.json')))
+    pieces = [p for p in info.get('pieces', []) if os.path.exists(os.path.join(d, p['file']))]
+    if not pieces:
+        raise SystemExit('no screenrecord pieces in the run folder')
+    t0 = pieces[0]['deviceStartEpochMs']
+
+    def probe(f):
+        r = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v', '-show_entries', 'stream=width,height:format=duration',
+                            '-of', 'json', os.path.join(d, f)], capture_output=True, text=True)
+        j = json.loads(r.stdout)
+        return j['streams'][0]['width'], j['streams'][0]['height'], float(j['format']['duration'])
+
+    w, h, _ = probe(pieces[0]['file'])
+    end = max((p['deviceStartEpochMs'] - t0) / 1000 + probe(p['file'])[2] for p in pieces)
+    cmd = ['ffmpeg', '-v', 'error', '-y', '-f', 'lavfi', '-i', f'color=black:size={w}x{h}:rate=30:duration={end:.3f}']
+    for p in pieces:
+        cmd += ['-itsoffset', f'{(p["deviceStartEpochMs"] - t0) / 1000:.3f}', '-i', os.path.join(d, p['file'])]
+    chain, last = [], '0:v'
+    for i in range(len(pieces)):
+        out = f'v{i}'
+        chain.append(f'[{last}][{i + 1}:v]overlay=eof_action=pass[{out}]')
+        last = out
+    cmd += ['-filter_complex', ';'.join(chain), '-map', f'[{last}]', '-c:v', 'libx264', '-crf', '23', '-maxrate', '2M',
+            '-bufsize', '4M', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', os.path.join(d, 'screen.mp4')]
+    subprocess.run(cmd, check=True)
+    write_screen_json(d, pieces, merged=True)
+    print(f'screen.mp4: {len(pieces)} piece(s), {end:.1f} s, {w}x{h}')
+
+
 def install(args):
     adb = Adb(args.serial)
     adb.run('reverse', 'tcp:18190', 'tcp:18190', check=True)
@@ -275,11 +323,7 @@ class Run:
                 self.adb.run('pull', r['remote'], local, timeout=120)
                 self.adb.shell(f'rm {r["remote"]}')
                 r['file'] = os.path.basename(local)
-            write_json(os.path.join(self.dir, 'screen.json'), {
-                'pieces': self.records,
-                'note': 'deviceStartEpochMs is read just before screenrecord starts; the first frame comes '
-                        'a little later (screenrecord start-up), so alignment is good to about ±200 ms',
-            })
+            write_screen_json(self.dir, self.records)
             if len(self.records) == 1:
                 shutil.copy(os.path.join(self.dir, self.records[0]['file']), os.path.join(self.dir, 'screen.mp4'))
         self.collect(scenario_id, scenario, int(total.group(1)) if total else None, jpath)
@@ -306,7 +350,9 @@ class Run:
         write_json(os.path.join(self.dir, 'actions.json'), common.enrich_actions(self.actions, scenario.get('steps', [])))
         if self.evidence:
             write_json(os.path.join(self.dir, 'boxes.json'),
-                       {n: [{k: b[k] for k in ('text', 'x', 'y', 'w', 'h')} for b in v['boxes']] for n, v in m.boxes.items()})
+                       {n: [{k: b[k] for k in ('text', 'id', 'role', 'x', 'y', 'w', 'h') if k in b} for b in v['boxes']]
+                        for n, v in m.boxes.items()})
+            write_json(os.path.join(self.dir, 'boxes-detail.json'), m.boxes)
             write_json(os.path.join(self.dir, 'screenshots.json'), self.grabs)
         failed = [s for s in m.steps if not s.get('ok')]
         if worst > common.LATE_LIMIT_MS:
@@ -376,6 +422,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--serial', default=os.environ.get('ANDROID_SERIAL', 'emulator-5554'))
     sub = ap.add_subparsers(dest='cmd', required=True)
+    ms = sub.add_parser('merge-screen')
+    ms.add_argument('--run-dir', required=True)
     i = sub.add_parser('install')
     i.add_argument('--apk-off', required=True)
     i.add_argument('--apk-sdk', required=True)
@@ -404,7 +452,7 @@ def main():
             r.add_argument('--repetitions', type=int, default=5)
             r.add_argument('--warmup', action='store_true')
     args = ap.parse_args()
-    {'install': install, 'run': run_cmd, 'block': block_cmd, 'plan': plan_cmd}[args.cmd](args)
+    {'install': install, 'run': run_cmd, 'block': block_cmd, 'plan': plan_cmd, 'merge-screen': merge_screen}[args.cmd](args)
 
 
 if __name__ == '__main__':
