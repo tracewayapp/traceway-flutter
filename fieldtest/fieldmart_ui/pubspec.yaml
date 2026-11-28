@@ -1,0 +1,26 @@
+name: fieldmart_ui
+description: >-
+  Fieldmart, the Traceway SDK field-test store: screens, data client, the
+  in-app autopilot and the frame probe. It does not depend on the SDK; the
+  app_sdk package plugs the SDK in through the Telemetry interface.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.10.0
+  flutter: '>=3.38.1'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.5.0
+  path_provider: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  assets:
+    - assets/journey.json

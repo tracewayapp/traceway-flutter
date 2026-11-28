@@ -1,0 +1,27 @@
+{
+ "version": "2",
+ "from": "sdk-field-test (lead machine)",
+ "copiedAt": "2026-11-28T06:41:58.911Z",
+ "files": {
+  "journey.json": "5b22c1429ca56d0b76bc5191d03238f0bf43546df0269c733c256268d1b45701",
+  "ids.json": "63ad3773a50fe3389e61549cb38952fe54c38108d7005cde43ff4b4952b04d7c",
+  "labels.json": "50c8c44fd8d6c37a84e72fa6da93bb10593700f1354b73a76a3674ac9924ceb0",
+  "journey.md": "e640f95b97d87e0b892c8c0172ababf942329cdbb91fceaaf4d0ea7f1e2b3866",
+  "fixtures-api.md": "43e4a0ed885fe106776d2168a12a03edb2db838158e8959037625a82b1304634",
+  "session-rule.json": "f6edcaf6c778d4c173eb38b13befc157f494799b789179bd003b67aae09b6141",
+  "VERSION": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+  "fixtures.lock.json": "480fa966246ebf467e9b9bf85e6f9f4454c1e79e08ec1d2fcf49b705d06face5",
+  "reference/ticks.json": "075ea458b2c40f13c62f1bfbc5b159b517df387387e0750185b92ac1db2adec5",
+  "fixtures/data.mjs": "1734142480375414fd3ce2b5a1c8f3b108f4d786c55852abc8aab711a4ed6168",
+  "fixtures/font.mjs": "d63e9cebd9c2eb1427c46b3264337ef8a6845edac2d0eee7e0da09593b6f96a2",
+  "fixtures/gen.mjs": "61256ef8da67a86d3cdf9df1bc5140f33322cde23439f28a310c509dfc58fe2f",
+  "fixtures/images.mjs": "1d359f75800f327e6f49d22fdbbcda438984299814c0dab1a433582c52e8e28a",
+  "fixtures/jpeg.mjs": "94df46c4ac3e412262b049a357124cc1bc66fe13d52957e1a952e1807506dc7a",
+  "fixtures/png.mjs": "8f38b536e0d7ed87252b660754a3d73823c058b85573af51ac536cd16d080c25",
+  "fixtures/prng.mjs": "8be7662b5d0cd44e443ab291285dd06a983e16daec40aade0d387aa3041a920f",
+  "fixtures/words.mjs": "b252bad38537a72dce5c277972eee47f9ed14d382b46c4fcce3d031b3ae7326f",
+  "gateway/gateway.mjs": "b2248eb6666b1753221b1a3c28427af06101eb2714b8ec1afa9790925e341e83",
+  "gateway/ledger.mjs": "8311eb65cfd5a159e92f93f10ede71a47f7b746acb4b541669f169b7c07d1031",
+  "gateway/otlp.mjs": "fe42277521120284f2a4375f54f7ee20a15904a9cc408742a462574c4150f462"
+ }
+}

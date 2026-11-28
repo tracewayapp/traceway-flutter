@@ -1,0 +1,57 @@
+{
+  "name": "Full Traceway frontend sessions",
+  "enabled": true,
+  "conditions": {},
+  "settings": {
+    "schemaVersion": 1,
+    "enabled": true,
+    "signals": {
+      "errors": {
+        "mode": "stream",
+        "sampleRate": 1
+      },
+      "messages": {
+        "mode": "stream",
+        "sampleRate": 1
+      },
+      "network": {
+        "mode": "stream",
+        "sampleRate": 1
+      },
+      "console": {
+        "mode": "stream",
+        "sampleRate": 1,
+        "minSeverity": "trace"
+      },
+      "navigation": {
+        "mode": "stream",
+        "sampleRate": 1
+      },
+      "userActions": {
+        "mode": "stream",
+        "sampleRate": 1
+      },
+      "webVitals": {
+        "mode": "stream",
+        "sampleRate": 1
+      },
+      "resourceTiming": {
+        "mode": "stream",
+        "sampleRate": 1
+      },
+      "custom": {
+        "mode": "stream",
+        "sampleRate": 1
+      }
+    },
+    "sessions": {
+      "enabled": true,
+      "baselineSampleRate": 1
+    },
+    "replay": {
+      "mode": "stream",
+      "sessionSampleRate": 1,
+      "maskAllInputs": true
+    }
+  }
+}

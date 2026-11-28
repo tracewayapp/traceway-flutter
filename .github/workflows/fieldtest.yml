@@ -1,0 +1,134 @@
+name: Field test (Fieldmart, Android emulator)
+
+# Started by hand only. Builds the Fieldmart field-test apps in fieldtest/
+# and runs them on an Android emulator on this runner. The field-test
+# gateway runs next to the emulator in capture mode and answers the SDK
+# itself; what the SDK sent leaves the runner only as the workflow artifact,
+# to be forwarded into a Traceway instance afterwards. Uses no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'build: APKs only; smoke: S6 stream-img with evidence and one S1 block of off and off2; plan: blocks of the scenarios below'
+        type: choice
+        options: [build, smoke, plan]
+        default: build
+      scenarios:
+        description: 'plan mode: scenarios, comma-separated (S1..S6)'
+        type: string
+        default: 'S1'
+      variants:
+        description: 'plan mode: variants, comma-separated'
+        type: string
+        default: 'off,off2,core,stream-img'
+      repetitions:
+        description: 'plan mode: blocks per scenario (after one warm-up block)'
+        type: string
+        default: '1'
+      evidence:
+        description: 'plan mode: record the screen and take checkpoint screenshots'
+        type: boolean
+        default: false
+      campaign:
+        description: 'Campaign id, used for the results folder name'
+        type: string
+        default: 'FT-manual'
+      seed:
+        description: 'Seed for the order of variants inside a block'
+        type: string
+        default: '1'
+
+permissions:
+  contents: read
+
+# One run per mode and scenario list at a time; different scenarios run in
+# parallel (one job per scenario in the measured tier).
+concurrency:
+  group: fieldtest-${{ github.ref }}-${{ inputs.mode }}-${{ inputs.scenarios }}
+  cancel-in-progress: false
+
+jobs:
+  android-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      RESULTS: ${{ github.workspace }}/out/${{ inputs.campaign }}
+      LEDGER: ${{ github.workspace }}/out/ledger
+      FIXTURES: ${{ runner.temp }}/fixtures
+      FM_MODE: ${{ inputs.mode }}
+      FM_SCENARIOS: ${{ inputs.scenarios }}
+      FM_VARIANTS: ${{ inputs.variants }}
+      FM_REPETITIONS: ${{ inputs.repetitions }}
+      FM_EVIDENCE: ${{ inputs.evidence }}
+      FM_SEED: ${{ inputs.seed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.50.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build the APKs (release, x86_64)
+        run: |
+          for app in app_off app_sdk; do
+            (cd "fieldtest/$app" && flutter pub get && flutter build apk --release --target-platform android-x64)
+          done
+          mkdir -p out
+          ls -l fieldtest/app_*/build/app/outputs/flutter-apk/app-release.apk | tee out/apk-sizes.txt
+          # The off build must not contain the SDK (its Dart libraries show as
+          # package:traceway/ URIs in the snapshot).
+          if unzip -p fieldtest/app_off/build/app/outputs/flutter-apk/app-release.apk lib/x86_64/libapp.so | strings -a | grep -q 'package:traceway/'; then
+            echo "the off build contains the SDK" >&2
+            exit 1
+          fi
+
+      - name: Enable KVM
+        if: inputs.mode != 'build'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Fixtures, and the gateway in capture mode
+        if: inputs.mode != 'build'
+        run: |
+          node fieldtest/shared/fixtures/gen.mjs --out "$FIXTURES" --seed 20261128
+          node fieldtest/shared/fixtures/gen.mjs --check "$FIXTURES" --lock fieldtest/shared/fixtures.lock.json
+          mkdir -p "$LEDGER"
+          nohup node fieldtest/shared/gateway/gateway.mjs --mode capture --port 18190 \
+            --fixtures "$FIXTURES" --ledger "$LEDGER" > out/gateway.log 2>&1 &
+          for i in $(seq 30); do curl -sf http://127.0.0.1:18190/ctl/health && break; sleep 1; done
+
+      - name: Runs on the emulator
+        if: inputs.mode != 'build'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          ram-size: 4096M
+          disable-animations: false
+          emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
+          script: bash fieldtest/harness/ci-android.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fieldtest-flutter-android-${{ github.run_id }}
+          path: |
+            out/
+            fieldtest/app_*/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
+          if-no-files-found: warn

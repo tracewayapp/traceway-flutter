@@ -1,0 +1,23 @@
+name: app_sdk
+description: "Fieldmart field-test app with the Traceway SDK (variants core, buffer, stream-img, stream-noimg)."
+publish_to: 'none'
+version: 2.1.0+1
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  fieldmart_ui:
+    path: ../fieldmart_ui
+  http: ^1.5.0
+  # The SDK from this repository: 2.1.0 is not published yet.
+  traceway:
+    path: ../..
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

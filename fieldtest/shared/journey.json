@@ -1,0 +1,9553 @@
+{
+ "version": 1,
+ "sharedVersion": "2",
+ "viewport": {
+  "width": 412,
+  "height": 892
+ },
+ "fixtures": {
+  "seed": 20261128
+ },
+ "rules": {
+  "lateMs": 1500,
+  "defaultSettleMs": 400,
+  "checkpointCaptureMs": 300,
+  "tapMs": 250,
+  "revealMs": 900,
+  "pasteMs": 300,
+  "keyMs": 200,
+  "pickMs": 2500,
+  "backgroundMs": 1000,
+  "killMs": 500,
+  "relaunchMs": 1000,
+  "perCharMs": 120,
+  "notes": [
+   "t is milliseconds after T0 (the app's FM_READY). A step starts at t, never earlier. More than lateMs late for any step marks the run late.",
+   "reveal: before acting, make the element fully visible: dismiss the on-screen keyboard if it covers it, then scroll its scroll container with a drag (not a programmatic scroll) until it is. Budgeted at revealMs.",
+   "A fling ends with velocity so the list keeps moving; dir is the direction the finger moves (up scrolls a list towards its end). distance is a fraction of the element's size along dir.",
+   "drag with hold: true leaves the finger down at `to`; the next release step lifts it. A checkpoint with during: \"drag\" is taken while the finger is held. A driver that cannot hold does the whole drag, takes the checkpoint right after and records the deviation.",
+   "type: one character at a time through the keyboard path into the focused field (into names it).",
+   "pick: choose `value` in the picker of `id` with its normal UI, opening it first if it is not open. A date value of +Nd is N days after the run's start on the device clock.",
+   "checkpoint: wait settleMs, record the device clock as the checkpoint time; in evidence runs take a screenshot and the boxes of the `shows` texts and of the `masked` ids that are on screen. checkpointCaptureMs is the budget for that.",
+   "shows are texts certainly visible at the checkpoint on the phone layout (412 x 892 and 390 x 844), taken from the fixtures and shared/labels.json. hides are the sentinels typed so far; masked are ids whose content must be masked in the replay.",
+   "Steps with `platforms` run only on those platforms. A scenario with `platforms` exists only on those."
+  ]
+ },
+ "sentinels": [
+  "5105 1051 0510 5100",
+  "7391",
+  "Zx9!fieldmart-PW",
+  "Ada Fieldtest",
+  "ada.fieldtest@example.test",
+  "77 Sentinel Quay, Flat 12",
+  "LOY-88442211"
+ ],
+ "texts": {
+  "name": "Ada Fieldtest",
+  "email": "ada.fieldtest@example.test",
+  "phone": "4155550188",
+  "password": "Zx9!fieldmart-PW",
+  "address": "77 Sentinel Quay, Flat 12",
+  "city": "Bergen",
+  "postcode": "5003",
+  "country": "Norway",
+  "date": "+14d",
+  "card": "5105 1051 0510 5100",
+  "expiry": "12/29",
+  "cvv": "7391",
+  "cardName": "Ada Fieldtest",
+  "promo": "FIELD1",
+  "search": "trail",
+  "giftNote": "Happy birthday from all of us at the harbour office. Enjoy!!",
+  "loyalty": "LOY-88442211",
+  "notes500": "Please leave the parcel with the concierge on the ground floor if nobody answers the door, and use the side entrance after six in the evening because the main gate is locked. The box can be stored in the bike room. Thank you for packing the lamp carefully, the last one arrived with a dent in the shade. If the courier needs to call, the best time is between nine and noon on weekdays. We are away for the long weekend, so any delivery on Friday afternoon should wait until Monday morning instead. P."
+ },
+ "scenarios": {
+  "S0": {
+   "name": "Cold start and idle",
+   "launch": "cold",
+   "start": "home",
+   "durationMs": 70000,
+   "measured": true,
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 5000,
+     "do": "checkpoint",
+     "name": "s0-home",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Outdoor",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    }
+   ]
+  },
+  "S1": {
+   "name": "Browse",
+   "launch": "cold",
+   "start": "home",
+   "durationMs": 75000,
+   "measured": true,
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "checkpoint",
+     "name": "s1-home",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Outdoor",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 7500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 10000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17800,
+     "do": "checkpoint",
+     "name": "s1-grid-mid",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 20000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 22500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 25000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 27500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 30000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 32500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 35000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37800,
+     "do": "checkpoint",
+     "name": "s1-grid-deep",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 40000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 42500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 45000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 47500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 50000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 52500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 55000,
+     "do": "tap",
+     "id": "fm-home-logo"
+    },
+    {
+     "t": 56500,
+     "do": "checkpoint",
+     "name": "s1-top",
+     "shows": [
+      "Fieldmart",
+      "Today's deals",
+      "Outdoor"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 58000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 59000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 60000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 61000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 62000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 63000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 64400,
+     "do": "checkpoint",
+     "name": "s1-deals",
+     "shows": [
+      "Fieldmart",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 66000,
+     "do": "tap",
+     "id": "fm-home-chip-3",
+     "reveal": true
+    },
+    {
+     "t": 68000,
+     "do": "tap",
+     "id": "fm-home-chip-7",
+     "reveal": true
+    },
+    {
+     "t": 69800,
+     "do": "checkpoint",
+     "name": "s1-category",
+     "shows": [
+      "Lighting",
+      "Lumen Wall Sconce"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "home"
+    }
+   ]
+  },
+  "S2": {
+   "name": "Product",
+   "launch": "cold",
+   "start": "home",
+   "durationMs": 60000,
+   "measured": true,
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "tap",
+     "id": "fm-home-product-17",
+     "reveal": true
+    },
+    {
+     "t": 5500,
+     "do": "checkpoint",
+     "name": "s2-product",
+     "shows": [
+      "Cedar Oak Desk Lamp",
+      "Vellowmark",
+      "$104.00",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "product"
+    },
+    {
+     "t": 7000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 8000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 9000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 10000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 10300,
+     "do": "checkpoint",
+     "name": "s2-gallery-5",
+     "shows": [
+      "5 / 8",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 300,
+     "screen": "product"
+    },
+    {
+     "t": 11000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 12000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 13000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 14500,
+     "do": "tap",
+     "id": "fm-product-readmore",
+     "reveal": true
+    },
+    {
+     "t": 16300,
+     "do": "checkpoint",
+     "name": "s2-readmore",
+     "shows": [
+      "Show less",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "product"
+    },
+    {
+     "t": 17300,
+     "do": "tap",
+     "id": "fm-product-size-2",
+     "reveal": true
+    },
+    {
+     "t": 19100,
+     "do": "tap",
+     "id": "fm-product-colour-5",
+     "reveal": true
+    },
+    {
+     "t": 20900,
+     "do": "tap",
+     "id": "fm-product-qty-plus",
+     "reveal": true
+    },
+    {
+     "t": 22700,
+     "do": "tap",
+     "id": "fm-product-qty-plus"
+    },
+    {
+     "t": 23000,
+     "do": "tap",
+     "id": "fm-product-qty-plus"
+    },
+    {
+     "t": 23300,
+     "do": "tap",
+     "id": "fm-product-qty-plus"
+    },
+    {
+     "t": 23600,
+     "do": "tap",
+     "id": "fm-product-qty-plus"
+    },
+    {
+     "t": 24000,
+     "do": "checkpoint",
+     "name": "s2-variants",
+     "shows": [
+      "Qty 6",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "product"
+    },
+    {
+     "t": 25000,
+     "do": "tap",
+     "id": "fm-product-helpful-r17-0",
+     "reveal": true
+    },
+    {
+     "t": 26800,
+     "do": "tap",
+     "id": "fm-product-helpful-r17-1",
+     "reveal": true
+    },
+    {
+     "t": 28600,
+     "do": "tap",
+     "id": "fm-product-helpful-r17-2",
+     "reveal": true
+    },
+    {
+     "t": 30400,
+     "do": "checkpoint",
+     "name": "s2-helpful",
+     "shows": [
+      "Lea E.",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "product"
+    },
+    {
+     "t": 31500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 33000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 34500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 36000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 39000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 40500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 42000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 42400,
+     "do": "checkpoint",
+     "name": "s2-reviews",
+     "shows": [
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1500,
+     "list": "fm-product-reviews",
+     "screen": "product"
+    },
+    {
+     "t": 45000,
+     "do": "tap",
+     "id": "fm-product-add"
+    },
+    {
+     "t": 45600,
+     "do": "checkpoint",
+     "name": "s2-added",
+     "shows": [
+      "Added to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 500,
+     "overlay": "toast",
+     "screen": "product"
+    },
+    {
+     "t": 50000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 51500,
+     "do": "checkpoint",
+     "name": "s2-back",
+     "shows": [
+      "Fieldmart",
+      "Home"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "home"
+    }
+   ]
+  },
+  "S3": {
+   "name": "Markets",
+   "launch": "cold",
+   "start": "home",
+   "durationMs": 90000,
+   "measured": true,
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 2000,
+     "do": "tap",
+     "id": "fm-nav-markets"
+    },
+    {
+     "t": 5000,
+     "do": "checkpoint",
+     "name": "s3-chart",
+     "shows": [
+      "HEAM",
+      "1H",
+      "1D",
+      "1W",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "markets"
+    },
+    {
+     "t": 35000,
+     "do": "tap",
+     "id": "fm-markets-tf-1D"
+    },
+    {
+     "t": 38000,
+     "do": "tap",
+     "id": "fm-markets-tf-1W"
+    },
+    {
+     "t": 41000,
+     "do": "tap",
+     "id": "fm-markets-tf-1M"
+    },
+    {
+     "t": 41700,
+     "do": "checkpoint",
+     "name": "s3-tf-1M",
+     "shows": [
+      "HEAM",
+      "1M",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 600,
+     "screen": "markets"
+    },
+    {
+     "t": 44000,
+     "do": "tap",
+     "id": "fm-markets-tf-1H"
+    },
+    {
+     "t": 47000,
+     "do": "drag",
+     "id": "fm-markets-chart",
+     "from": {
+      "x": 0.1,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.9,
+      "y": 0.5
+     },
+     "durationMs": 4000
+    },
+    {
+     "t": 51500,
+     "do": "drag",
+     "id": "fm-markets-chart",
+     "from": {
+      "x": 0.1,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.9,
+      "y": 0.5
+     },
+     "durationMs": 4000,
+     "hold": true
+    },
+    {
+     "t": 55500,
+     "do": "checkpoint",
+     "name": "s3-crosshair",
+     "shows": [
+      "HEAM",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 200,
+     "screen": "markets",
+     "during": "drag"
+    },
+    {
+     "t": 56100,
+     "do": "release"
+    },
+    {
+     "t": 57500,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250,
+     "reveal": true
+    },
+    {
+     "t": 59900,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 62300,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 64700,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 67100,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 69500,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 70300,
+     "do": "checkpoint",
+     "name": "s3-watchlist",
+     "shows": [
+      "Markets",
+      "Feed"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1000,
+     "list": "fm-markets-watchlist",
+     "screen": "markets"
+    },
+    {
+     "t": 72000,
+     "do": "tap",
+     "id": "fm-markets-book-open",
+     "reveal": true
+    },
+    {
+     "t": 82000,
+     "do": "checkpoint",
+     "name": "s3-book",
+     "shows": [
+      "Order book",
+      "Bids",
+      "Asks"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "sheet",
+     "screen": "markets"
+    },
+    {
+     "t": 83000,
+     "do": "tap",
+     "id": "fm-markets-book-close"
+    }
+   ]
+  },
+  "S3-svg": {
+   "name": "Markets with the SVG chart",
+   "launch": "cold",
+   "start": "home",
+   "durationMs": 90000,
+   "measured": true,
+   "platforms": [
+    "web"
+   ],
+   "launchSettings": {
+    "fmChart": "svg"
+   },
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 2000,
+     "do": "tap",
+     "id": "fm-nav-markets"
+    },
+    {
+     "t": 5000,
+     "do": "checkpoint",
+     "name": "s3-chart",
+     "shows": [
+      "HEAM",
+      "1H",
+      "1D",
+      "1W",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "markets"
+    },
+    {
+     "t": 35000,
+     "do": "tap",
+     "id": "fm-markets-tf-1D"
+    },
+    {
+     "t": 38000,
+     "do": "tap",
+     "id": "fm-markets-tf-1W"
+    },
+    {
+     "t": 41000,
+     "do": "tap",
+     "id": "fm-markets-tf-1M"
+    },
+    {
+     "t": 41700,
+     "do": "checkpoint",
+     "name": "s3-tf-1M",
+     "shows": [
+      "HEAM",
+      "1M",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 600,
+     "screen": "markets"
+    },
+    {
+     "t": 44000,
+     "do": "tap",
+     "id": "fm-markets-tf-1H"
+    },
+    {
+     "t": 47000,
+     "do": "drag",
+     "id": "fm-markets-chart",
+     "from": {
+      "x": 0.1,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.9,
+      "y": 0.5
+     },
+     "durationMs": 4000
+    },
+    {
+     "t": 51500,
+     "do": "drag",
+     "id": "fm-markets-chart",
+     "from": {
+      "x": 0.1,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.9,
+      "y": 0.5
+     },
+     "durationMs": 4000,
+     "hold": true
+    },
+    {
+     "t": 55500,
+     "do": "checkpoint",
+     "name": "s3-crosshair",
+     "shows": [
+      "HEAM",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 200,
+     "screen": "markets",
+     "during": "drag"
+    },
+    {
+     "t": 56100,
+     "do": "release"
+    },
+    {
+     "t": 57500,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250,
+     "reveal": true
+    },
+    {
+     "t": 59900,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 62300,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 64700,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 67100,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 69500,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 70300,
+     "do": "checkpoint",
+     "name": "s3-watchlist",
+     "shows": [
+      "Markets",
+      "Feed"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1000,
+     "list": "fm-markets-watchlist",
+     "screen": "markets"
+    },
+    {
+     "t": 72000,
+     "do": "tap",
+     "id": "fm-markets-book-open",
+     "reveal": true
+    },
+    {
+     "t": 82000,
+     "do": "checkpoint",
+     "name": "s3-book",
+     "shows": [
+      "Order book",
+      "Bids",
+      "Asks"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "sheet",
+     "screen": "markets"
+    },
+    {
+     "t": 83000,
+     "do": "tap",
+     "id": "fm-markets-book-close"
+    }
+   ]
+  },
+  "S4": {
+   "name": "Feed",
+   "launch": "cold",
+   "start": "home",
+   "durationMs": 60000,
+   "measured": true,
+   "variants": {
+    "android": "fmToolkit",
+    "ios": "fmToolkit"
+   },
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 2000,
+     "do": "tap",
+     "id": "fm-nav-feed"
+    },
+    {
+     "t": 3800,
+     "do": "checkpoint",
+     "name": "s4-top",
+     "shows": [
+      "Activity",
+      "Week 1",
+      "HARS moved up 0.18 %",
+      "Payment received for FM-977457"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "list": "fm-feed-list",
+     "screen": "feed"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 6500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 8000,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 9500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 11000,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 14000,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17000,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 18500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 20000,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 21500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 23000,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 24500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 26000,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 27500,
+     "do": "tap",
+     "id": "fm-feed-jump-end"
+    },
+    {
+     "t": 28500,
+     "do": "checkpoint",
+     "name": "s4-end",
+     "shows": [
+      "Activity",
+      "Message from Hanna O."
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "list": "fm-feed-list",
+     "screen": "feed"
+    },
+    {
+     "t": 30000,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 31300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 32600,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 33900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 35200,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 36500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37800,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 39100,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 40400,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 41700,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 43500,
+     "do": "tap",
+     "id": "fm-feed-goto-field"
+    },
+    {
+     "t": 43800,
+     "do": "type",
+     "text": "5000",
+     "into": "fm-feed-goto-field",
+     "perCharMs": 120
+    },
+    {
+     "t": 44700,
+     "do": "tap",
+     "id": "fm-feed-goto-go"
+    },
+    {
+     "t": 45500,
+     "do": "checkpoint",
+     "name": "s4-row-5000",
+     "shows": [
+      "Week 101",
+      "Message from Tomas V."
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "list": "fm-feed-list",
+     "screen": "feed"
+    },
+    {
+     "t": 47000,
+     "do": "tap",
+     "id": "fm-feed-row-5001",
+     "reveal": true
+    },
+    {
+     "t": 48800,
+     "do": "tap",
+     "id": "fm-feed-row-5004",
+     "reveal": true
+    },
+    {
+     "t": 50600,
+     "do": "tap",
+     "id": "fm-feed-row-5013",
+     "reveal": true
+    },
+    {
+     "t": 52800,
+     "do": "checkpoint",
+     "name": "s4-expanded",
+     "shows": [
+      "Message from Matteo J.",
+      "Let me know if you need anything else from me."
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "feed"
+    },
+    {
+     "t": 54000,
+     "do": "tap",
+     "id": "fm-feed-refresh"
+    },
+    {
+     "t": 55000,
+     "do": "checkpoint",
+     "name": "s4-refreshed",
+     "shows": [
+      "Activity",
+      "Jump to end"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1000,
+     "screen": "feed"
+    }
+   ]
+  },
+  "S5": {
+   "name": "Checkout",
+   "launch": "cold",
+   "start": "home",
+   "durationMs": 90000,
+   "measured": true,
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 1500,
+     "do": "tap",
+     "id": "fm-nav-checkout",
+     "reveal": true
+    },
+    {
+     "t": 2950,
+     "do": "checkpoint",
+     "name": "s5-form-empty",
+     "shows": [
+      "Checkout",
+      "Contact",
+      "Full name",
+      "Email"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 3850,
+     "do": "tap",
+     "id": "fm-checkout-name"
+    },
+    {
+     "t": 4300,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-name",
+     "perCharMs": 120
+    },
+    {
+     "t": 6060,
+     "do": "checkpoint",
+     "name": "s5-name-typed",
+     "shows": [
+      "Checkout",
+      "Full name"
+     ],
+     "hides": [
+      "Ada Fieldtest"
+     ],
+     "masked": [
+      "fm-checkout-name"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 6960,
+     "do": "tap",
+     "id": "fm-checkout-email"
+    },
+    {
+     "t": 7410,
+     "do": "type",
+     "text": "ada.fieldtest@example.test",
+     "into": "fm-checkout-email",
+     "perCharMs": 120
+    },
+    {
+     "t": 10730,
+     "do": "tap",
+     "id": "fm-checkout-phone"
+    },
+    {
+     "t": 11180,
+     "do": "type",
+     "text": "4155550188",
+     "into": "fm-checkout-phone",
+     "perCharMs": 120
+    },
+    {
+     "t": 12580,
+     "do": "tap",
+     "id": "fm-checkout-account",
+     "reveal": true
+    },
+    {
+     "t": 13930,
+     "do": "tap",
+     "id": "fm-checkout-password",
+     "reveal": true
+    },
+    {
+     "t": 15280,
+     "do": "type",
+     "text": "Zx9!fieldmart-PW",
+     "into": "fm-checkout-password",
+     "perCharMs": 120
+    },
+    {
+     "t": 17400,
+     "do": "checkpoint",
+     "name": "s5-contact-done",
+     "shows": [
+      "Checkout",
+      "Password"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW"
+     ],
+     "masked": [
+      "fm-checkout-password"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 18300,
+     "do": "tap",
+     "id": "fm-checkout-address",
+     "reveal": true
+    },
+    {
+     "t": 19650,
+     "do": "type",
+     "text": "77 Sentinel Quay, Flat 12",
+     "into": "fm-checkout-address",
+     "perCharMs": 120
+    },
+    {
+     "t": 22850,
+     "do": "tap",
+     "id": "fm-checkout-city",
+     "reveal": true
+    },
+    {
+     "t": 24200,
+     "do": "type",
+     "text": "Bergen",
+     "into": "fm-checkout-city",
+     "perCharMs": 120
+    },
+    {
+     "t": 25120,
+     "do": "tap",
+     "id": "fm-checkout-postcode",
+     "reveal": true
+    },
+    {
+     "t": 26470,
+     "do": "type",
+     "text": "5003",
+     "into": "fm-checkout-postcode",
+     "perCharMs": 120
+    },
+    {
+     "t": 27150,
+     "do": "tap",
+     "id": "fm-checkout-country",
+     "reveal": true
+    },
+    {
+     "t": 28500,
+     "do": "checkpoint",
+     "name": "s5-country-open",
+     "shows": [
+      "Choose country"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "picker",
+     "screen": "checkout"
+    },
+    {
+     "t": 29400,
+     "do": "pick",
+     "id": "fm-checkout-country",
+     "value": "Norway",
+     "durationMs": 3000
+    },
+    {
+     "t": 32600,
+     "do": "tap",
+     "id": "fm-checkout-date",
+     "reveal": true
+    },
+    {
+     "t": 33950,
+     "do": "checkpoint",
+     "name": "s5-date-open",
+     "shows": [
+      "Choose delivery date"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "picker",
+     "screen": "checkout"
+    },
+    {
+     "t": 34850,
+     "do": "pick",
+     "id": "fm-checkout-date",
+     "value": "+14d",
+     "durationMs": 2500
+    },
+    {
+     "t": 37550,
+     "do": "tap",
+     "id": "fm-checkout-window-1",
+     "reveal": true
+    },
+    {
+     "t": 38900,
+     "do": "tap",
+     "id": "fm-checkout-door",
+     "reveal": true
+    },
+    {
+     "t": 40250,
+     "do": "tap",
+     "id": "fm-checkout-gift",
+     "reveal": true
+    },
+    {
+     "t": 41600,
+     "do": "tap",
+     "id": "fm-checkout-giftnote",
+     "reveal": true
+    },
+    {
+     "t": 42950,
+     "do": "type",
+     "text": "Happy birthday from all of us at the harbour office. Enjoy!!",
+     "into": "fm-checkout-giftnote",
+     "perCharMs": 120
+    },
+    {
+     "t": 50350,
+     "do": "checkpoint",
+     "name": "s5-delivery-done",
+     "shows": [
+      "Checkout",
+      "Gift note"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12"
+     ],
+     "masked": [
+      "fm-checkout-giftnote"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 51250,
+     "do": "tap",
+     "id": "fm-checkout-card",
+     "reveal": true
+    },
+    {
+     "t": 52600,
+     "do": "type",
+     "text": "5105 1051 0510 5100",
+     "into": "fm-checkout-card",
+     "perCharMs": 120
+    },
+    {
+     "t": 55080,
+     "do": "tap",
+     "id": "fm-checkout-expiry"
+    },
+    {
+     "t": 55530,
+     "do": "type",
+     "text": "12/29",
+     "into": "fm-checkout-expiry",
+     "perCharMs": 120
+    },
+    {
+     "t": 56330,
+     "do": "tap",
+     "id": "fm-checkout-cvv"
+    },
+    {
+     "t": 56780,
+     "do": "type",
+     "text": "7391",
+     "into": "fm-checkout-cvv",
+     "perCharMs": 120
+    },
+    {
+     "t": 57460,
+     "do": "checkpoint",
+     "name": "s5-payment-typed",
+     "shows": [
+      "Checkout",
+      "CVV"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [
+      "fm-checkout-card",
+      "fm-checkout-cvv"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 58360,
+     "do": "tap",
+     "id": "fm-checkout-cardname",
+     "reveal": true
+    },
+    {
+     "t": 59710,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-cardname",
+     "perCharMs": 120
+    },
+    {
+     "t": 61470,
+     "do": "tap",
+     "id": "fm-checkout-savecard",
+     "reveal": true
+    },
+    {
+     "t": 62820,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.02,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "durationMs": 800,
+     "reveal": true
+    },
+    {
+     "t": 64720,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.667,
+      "y": 0.5
+     },
+     "durationMs": 500
+    },
+    {
+     "t": 65420,
+     "do": "checkpoint",
+     "name": "s5-tip",
+     "shows": [
+      "Tip",
+      "Save card"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 66320,
+     "do": "tap",
+     "id": "fm-checkout-promo",
+     "reveal": true
+    },
+    {
+     "t": 67670,
+     "do": "type",
+     "text": "FIELD1",
+     "into": "fm-checkout-promo",
+     "perCharMs": 120
+    },
+    {
+     "t": 68590,
+     "do": "checkpoint",
+     "name": "s5-promo-open",
+     "shows": [
+      "FIELD10",
+      "FIELD15"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 700,
+     "overlay": "menu",
+     "screen": "checkout"
+    },
+    {
+     "t": 69790,
+     "do": "tap",
+     "id": "fm-checkout-promo-option-0"
+    },
+    {
+     "t": 70240,
+     "do": "checkpoint",
+     "name": "s5-payment-done",
+     "shows": [
+      "Checkout",
+      "Promo code"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [
+      "fm-checkout-cardname"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 71140,
+     "do": "tap",
+     "id": "fm-checkout-terms",
+     "reveal": true
+    },
+    {
+     "t": 72490,
+     "do": "checkpoint",
+     "name": "s5-terms-open",
+     "shows": [
+      "Terms and conditions",
+      "I agree"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "dialog",
+     "screen": "checkout"
+    },
+    {
+     "t": 73390,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 74240,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 75090,
+     "do": "tap",
+     "id": "fm-checkout-terms-agree",
+     "reveal": true
+    },
+    {
+     "t": 76440,
+     "do": "tap",
+     "id": "fm-checkout-menu",
+     "reveal": true
+    },
+    {
+     "t": 77790,
+     "do": "checkpoint",
+     "name": "s5-menu-open",
+     "shows": [
+      "Ring the bell",
+      "Call on arrival",
+      "Leave with a neighbour",
+      "No instructions"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "menu",
+     "screen": "checkout"
+    },
+    {
+     "t": 78690,
+     "do": "tap",
+     "id": "fm-checkout-menu-item-2"
+    },
+    {
+     "t": 79140,
+     "do": "tap",
+     "id": "fm-checkout-edit",
+     "reveal": true
+    },
+    {
+     "t": 80490,
+     "do": "checkpoint",
+     "name": "s5-sheet-open",
+     "shows": [
+      "Edit items",
+      "Done"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "sheet",
+     "screen": "checkout"
+    },
+    {
+     "t": 81390,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 81840,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 82290,
+     "do": "tap",
+     "id": "fm-checkout-edit-done"
+    },
+    {
+     "t": 82740,
+     "do": "tap",
+     "id": "fm-checkout-rating-4",
+     "reveal": true
+    },
+    {
+     "t": 84090,
+     "do": "tap",
+     "id": "fm-checkout-notes",
+     "reveal": true
+    },
+    {
+     "t": 85440,
+     "do": "paste",
+     "text": "Please leave the parcel with the concierge on the ground floor if nobody answers the door, and use the side entrance after six in the evening because the main gate is locked. The box can be stored in the bike room. Thank you for packing the lamp carefully, the last one arrived with a dent in the shade. If the courier needs to call, the best time is between nine and noon on weekdays. We are away for the long weekend, so any delivery on Friday afternoon should wait until Monday morning instead. P.",
+     "into": "fm-checkout-notes"
+    },
+    {
+     "t": 85940,
+     "do": "checkpoint",
+     "name": "s5-review",
+     "shows": [
+      "How was checkout?",
+      "Place order"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391",
+      "LOY-88442211"
+     ],
+     "masked": [
+      "fm-checkout-loyalty"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 86840,
+     "do": "tap",
+     "id": "fm-checkout-place",
+     "reveal": true
+    },
+    {
+     "t": 88190,
+     "do": "checkpoint",
+     "name": "s5-success",
+     "shows": [
+      "Order placed"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391",
+      "LOY-88442211"
+     ],
+     "masked": [],
+     "settleMs": 1000,
+     "screen": "checkout"
+    }
+   ]
+  },
+  "S6": {
+   "name": "A shopper's session",
+   "launch": "cold",
+   "start": "home",
+   "durationMs": 300000,
+   "measured": true,
+   "headline": true,
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "checkpoint",
+     "name": "s6-home",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Outdoor",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 8500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 18200,
+     "do": "checkpoint",
+     "name": "s6-grid-1",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1300,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 21000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 24500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 28000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 31500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 34200,
+     "do": "checkpoint",
+     "name": "s6-grid-2",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1300,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 36500,
+     "do": "tap",
+     "id": "fm-home-logo"
+    },
+    {
+     "t": 37800,
+     "do": "checkpoint",
+     "name": "s6-home-top",
+     "shows": [
+      "Fieldmart",
+      "Today's deals",
+      "Outdoor"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 39500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 41500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 43500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 45000,
+     "do": "checkpoint",
+     "name": "s6-deals",
+     "shows": [
+      "Fieldmart",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 600,
+     "screen": "home"
+    },
+    {
+     "t": 48000,
+     "do": "tap",
+     "id": "fm-home-chip-3",
+     "reveal": true
+    },
+    {
+     "t": 50500,
+     "do": "checkpoint",
+     "name": "s6-category",
+     "shows": [
+      "Home Office",
+      "Meadow Canvas Desk Chair"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "home"
+    },
+    {
+     "t": 56000,
+     "do": "tap",
+     "id": "fm-home-product-17",
+     "reveal": true
+    },
+    {
+     "t": 59000,
+     "do": "checkpoint",
+     "name": "s6-product",
+     "shows": [
+      "Cedar Oak Desk Lamp",
+      "Vellowmark",
+      "$104.00",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "product"
+    },
+    {
+     "t": 61000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 63500,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 66000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 67500,
+     "do": "checkpoint",
+     "name": "s6-gallery",
+     "shows": [
+      "4 / 8",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "product"
+    },
+    {
+     "t": 69500,
+     "do": "tap",
+     "id": "fm-product-size-2",
+     "reveal": true
+    },
+    {
+     "t": 72000,
+     "do": "tap",
+     "id": "fm-product-colour-5",
+     "reveal": true
+    },
+    {
+     "t": 74500,
+     "do": "checkpoint",
+     "name": "s6-variants",
+     "shows": [
+      "Size",
+      "Colour",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "product"
+    },
+    {
+     "t": 76000,
+     "do": "tap",
+     "id": "fm-product-helpful-r17-0",
+     "reveal": true
+    },
+    {
+     "t": 78500,
+     "do": "checkpoint",
+     "name": "s6-reviews-top",
+     "shows": [
+      "Oskar G.",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "product"
+    },
+    {
+     "t": 80000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 82500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 85000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 87500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 89800,
+     "do": "checkpoint",
+     "name": "s6-reviews",
+     "shows": [
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1200,
+     "list": "fm-product-reviews",
+     "screen": "product"
+    },
+    {
+     "t": 92000,
+     "do": "tap",
+     "id": "fm-product-add"
+    },
+    {
+     "t": 92600,
+     "do": "checkpoint",
+     "name": "s6-added",
+     "shows": [
+      "Added to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 500,
+     "overlay": "toast",
+     "screen": "product"
+    },
+    {
+     "t": 96000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 97300,
+     "do": "checkpoint",
+     "name": "s6-back-home",
+     "shows": [
+      "Fieldmart",
+      "Home"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "home"
+    },
+    {
+     "t": 100000,
+     "do": "tap",
+     "id": "fm-home-search",
+     "reveal": true
+    },
+    {
+     "t": 102000,
+     "do": "checkpoint",
+     "name": "s6-search",
+     "shows": [
+      "Search",
+      "Search products"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 600,
+     "screen": "search"
+    },
+    {
+     "t": 103000,
+     "do": "tap",
+     "id": "fm-search-field"
+    },
+    {
+     "t": 103300,
+     "do": "type",
+     "text": "trail",
+     "into": "fm-search-field",
+     "perCharMs": 120
+    },
+    {
+     "t": 104500,
+     "do": "checkpoint",
+     "name": "s6-search-results",
+     "shows": [
+      "Trail Cork Pet Bowl",
+      "Trail Weekender"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 900,
+     "list": "fm-search-results",
+     "screen": "search"
+    },
+    {
+     "t": 106800,
+     "do": "tap",
+     "id": "fm-search-result-1"
+    },
+    {
+     "t": 108300,
+     "do": "checkpoint",
+     "name": "s6-search-product",
+     "shows": [
+      "Trail Weekender",
+      "$458.49",
+      "Add to cart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "product"
+    },
+    {
+     "t": 112000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 113300,
+     "do": "checkpoint",
+     "name": "s6-search-back",
+     "shows": [
+      "Search",
+      "Trail Cork Pet Bowl"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 600,
+     "screen": "search"
+    },
+    {
+     "t": 116000,
+     "do": "tap",
+     "id": "fm-nav-back",
+     "reveal": true
+    },
+    {
+     "t": 118000,
+     "do": "checkpoint",
+     "name": "s6-home-again",
+     "shows": [
+      "Fieldmart",
+      "Home"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 600,
+     "screen": "home"
+    },
+    {
+     "t": 122000,
+     "do": "tap",
+     "id": "fm-nav-markets"
+    },
+    {
+     "t": 123800,
+     "do": "checkpoint",
+     "name": "s6-markets",
+     "shows": [
+      "HEAM",
+      "1H",
+      "1D",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "markets"
+    },
+    {
+     "t": 131000,
+     "do": "checkpoint",
+     "name": "s6-markets-watch",
+     "shows": [
+      "HEAM",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "markets"
+    },
+    {
+     "t": 136000,
+     "do": "tap",
+     "id": "fm-markets-tf-1W"
+    },
+    {
+     "t": 137200,
+     "do": "checkpoint",
+     "name": "s6-markets-1W",
+     "shows": [
+      "HEAM",
+      "1W",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 600,
+     "screen": "markets"
+    },
+    {
+     "t": 139000,
+     "do": "drag",
+     "id": "fm-markets-chart",
+     "from": {
+      "x": 0.15,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.85,
+      "y": 0.5
+     },
+     "durationMs": 3000,
+     "hold": true
+    },
+    {
+     "t": 142100,
+     "do": "checkpoint",
+     "name": "s6-crosshair",
+     "shows": [
+      "HEAM",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 200,
+     "screen": "markets",
+     "during": "drag"
+    },
+    {
+     "t": 142700,
+     "do": "release"
+    },
+    {
+     "t": 144000,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250,
+     "reveal": true
+    },
+    {
+     "t": 146200,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 148400,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 149500,
+     "do": "checkpoint",
+     "name": "s6-watchlist",
+     "shows": [
+      "Markets",
+      "Feed"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1000,
+     "list": "fm-markets-watchlist",
+     "screen": "markets"
+    },
+    {
+     "t": 151500,
+     "do": "tap",
+     "id": "fm-nav-feed"
+    },
+    {
+     "t": 153000,
+     "do": "checkpoint",
+     "name": "s6-feed-top",
+     "shows": [
+      "Activity",
+      "Week 1",
+      "HARS moved up 0.18 %"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "list": "fm-feed-list",
+     "screen": "feed"
+    },
+    {
+     "t": 154500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 155900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 157300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 158700,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 160100,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 161500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 162900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 164300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 166000,
+     "do": "tap",
+     "id": "fm-feed-jump-end"
+    },
+    {
+     "t": 166800,
+     "do": "checkpoint",
+     "name": "s6-feed-end",
+     "shows": [
+      "Activity",
+      "Message from Hanna O."
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "list": "fm-feed-list",
+     "screen": "feed"
+    },
+    {
+     "t": 168500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 169900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 171300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 172400,
+     "do": "checkpoint",
+     "name": "s6-feed-back",
+     "shows": [
+      "Activity",
+      "Jump to end"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1200,
+     "list": "fm-feed-list",
+     "screen": "feed"
+    },
+    {
+     "t": 174500,
+     "do": "tap",
+     "id": "fm-nav-checkout",
+     "reveal": true
+    },
+    {
+     "t": 175950,
+     "do": "checkpoint",
+     "name": "s6-form-empty",
+     "shows": [
+      "Checkout",
+      "Contact",
+      "Full name",
+      "Email"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 176850,
+     "do": "tap",
+     "id": "fm-checkout-name"
+    },
+    {
+     "t": 177300,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-name",
+     "perCharMs": 120
+    },
+    {
+     "t": 179060,
+     "do": "checkpoint",
+     "name": "s6-name-typed",
+     "shows": [
+      "Checkout",
+      "Full name"
+     ],
+     "hides": [
+      "Ada Fieldtest"
+     ],
+     "masked": [
+      "fm-checkout-name"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 179960,
+     "do": "tap",
+     "id": "fm-checkout-email"
+    },
+    {
+     "t": 180410,
+     "do": "type",
+     "text": "ada.fieldtest@example.test",
+     "into": "fm-checkout-email",
+     "perCharMs": 120
+    },
+    {
+     "t": 183730,
+     "do": "tap",
+     "id": "fm-checkout-phone"
+    },
+    {
+     "t": 184180,
+     "do": "type",
+     "text": "4155550188",
+     "into": "fm-checkout-phone",
+     "perCharMs": 120
+    },
+    {
+     "t": 185580,
+     "do": "tap",
+     "id": "fm-checkout-account",
+     "reveal": true
+    },
+    {
+     "t": 186930,
+     "do": "tap",
+     "id": "fm-checkout-password",
+     "reveal": true
+    },
+    {
+     "t": 188280,
+     "do": "type",
+     "text": "Zx9!fieldmart-PW",
+     "into": "fm-checkout-password",
+     "perCharMs": 120
+    },
+    {
+     "t": 190400,
+     "do": "checkpoint",
+     "name": "s6-contact-done",
+     "shows": [
+      "Checkout",
+      "Password"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW"
+     ],
+     "masked": [
+      "fm-checkout-password"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 191300,
+     "do": "tap",
+     "id": "fm-checkout-address",
+     "reveal": true
+    },
+    {
+     "t": 192650,
+     "do": "type",
+     "text": "77 Sentinel Quay, Flat 12",
+     "into": "fm-checkout-address",
+     "perCharMs": 120
+    },
+    {
+     "t": 195850,
+     "do": "tap",
+     "id": "fm-checkout-city",
+     "reveal": true
+    },
+    {
+     "t": 197200,
+     "do": "type",
+     "text": "Bergen",
+     "into": "fm-checkout-city",
+     "perCharMs": 120
+    },
+    {
+     "t": 198120,
+     "do": "tap",
+     "id": "fm-checkout-postcode",
+     "reveal": true
+    },
+    {
+     "t": 199470,
+     "do": "type",
+     "text": "5003",
+     "into": "fm-checkout-postcode",
+     "perCharMs": 120
+    },
+    {
+     "t": 200150,
+     "do": "tap",
+     "id": "fm-checkout-country",
+     "reveal": true
+    },
+    {
+     "t": 201500,
+     "do": "checkpoint",
+     "name": "s6-country-open",
+     "shows": [
+      "Choose country"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "picker",
+     "screen": "checkout"
+    },
+    {
+     "t": 202400,
+     "do": "pick",
+     "id": "fm-checkout-country",
+     "value": "Norway",
+     "durationMs": 3000
+    },
+    {
+     "t": 205600,
+     "do": "tap",
+     "id": "fm-checkout-date",
+     "reveal": true
+    },
+    {
+     "t": 206950,
+     "do": "checkpoint",
+     "name": "s6-date-open",
+     "shows": [
+      "Choose delivery date"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "picker",
+     "screen": "checkout"
+    },
+    {
+     "t": 207850,
+     "do": "pick",
+     "id": "fm-checkout-date",
+     "value": "+14d",
+     "durationMs": 2500
+    },
+    {
+     "t": 210550,
+     "do": "tap",
+     "id": "fm-checkout-window-1",
+     "reveal": true
+    },
+    {
+     "t": 211900,
+     "do": "tap",
+     "id": "fm-checkout-door",
+     "reveal": true
+    },
+    {
+     "t": 213250,
+     "do": "tap",
+     "id": "fm-checkout-gift",
+     "reveal": true
+    },
+    {
+     "t": 214600,
+     "do": "tap",
+     "id": "fm-checkout-giftnote",
+     "reveal": true
+    },
+    {
+     "t": 215950,
+     "do": "type",
+     "text": "Happy birthday from all of us at the harbour office. Enjoy!!",
+     "into": "fm-checkout-giftnote",
+     "perCharMs": 120
+    },
+    {
+     "t": 223350,
+     "do": "checkpoint",
+     "name": "s6-delivery-done",
+     "shows": [
+      "Checkout",
+      "Gift note"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12"
+     ],
+     "masked": [
+      "fm-checkout-giftnote"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 224250,
+     "do": "tap",
+     "id": "fm-checkout-card",
+     "reveal": true
+    },
+    {
+     "t": 225600,
+     "do": "type",
+     "text": "5105 1051 0510 5100",
+     "into": "fm-checkout-card",
+     "perCharMs": 120
+    },
+    {
+     "t": 228080,
+     "do": "tap",
+     "id": "fm-checkout-expiry"
+    },
+    {
+     "t": 228530,
+     "do": "type",
+     "text": "12/29",
+     "into": "fm-checkout-expiry",
+     "perCharMs": 120
+    },
+    {
+     "t": 229330,
+     "do": "tap",
+     "id": "fm-checkout-cvv"
+    },
+    {
+     "t": 229780,
+     "do": "type",
+     "text": "7391",
+     "into": "fm-checkout-cvv",
+     "perCharMs": 120
+    },
+    {
+     "t": 230460,
+     "do": "checkpoint",
+     "name": "s6-payment-typed",
+     "shows": [
+      "Checkout",
+      "CVV"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [
+      "fm-checkout-card",
+      "fm-checkout-cvv"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 231360,
+     "do": "tap",
+     "id": "fm-nav-more",
+     "reveal": true
+    },
+    {
+     "t": 232910,
+     "do": "tap",
+     "id": "fm-more-diag",
+     "reveal": true
+    },
+    {
+     "t": 234260,
+     "do": "checkpoint",
+     "name": "s6-diag",
+     "shows": [
+      "Diagnostics",
+      "Report handled error"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "diag"
+    },
+    {
+     "t": 235160,
+     "do": "tap",
+     "id": "fm-diag-handled",
+     "reveal": true
+    },
+    {
+     "t": 236510,
+     "do": "checkpoint",
+     "name": "s6-diag-handled",
+     "shows": [
+      "Diagnostics",
+      "Run"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 600,
+     "screen": "diag"
+    },
+    {
+     "t": 237610,
+     "do": "tap",
+     "id": "fm-nav-checkout",
+     "reveal": true
+    },
+    {
+     "t": 238960,
+     "do": "checkpoint",
+     "name": "s6-form-kept",
+     "shows": [
+      "Checkout",
+      "More"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 239860,
+     "do": "tap",
+     "id": "fm-checkout-cardname",
+     "reveal": true
+    },
+    {
+     "t": 241210,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-cardname",
+     "perCharMs": 120
+    },
+    {
+     "t": 242970,
+     "do": "tap",
+     "id": "fm-checkout-savecard",
+     "reveal": true
+    },
+    {
+     "t": 244320,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.02,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "durationMs": 800,
+     "reveal": true
+    },
+    {
+     "t": 246220,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.667,
+      "y": 0.5
+     },
+     "durationMs": 500
+    },
+    {
+     "t": 246920,
+     "do": "checkpoint",
+     "name": "s6-tip",
+     "shows": [
+      "Tip",
+      "Save card"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 247820,
+     "do": "tap",
+     "id": "fm-checkout-promo",
+     "reveal": true
+    },
+    {
+     "t": 249170,
+     "do": "type",
+     "text": "FIELD1",
+     "into": "fm-checkout-promo",
+     "perCharMs": 120
+    },
+    {
+     "t": 250090,
+     "do": "checkpoint",
+     "name": "s6-promo-open",
+     "shows": [
+      "FIELD10",
+      "FIELD15"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 700,
+     "overlay": "menu",
+     "screen": "checkout"
+    },
+    {
+     "t": 251290,
+     "do": "tap",
+     "id": "fm-checkout-promo-option-0"
+    },
+    {
+     "t": 251740,
+     "do": "checkpoint",
+     "name": "s6-payment-done",
+     "shows": [
+      "Checkout",
+      "Promo code"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [
+      "fm-checkout-cardname"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 252640,
+     "do": "tap",
+     "id": "fm-checkout-terms",
+     "reveal": true
+    },
+    {
+     "t": 253990,
+     "do": "checkpoint",
+     "name": "s6-terms-open",
+     "shows": [
+      "Terms and conditions",
+      "I agree"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "dialog",
+     "screen": "checkout"
+    },
+    {
+     "t": 254890,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 255740,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 256590,
+     "do": "tap",
+     "id": "fm-checkout-terms-agree",
+     "reveal": true
+    },
+    {
+     "t": 257940,
+     "do": "tap",
+     "id": "fm-checkout-menu",
+     "reveal": true
+    },
+    {
+     "t": 259290,
+     "do": "checkpoint",
+     "name": "s6-menu-open",
+     "shows": [
+      "Ring the bell",
+      "Call on arrival",
+      "Leave with a neighbour",
+      "No instructions"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "menu",
+     "screen": "checkout"
+    },
+    {
+     "t": 260190,
+     "do": "tap",
+     "id": "fm-checkout-menu-item-2"
+    },
+    {
+     "t": 260640,
+     "do": "tap",
+     "id": "fm-checkout-edit",
+     "reveal": true
+    },
+    {
+     "t": 261990,
+     "do": "checkpoint",
+     "name": "s6-sheet-open",
+     "shows": [
+      "Edit items",
+      "Done"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "overlay": "sheet",
+     "screen": "checkout"
+    },
+    {
+     "t": 262890,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 263340,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 263790,
+     "do": "tap",
+     "id": "fm-checkout-edit-done"
+    },
+    {
+     "t": 264240,
+     "do": "tap",
+     "id": "fm-checkout-rating-4",
+     "reveal": true
+    },
+    {
+     "t": 265590,
+     "do": "checkpoint",
+     "name": "s6-review",
+     "shows": [
+      "How was checkout?",
+      "Place order"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391",
+      "LOY-88442211"
+     ],
+     "masked": [
+      "fm-checkout-loyalty"
+     ],
+     "settleMs": 400,
+     "screen": "checkout"
+    },
+    {
+     "t": 266490,
+     "do": "tap",
+     "id": "fm-checkout-place",
+     "reveal": true
+    },
+    {
+     "t": 267840,
+     "do": "checkpoint",
+     "name": "s6-success",
+     "shows": [
+      "Order placed"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391",
+      "LOY-88442211"
+     ],
+     "masked": [],
+     "settleMs": 1000,
+     "screen": "checkout"
+    },
+    {
+     "t": 276000,
+     "do": "tap",
+     "id": "fm-nav-home",
+     "reveal": true
+    },
+    {
+     "t": 278000,
+     "do": "checkpoint",
+     "name": "s6-home-end",
+     "shows": [
+      "Fieldmart",
+      "Home"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391",
+      "LOY-88442211"
+     ],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "home"
+    }
+   ]
+  },
+  "S7a": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "buffer",
+   "name": "Exception clip (buffer)",
+   "durationMs": 66000,
+   "checks": [
+    "E-30"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "checkpoint",
+     "name": "s1-home",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Outdoor",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 7500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 10000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17800,
+     "do": "checkpoint",
+     "name": "s1-grid-mid",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 20000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 22500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 25000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 27500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 30000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 32500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 35000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37800,
+     "do": "checkpoint",
+     "name": "s1-grid-deep",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 41000,
+     "do": "tap",
+     "id": "fm-nav-more",
+     "reveal": true
+    },
+    {
+     "t": 42550,
+     "do": "tap",
+     "id": "fm-more-diag",
+     "reveal": true
+    },
+    {
+     "t": 44000,
+     "do": "checkpoint",
+     "name": "s7a-open",
+     "shows": [
+      "Diagnostics",
+      "Report handled error"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "diag"
+    },
+    {
+     "t": 44900,
+     "do": "tap",
+     "id": "fm-diag-handled",
+     "reveal": true
+    },
+    {
+     "t": 46350,
+     "do": "checkpoint",
+     "name": "s7a-handled",
+     "shows": [
+      "Diagnostics"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 600,
+     "screen": "diag"
+    },
+    {
+     "t": 47500,
+     "do": "tap",
+     "id": "fm-nav-home",
+     "reveal": true
+    },
+    {
+     "t": 64000,
+     "do": "checkpoint",
+     "name": "s7a-after",
+     "shows": [
+      "Fieldmart",
+      "Home"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    }
+   ]
+  },
+  "S7b": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "stream-img",
+   "name": "Crash",
+   "durationMs": 52000,
+   "checks": [
+    "E-31",
+    "E-32"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "checkpoint",
+     "name": "s1-home",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Outdoor",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 7500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 10000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17800,
+     "do": "checkpoint",
+     "name": "s1-grid-mid",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 21000,
+     "do": "tap",
+     "id": "fm-nav-more",
+     "reveal": true
+    },
+    {
+     "t": 22550,
+     "do": "tap",
+     "id": "fm-more-diag",
+     "reveal": true
+    },
+    {
+     "t": 24000,
+     "do": "checkpoint",
+     "name": "s7b-open",
+     "shows": [
+      "Diagnostics",
+      "Throw unhandled error"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "diag"
+    },
+    {
+     "t": 24900,
+     "do": "tap",
+     "id": "fm-diag-unhandled",
+     "reveal": true
+    },
+    {
+     "t": 30500,
+     "do": "relaunch",
+     "platforms": [
+      "flutter-linux",
+      "flutter-android",
+      "android",
+      "ios"
+     ]
+    },
+    {
+     "t": 31500,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000,
+     "platforms": [
+      "flutter-linux",
+      "flutter-android",
+      "android",
+      "ios"
+     ]
+    },
+    {
+     "t": 48000,
+     "do": "checkpoint",
+     "name": "s7b-after",
+     "shows": [
+      "Fieldmart"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    }
+   ],
+   "notes": "Mobile: the unhandled error ends the process; the driver relaunches it after 5 s. Browser: the error is thrown in a click handler and the page carries on."
+  },
+  "S7c": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "stream-img",
+   "name": "Outage",
+   "durationMs": 126000,
+   "checks": [
+    "E-33",
+    "E-34"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "checkpoint",
+     "name": "s1-home",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Outdoor",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 7500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 10000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17800,
+     "do": "checkpoint",
+     "name": "s1-grid-mid",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 20000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 21000,
+     "do": "fault",
+     "mode": "refuse",
+     "seconds": 45
+    },
+    {
+     "t": 22500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 25000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 27500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 30000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 32500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 35000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37800,
+     "do": "checkpoint",
+     "name": "s1-grid-deep",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 40000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 42500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 45000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 47500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 50000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 52500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 55000,
+     "do": "tap",
+     "id": "fm-home-logo"
+    },
+    {
+     "t": 56500,
+     "do": "checkpoint",
+     "name": "s1-top",
+     "shows": [
+      "Fieldmart",
+      "Today's deals",
+      "Outdoor"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 58000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 59000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 60000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 61000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 62000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 63000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 64400,
+     "do": "checkpoint",
+     "name": "s1-deals",
+     "shows": [
+      "Fieldmart",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 66000,
+     "do": "tap",
+     "id": "fm-home-chip-3",
+     "reveal": true
+    },
+    {
+     "t": 66000,
+     "do": "mark",
+     "name": "s7c-recovered"
+    },
+    {
+     "t": 68000,
+     "do": "tap",
+     "id": "fm-home-chip-7",
+     "reveal": true
+    },
+    {
+     "t": 69800,
+     "do": "checkpoint",
+     "name": "s1-category",
+     "shows": [
+      "Lighting",
+      "Lumen Wall Sconce"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "home"
+    },
+    {
+     "t": 78000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 82000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 86000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 90000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 94000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 98000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 102000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 106000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 110000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 114000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 120000,
+     "do": "checkpoint",
+     "name": "s7c-end",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1200,
+     "screen": "home"
+    }
+   ],
+   "notes": "The gateway refuses SDK connections from 21 s to 66 s; browsing goes on; 60 s more after recovery."
+  },
+  "S7d": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "stream-img",
+   "name": "Background and foreground",
+   "durationMs": 80000,
+   "checks": [
+    "E-35"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 2000,
+     "do": "tap",
+     "id": "fm-nav-markets"
+    },
+    {
+     "t": 5000,
+     "do": "checkpoint",
+     "name": "s3-chart",
+     "shows": [
+      "HEAM",
+      "1H",
+      "1D",
+      "1W",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "markets"
+    },
+    {
+     "t": 15000,
+     "do": "background"
+    },
+    {
+     "t": 25000,
+     "do": "foreground"
+    },
+    {
+     "t": 26500,
+     "do": "checkpoint",
+     "name": "s7d-foreground-1",
+     "shows": [
+      "HEAM",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1000,
+     "screen": "markets"
+    },
+    {
+     "t": 35000,
+     "do": "background"
+    },
+    {
+     "t": 45000,
+     "do": "foreground"
+    },
+    {
+     "t": 46500,
+     "do": "checkpoint",
+     "name": "s7d-foreground-2",
+     "shows": [
+      "HEAM",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1000,
+     "screen": "markets"
+    },
+    {
+     "t": 55000,
+     "do": "background"
+    },
+    {
+     "t": 65000,
+     "do": "foreground"
+    },
+    {
+     "t": 66500,
+     "do": "checkpoint",
+     "name": "s7d-foreground-3",
+     "shows": [
+      "HEAM",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1000,
+     "screen": "markets"
+    }
+   ]
+  },
+  "S7e": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "stream-img",
+   "name": "Kill and relaunch",
+   "durationMs": 80000,
+   "checks": [
+    "E-36"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "checkpoint",
+     "name": "s1-home",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Outdoor",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 7500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 10000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17800,
+     "do": "checkpoint",
+     "name": "s1-grid-mid",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 20000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 22500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 25000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 27500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 30000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 32500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 35500,
+     "do": "kill"
+    },
+    {
+     "t": 37000,
+     "do": "relaunch"
+    },
+    {
+     "t": 38500,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 45000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 47500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 50000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 52500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 55000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 57500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 57800,
+     "do": "checkpoint",
+     "name": "s7e-relaunched-grid-mid",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 60000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 62500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 65000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 67500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 70000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 72500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 76000,
+     "do": "checkpoint",
+     "name": "s7e-after",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1200,
+     "screen": "home"
+    }
+   ],
+   "notes": "Browser: kill closes the page without an ending, relaunch opens the app again in the same browser context."
+  },
+  "S7f": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "stream-img",
+   "name": "Hang",
+   "durationMs": 18000,
+   "checks": [
+    "E-37"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 2000,
+     "do": "tap",
+     "id": "fm-nav-more",
+     "reveal": true
+    },
+    {
+     "t": 3550,
+     "do": "tap",
+     "id": "fm-more-diag",
+     "reveal": true
+    },
+    {
+     "t": 5000,
+     "do": "checkpoint",
+     "name": "s7f-open",
+     "shows": [
+      "Diagnostics",
+      "Block main thread"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "diag"
+    },
+    {
+     "t": 5900,
+     "do": "tap",
+     "id": "fm-diag-hang",
+     "reveal": true
+    },
+    {
+     "t": 9000,
+     "do": "checkpoint",
+     "name": "s7f-after",
+     "shows": [
+      "Diagnostics"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1000,
+     "screen": "diag"
+    }
+   ]
+  },
+  "S7g": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "stream-img",
+   "name": "Failed and slow requests",
+   "durationMs": 16000,
+   "checks": [
+    "E-38"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 2000,
+     "do": "tap",
+     "id": "fm-nav-more",
+     "reveal": true
+    },
+    {
+     "t": 3550,
+     "do": "tap",
+     "id": "fm-more-diag",
+     "reveal": true
+    },
+    {
+     "t": 5000,
+     "do": "checkpoint",
+     "name": "s7g-open",
+     "shows": [
+      "Diagnostics",
+      "Request returning 500"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "diag"
+    },
+    {
+     "t": 5900,
+     "do": "tap",
+     "id": "fm-diag-http500",
+     "reveal": true
+    },
+    {
+     "t": 7500,
+     "do": "tap",
+     "id": "fm-diag-slow",
+     "reveal": true
+    },
+    {
+     "t": 10000,
+     "do": "checkpoint",
+     "name": "s7g-after",
+     "shows": [
+      "Diagnostics"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 2000,
+     "screen": "diag"
+    }
+   ]
+  },
+  "S7h": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "stream-img",
+   "name": "Log burst",
+   "durationMs": 43000,
+   "checks": [
+    "E-39"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 2000,
+     "do": "tap",
+     "id": "fm-nav-more",
+     "reveal": true
+    },
+    {
+     "t": 3550,
+     "do": "tap",
+     "id": "fm-more-diag",
+     "reveal": true
+    },
+    {
+     "t": 5000,
+     "do": "checkpoint",
+     "name": "s7h-open",
+     "shows": [
+      "Diagnostics",
+      "Write 1,000 log lines"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "diag"
+    },
+    {
+     "t": 5900,
+     "do": "tap",
+     "id": "fm-diag-logs",
+     "reveal": true
+    },
+    {
+     "t": 40000,
+     "do": "checkpoint",
+     "name": "s7h-after",
+     "shows": [
+      "Diagnostics"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1000,
+     "screen": "diag"
+    }
+   ]
+  },
+  "S7i": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "buffer",
+   "name": "Remote rule",
+   "durationMs": 90000,
+   "checks": [
+    "E-40"
+   ],
+   "tiers": [
+    "live"
+   ],
+   "launchSettings": {
+    "fmRemote": "1"
+   },
+   "before": [
+    {
+     "do": "createRule",
+     "file": "session-rule.json"
+    }
+   ],
+   "after": [
+    {
+     "do": "deleteRule"
+    }
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "checkpoint",
+     "name": "s1-home",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Outdoor",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 7500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 10000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17800,
+     "do": "checkpoint",
+     "name": "s1-grid-mid",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 20000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 22500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 25000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 27500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 30000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 32500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 35000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37800,
+     "do": "checkpoint",
+     "name": "s1-grid-deep",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 40000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 42500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 45000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 47500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 50000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 52500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 55000,
+     "do": "tap",
+     "id": "fm-home-logo"
+    },
+    {
+     "t": 56500,
+     "do": "checkpoint",
+     "name": "s1-top",
+     "shows": [
+      "Fieldmart",
+      "Today's deals",
+      "Outdoor"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 58000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 59000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 60000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 61000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 62000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 63000,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 64400,
+     "do": "checkpoint",
+     "name": "s1-deals",
+     "shows": [
+      "Fieldmart",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 66000,
+     "do": "tap",
+     "id": "fm-home-chip-3",
+     "reveal": true
+    },
+    {
+     "t": 68000,
+     "do": "tap",
+     "id": "fm-home-chip-7",
+     "reveal": true
+    },
+    {
+     "t": 69800,
+     "do": "checkpoint",
+     "name": "s1-category",
+     "shows": [
+      "Lighting",
+      "Lumen Wall Sconce"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "home"
+    },
+    {
+     "t": 77000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 80000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 83000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 86000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 88000,
+     "do": "checkpoint",
+     "name": "s7i-end",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1200,
+     "screen": "home"
+    }
+   ],
+   "notes": "Live targets only (the rule must reach the SDK over OpAMP). Create the stream rule before launch, delete it after the run."
+  },
+  "S7j": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "stream-img",
+   "name": "Custom data",
+   "durationMs": 15000,
+   "checks": [
+    "E-41"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 2000,
+     "do": "tap",
+     "id": "fm-nav-more",
+     "reveal": true
+    },
+    {
+     "t": 3550,
+     "do": "tap",
+     "id": "fm-more-diag",
+     "reveal": true
+    },
+    {
+     "t": 5000,
+     "do": "checkpoint",
+     "name": "s7j-open",
+     "shows": [
+      "Diagnostics",
+      "Send custom event"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "diag"
+    },
+    {
+     "t": 5900,
+     "do": "tap",
+     "id": "fm-diag-event",
+     "reveal": true
+    },
+    {
+     "t": 7500,
+     "do": "tap",
+     "id": "fm-diag-message",
+     "reveal": true
+    },
+    {
+     "t": 10000,
+     "do": "checkpoint",
+     "name": "s7j-after",
+     "shows": [
+      "Diagnostics"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 800,
+     "screen": "diag"
+    }
+   ]
+  },
+  "S7k": {
+   "launch": "cold",
+   "start": "home",
+   "measured": false,
+   "variant": "stream-img",
+   "name": "Tab close",
+   "durationMs": 50000,
+   "platforms": [
+    "web"
+   ],
+   "ending": "close-now",
+   "checks": [
+    "E-42"
+   ],
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "checkpoint",
+     "name": "s1-home",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Outdoor",
+      "Today's deals"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 7500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 10000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 17800,
+     "do": "checkpoint",
+     "name": "s1-grid-mid",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 20000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 22500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 25000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 27500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 30000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 32500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 35000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 37800,
+     "do": "checkpoint",
+     "name": "s1-grid-deep",
+     "shows": [
+      "Fieldmart",
+      "Search Fieldmart",
+      "Home",
+      "Markets"
+     ],
+     "hides": [],
+     "masked": [],
+     "settleMs": 1400,
+     "list": "fm-home-grid",
+     "screen": "home"
+    },
+    {
+     "t": 40000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 42500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 45000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 47500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    }
+   ],
+   "notes": "The standard ending is replaced by closing the page at once, while a segment is in progress."
+  },
+  "S8": {
+   "name": "Soak",
+   "launch": "cold",
+   "start": "home",
+   "durationMs": 1200000,
+   "measured": true,
+   "steps": [
+    {
+     "t": 0,
+     "do": "waitFor",
+     "id": "fm-home-grid",
+     "timeoutMs": 15000
+    },
+    {
+     "t": 3000,
+     "do": "mark",
+     "name": "s8-l1-home"
+    },
+    {
+     "t": 5000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 8500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 12000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 15500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 18200,
+     "do": "mark",
+     "name": "s8-l1-grid-1"
+    },
+    {
+     "t": 21000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 24500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 28000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 31500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 34200,
+     "do": "mark",
+     "name": "s8-l1-grid-2"
+    },
+    {
+     "t": 36500,
+     "do": "tap",
+     "id": "fm-home-logo"
+    },
+    {
+     "t": 37800,
+     "do": "mark",
+     "name": "s8-l1-home-top"
+    },
+    {
+     "t": 39500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 41500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 43500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 45000,
+     "do": "mark",
+     "name": "s8-l1-deals"
+    },
+    {
+     "t": 48000,
+     "do": "tap",
+     "id": "fm-home-chip-3",
+     "reveal": true
+    },
+    {
+     "t": 50500,
+     "do": "mark",
+     "name": "s8-l1-category"
+    },
+    {
+     "t": 56000,
+     "do": "tap",
+     "id": "fm-home-product-17",
+     "reveal": true
+    },
+    {
+     "t": 59000,
+     "do": "mark",
+     "name": "s8-l1-product"
+    },
+    {
+     "t": 61000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 63500,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 66000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 67500,
+     "do": "mark",
+     "name": "s8-l1-gallery"
+    },
+    {
+     "t": 69500,
+     "do": "tap",
+     "id": "fm-product-size-2",
+     "reveal": true
+    },
+    {
+     "t": 72000,
+     "do": "tap",
+     "id": "fm-product-colour-5",
+     "reveal": true
+    },
+    {
+     "t": 74500,
+     "do": "mark",
+     "name": "s8-l1-variants"
+    },
+    {
+     "t": 76000,
+     "do": "tap",
+     "id": "fm-product-helpful-r17-0",
+     "reveal": true
+    },
+    {
+     "t": 78500,
+     "do": "mark",
+     "name": "s8-l1-reviews-top"
+    },
+    {
+     "t": 80000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 82500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 85000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 87500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 89800,
+     "do": "mark",
+     "name": "s8-l1-reviews"
+    },
+    {
+     "t": 92000,
+     "do": "tap",
+     "id": "fm-product-add"
+    },
+    {
+     "t": 92600,
+     "do": "mark",
+     "name": "s8-l1-added"
+    },
+    {
+     "t": 96000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 97300,
+     "do": "mark",
+     "name": "s8-l1-back-home"
+    },
+    {
+     "t": 100000,
+     "do": "tap",
+     "id": "fm-home-search",
+     "reveal": true
+    },
+    {
+     "t": 102000,
+     "do": "mark",
+     "name": "s8-l1-search"
+    },
+    {
+     "t": 103000,
+     "do": "tap",
+     "id": "fm-search-field"
+    },
+    {
+     "t": 103300,
+     "do": "type",
+     "text": "trail",
+     "into": "fm-search-field",
+     "perCharMs": 120
+    },
+    {
+     "t": 104500,
+     "do": "mark",
+     "name": "s8-l1-search-results"
+    },
+    {
+     "t": 106800,
+     "do": "tap",
+     "id": "fm-search-result-1"
+    },
+    {
+     "t": 108300,
+     "do": "mark",
+     "name": "s8-l1-search-product"
+    },
+    {
+     "t": 112000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 113300,
+     "do": "mark",
+     "name": "s8-l1-search-back"
+    },
+    {
+     "t": 116000,
+     "do": "tap",
+     "id": "fm-nav-back",
+     "reveal": true
+    },
+    {
+     "t": 118000,
+     "do": "mark",
+     "name": "s8-l1-home-again"
+    },
+    {
+     "t": 122000,
+     "do": "tap",
+     "id": "fm-nav-markets"
+    },
+    {
+     "t": 123800,
+     "do": "mark",
+     "name": "s8-l1-markets"
+    },
+    {
+     "t": 131000,
+     "do": "mark",
+     "name": "s8-l1-markets-watch"
+    },
+    {
+     "t": 136000,
+     "do": "tap",
+     "id": "fm-markets-tf-1W"
+    },
+    {
+     "t": 137200,
+     "do": "mark",
+     "name": "s8-l1-markets-1W"
+    },
+    {
+     "t": 139000,
+     "do": "drag",
+     "id": "fm-markets-chart",
+     "from": {
+      "x": 0.15,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.85,
+      "y": 0.5
+     },
+     "durationMs": 3000,
+     "hold": true
+    },
+    {
+     "t": 142100,
+     "do": "mark",
+     "name": "s8-l1-crosshair"
+    },
+    {
+     "t": 142700,
+     "do": "release"
+    },
+    {
+     "t": 144000,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250,
+     "reveal": true
+    },
+    {
+     "t": 146200,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 148400,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 149500,
+     "do": "mark",
+     "name": "s8-l1-watchlist"
+    },
+    {
+     "t": 151500,
+     "do": "tap",
+     "id": "fm-nav-feed"
+    },
+    {
+     "t": 153000,
+     "do": "mark",
+     "name": "s8-l1-feed-top"
+    },
+    {
+     "t": 154500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 155900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 157300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 158700,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 160100,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 161500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 162900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 164300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 166000,
+     "do": "tap",
+     "id": "fm-feed-jump-end"
+    },
+    {
+     "t": 166800,
+     "do": "mark",
+     "name": "s8-l1-feed-end"
+    },
+    {
+     "t": 168500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 169900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 171300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 172400,
+     "do": "mark",
+     "name": "s8-l1-feed-back"
+    },
+    {
+     "t": 174500,
+     "do": "tap",
+     "id": "fm-nav-checkout",
+     "reveal": true
+    },
+    {
+     "t": 175950,
+     "do": "mark",
+     "name": "s8-l1-form-empty"
+    },
+    {
+     "t": 176850,
+     "do": "tap",
+     "id": "fm-checkout-name"
+    },
+    {
+     "t": 177300,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-name",
+     "perCharMs": 120
+    },
+    {
+     "t": 179060,
+     "do": "mark",
+     "name": "s8-l1-name-typed"
+    },
+    {
+     "t": 179960,
+     "do": "tap",
+     "id": "fm-checkout-email"
+    },
+    {
+     "t": 180410,
+     "do": "type",
+     "text": "ada.fieldtest@example.test",
+     "into": "fm-checkout-email",
+     "perCharMs": 120
+    },
+    {
+     "t": 183730,
+     "do": "tap",
+     "id": "fm-checkout-phone"
+    },
+    {
+     "t": 184180,
+     "do": "type",
+     "text": "4155550188",
+     "into": "fm-checkout-phone",
+     "perCharMs": 120
+    },
+    {
+     "t": 185580,
+     "do": "tap",
+     "id": "fm-checkout-account",
+     "reveal": true
+    },
+    {
+     "t": 186930,
+     "do": "tap",
+     "id": "fm-checkout-password",
+     "reveal": true
+    },
+    {
+     "t": 188280,
+     "do": "type",
+     "text": "Zx9!fieldmart-PW",
+     "into": "fm-checkout-password",
+     "perCharMs": 120
+    },
+    {
+     "t": 190400,
+     "do": "mark",
+     "name": "s8-l1-contact-done"
+    },
+    {
+     "t": 191300,
+     "do": "tap",
+     "id": "fm-checkout-address",
+     "reveal": true
+    },
+    {
+     "t": 192650,
+     "do": "type",
+     "text": "77 Sentinel Quay, Flat 12",
+     "into": "fm-checkout-address",
+     "perCharMs": 120
+    },
+    {
+     "t": 195850,
+     "do": "tap",
+     "id": "fm-checkout-city",
+     "reveal": true
+    },
+    {
+     "t": 197200,
+     "do": "type",
+     "text": "Bergen",
+     "into": "fm-checkout-city",
+     "perCharMs": 120
+    },
+    {
+     "t": 198120,
+     "do": "tap",
+     "id": "fm-checkout-postcode",
+     "reveal": true
+    },
+    {
+     "t": 199470,
+     "do": "type",
+     "text": "5003",
+     "into": "fm-checkout-postcode",
+     "perCharMs": 120
+    },
+    {
+     "t": 200150,
+     "do": "tap",
+     "id": "fm-checkout-country",
+     "reveal": true
+    },
+    {
+     "t": 201500,
+     "do": "mark",
+     "name": "s8-l1-country-open"
+    },
+    {
+     "t": 202400,
+     "do": "pick",
+     "id": "fm-checkout-country",
+     "value": "Norway",
+     "durationMs": 3000
+    },
+    {
+     "t": 205600,
+     "do": "tap",
+     "id": "fm-checkout-date",
+     "reveal": true
+    },
+    {
+     "t": 206950,
+     "do": "mark",
+     "name": "s8-l1-date-open"
+    },
+    {
+     "t": 207850,
+     "do": "pick",
+     "id": "fm-checkout-date",
+     "value": "+14d",
+     "durationMs": 2500
+    },
+    {
+     "t": 210550,
+     "do": "tap",
+     "id": "fm-checkout-window-1",
+     "reveal": true
+    },
+    {
+     "t": 211900,
+     "do": "tap",
+     "id": "fm-checkout-door",
+     "reveal": true
+    },
+    {
+     "t": 213250,
+     "do": "tap",
+     "id": "fm-checkout-gift",
+     "reveal": true
+    },
+    {
+     "t": 214600,
+     "do": "tap",
+     "id": "fm-checkout-giftnote",
+     "reveal": true
+    },
+    {
+     "t": 215950,
+     "do": "type",
+     "text": "Happy birthday from all of us at the harbour office. Enjoy!!",
+     "into": "fm-checkout-giftnote",
+     "perCharMs": 120
+    },
+    {
+     "t": 223350,
+     "do": "mark",
+     "name": "s8-l1-delivery-done"
+    },
+    {
+     "t": 224250,
+     "do": "tap",
+     "id": "fm-checkout-card",
+     "reveal": true
+    },
+    {
+     "t": 225600,
+     "do": "type",
+     "text": "5105 1051 0510 5100",
+     "into": "fm-checkout-card",
+     "perCharMs": 120
+    },
+    {
+     "t": 228080,
+     "do": "tap",
+     "id": "fm-checkout-expiry"
+    },
+    {
+     "t": 228530,
+     "do": "type",
+     "text": "12/29",
+     "into": "fm-checkout-expiry",
+     "perCharMs": 120
+    },
+    {
+     "t": 229330,
+     "do": "tap",
+     "id": "fm-checkout-cvv"
+    },
+    {
+     "t": 229780,
+     "do": "type",
+     "text": "7391",
+     "into": "fm-checkout-cvv",
+     "perCharMs": 120
+    },
+    {
+     "t": 230460,
+     "do": "mark",
+     "name": "s8-l1-payment-typed"
+    },
+    {
+     "t": 231360,
+     "do": "tap",
+     "id": "fm-checkout-cardname",
+     "reveal": true
+    },
+    {
+     "t": 232710,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-cardname",
+     "perCharMs": 120
+    },
+    {
+     "t": 234470,
+     "do": "tap",
+     "id": "fm-checkout-savecard",
+     "reveal": true
+    },
+    {
+     "t": 235820,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.02,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "durationMs": 800,
+     "reveal": true
+    },
+    {
+     "t": 237720,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.667,
+      "y": 0.5
+     },
+     "durationMs": 500
+    },
+    {
+     "t": 238420,
+     "do": "mark",
+     "name": "s8-l1-tip"
+    },
+    {
+     "t": 239320,
+     "do": "tap",
+     "id": "fm-checkout-promo",
+     "reveal": true
+    },
+    {
+     "t": 240670,
+     "do": "type",
+     "text": "FIELD1",
+     "into": "fm-checkout-promo",
+     "perCharMs": 120
+    },
+    {
+     "t": 241590,
+     "do": "mark",
+     "name": "s8-l1-promo-open"
+    },
+    {
+     "t": 242790,
+     "do": "tap",
+     "id": "fm-checkout-promo-option-0"
+    },
+    {
+     "t": 243240,
+     "do": "mark",
+     "name": "s8-l1-payment-done"
+    },
+    {
+     "t": 244140,
+     "do": "tap",
+     "id": "fm-checkout-terms",
+     "reveal": true
+    },
+    {
+     "t": 245490,
+     "do": "mark",
+     "name": "s8-l1-terms-open"
+    },
+    {
+     "t": 246390,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 247240,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 248090,
+     "do": "tap",
+     "id": "fm-checkout-terms-agree",
+     "reveal": true
+    },
+    {
+     "t": 249440,
+     "do": "tap",
+     "id": "fm-checkout-menu",
+     "reveal": true
+    },
+    {
+     "t": 250790,
+     "do": "mark",
+     "name": "s8-l1-menu-open"
+    },
+    {
+     "t": 251690,
+     "do": "tap",
+     "id": "fm-checkout-menu-item-2"
+    },
+    {
+     "t": 252140,
+     "do": "tap",
+     "id": "fm-checkout-edit",
+     "reveal": true
+    },
+    {
+     "t": 253490,
+     "do": "mark",
+     "name": "s8-l1-sheet-open"
+    },
+    {
+     "t": 254390,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 254840,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 255290,
+     "do": "tap",
+     "id": "fm-checkout-edit-done"
+    },
+    {
+     "t": 255740,
+     "do": "tap",
+     "id": "fm-checkout-rating-4",
+     "reveal": true
+    },
+    {
+     "t": 257090,
+     "do": "mark",
+     "name": "s8-l1-review"
+    },
+    {
+     "t": 257990,
+     "do": "tap",
+     "id": "fm-checkout-place",
+     "reveal": true
+    },
+    {
+     "t": 259340,
+     "do": "mark",
+     "name": "s8-l1-success"
+    },
+    {
+     "t": 276000,
+     "do": "tap",
+     "id": "fm-nav-home",
+     "reveal": true
+    },
+    {
+     "t": 278000,
+     "do": "mark",
+     "name": "s8-l1-home-end"
+    },
+    {
+     "t": 294000,
+     "do": "checkpoint",
+     "name": "s8-loop-1",
+     "shows": [
+      "Fieldmart",
+      "Home"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391",
+      "LOY-88442211"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 303000,
+     "do": "mark",
+     "name": "s8-l2-home"
+    },
+    {
+     "t": 305000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 308500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 312000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 315500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 318200,
+     "do": "mark",
+     "name": "s8-l2-grid-1"
+    },
+    {
+     "t": 321000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 324500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 328000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 331500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 334200,
+     "do": "mark",
+     "name": "s8-l2-grid-2"
+    },
+    {
+     "t": 336500,
+     "do": "tap",
+     "id": "fm-home-logo"
+    },
+    {
+     "t": 337800,
+     "do": "mark",
+     "name": "s8-l2-home-top"
+    },
+    {
+     "t": 339500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 341500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 343500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 345000,
+     "do": "mark",
+     "name": "s8-l2-deals"
+    },
+    {
+     "t": 348000,
+     "do": "tap",
+     "id": "fm-home-chip-3",
+     "reveal": true
+    },
+    {
+     "t": 350500,
+     "do": "mark",
+     "name": "s8-l2-category"
+    },
+    {
+     "t": 356000,
+     "do": "tap",
+     "id": "fm-home-product-17",
+     "reveal": true
+    },
+    {
+     "t": 359000,
+     "do": "mark",
+     "name": "s8-l2-product"
+    },
+    {
+     "t": 361000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 363500,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 366000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 367500,
+     "do": "mark",
+     "name": "s8-l2-gallery"
+    },
+    {
+     "t": 369500,
+     "do": "tap",
+     "id": "fm-product-size-2",
+     "reveal": true
+    },
+    {
+     "t": 372000,
+     "do": "tap",
+     "id": "fm-product-colour-5",
+     "reveal": true
+    },
+    {
+     "t": 374500,
+     "do": "mark",
+     "name": "s8-l2-variants"
+    },
+    {
+     "t": 376000,
+     "do": "tap",
+     "id": "fm-product-helpful-r17-0",
+     "reveal": true
+    },
+    {
+     "t": 378500,
+     "do": "mark",
+     "name": "s8-l2-reviews-top"
+    },
+    {
+     "t": 380000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 382500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 385000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 387500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 389800,
+     "do": "mark",
+     "name": "s8-l2-reviews"
+    },
+    {
+     "t": 392000,
+     "do": "tap",
+     "id": "fm-product-add"
+    },
+    {
+     "t": 392600,
+     "do": "mark",
+     "name": "s8-l2-added"
+    },
+    {
+     "t": 396000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 397300,
+     "do": "mark",
+     "name": "s8-l2-back-home"
+    },
+    {
+     "t": 400000,
+     "do": "tap",
+     "id": "fm-home-search",
+     "reveal": true
+    },
+    {
+     "t": 402000,
+     "do": "mark",
+     "name": "s8-l2-search"
+    },
+    {
+     "t": 403000,
+     "do": "tap",
+     "id": "fm-search-field"
+    },
+    {
+     "t": 403300,
+     "do": "type",
+     "text": "trail",
+     "into": "fm-search-field",
+     "perCharMs": 120
+    },
+    {
+     "t": 404500,
+     "do": "mark",
+     "name": "s8-l2-search-results"
+    },
+    {
+     "t": 406800,
+     "do": "tap",
+     "id": "fm-search-result-1"
+    },
+    {
+     "t": 408300,
+     "do": "mark",
+     "name": "s8-l2-search-product"
+    },
+    {
+     "t": 412000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 413300,
+     "do": "mark",
+     "name": "s8-l2-search-back"
+    },
+    {
+     "t": 416000,
+     "do": "tap",
+     "id": "fm-nav-back",
+     "reveal": true
+    },
+    {
+     "t": 418000,
+     "do": "mark",
+     "name": "s8-l2-home-again"
+    },
+    {
+     "t": 422000,
+     "do": "tap",
+     "id": "fm-nav-markets"
+    },
+    {
+     "t": 423800,
+     "do": "mark",
+     "name": "s8-l2-markets"
+    },
+    {
+     "t": 431000,
+     "do": "mark",
+     "name": "s8-l2-markets-watch"
+    },
+    {
+     "t": 436000,
+     "do": "tap",
+     "id": "fm-markets-tf-1W"
+    },
+    {
+     "t": 437200,
+     "do": "mark",
+     "name": "s8-l2-markets-1W"
+    },
+    {
+     "t": 439000,
+     "do": "drag",
+     "id": "fm-markets-chart",
+     "from": {
+      "x": 0.15,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.85,
+      "y": 0.5
+     },
+     "durationMs": 3000,
+     "hold": true
+    },
+    {
+     "t": 442100,
+     "do": "mark",
+     "name": "s8-l2-crosshair"
+    },
+    {
+     "t": 442700,
+     "do": "release"
+    },
+    {
+     "t": 444000,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250,
+     "reveal": true
+    },
+    {
+     "t": 446200,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 448400,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 449500,
+     "do": "mark",
+     "name": "s8-l2-watchlist"
+    },
+    {
+     "t": 451500,
+     "do": "tap",
+     "id": "fm-nav-feed"
+    },
+    {
+     "t": 453000,
+     "do": "mark",
+     "name": "s8-l2-feed-top"
+    },
+    {
+     "t": 454500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 455900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 457300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 458700,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 460100,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 461500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 462900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 464300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 466000,
+     "do": "tap",
+     "id": "fm-feed-jump-end"
+    },
+    {
+     "t": 466800,
+     "do": "mark",
+     "name": "s8-l2-feed-end"
+    },
+    {
+     "t": 468500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 469900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 471300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 472400,
+     "do": "mark",
+     "name": "s8-l2-feed-back"
+    },
+    {
+     "t": 474500,
+     "do": "tap",
+     "id": "fm-nav-checkout",
+     "reveal": true
+    },
+    {
+     "t": 475950,
+     "do": "mark",
+     "name": "s8-l2-form-empty"
+    },
+    {
+     "t": 476850,
+     "do": "tap",
+     "id": "fm-checkout-name"
+    },
+    {
+     "t": 477300,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-name",
+     "perCharMs": 120
+    },
+    {
+     "t": 479060,
+     "do": "mark",
+     "name": "s8-l2-name-typed"
+    },
+    {
+     "t": 479960,
+     "do": "tap",
+     "id": "fm-checkout-email"
+    },
+    {
+     "t": 480410,
+     "do": "type",
+     "text": "ada.fieldtest@example.test",
+     "into": "fm-checkout-email",
+     "perCharMs": 120
+    },
+    {
+     "t": 483730,
+     "do": "tap",
+     "id": "fm-checkout-phone"
+    },
+    {
+     "t": 484180,
+     "do": "type",
+     "text": "4155550188",
+     "into": "fm-checkout-phone",
+     "perCharMs": 120
+    },
+    {
+     "t": 485580,
+     "do": "tap",
+     "id": "fm-checkout-account",
+     "reveal": true
+    },
+    {
+     "t": 486930,
+     "do": "tap",
+     "id": "fm-checkout-password",
+     "reveal": true
+    },
+    {
+     "t": 488280,
+     "do": "type",
+     "text": "Zx9!fieldmart-PW",
+     "into": "fm-checkout-password",
+     "perCharMs": 120
+    },
+    {
+     "t": 490400,
+     "do": "mark",
+     "name": "s8-l2-contact-done"
+    },
+    {
+     "t": 491300,
+     "do": "tap",
+     "id": "fm-checkout-address",
+     "reveal": true
+    },
+    {
+     "t": 492650,
+     "do": "type",
+     "text": "77 Sentinel Quay, Flat 12",
+     "into": "fm-checkout-address",
+     "perCharMs": 120
+    },
+    {
+     "t": 495850,
+     "do": "tap",
+     "id": "fm-checkout-city",
+     "reveal": true
+    },
+    {
+     "t": 497200,
+     "do": "type",
+     "text": "Bergen",
+     "into": "fm-checkout-city",
+     "perCharMs": 120
+    },
+    {
+     "t": 498120,
+     "do": "tap",
+     "id": "fm-checkout-postcode",
+     "reveal": true
+    },
+    {
+     "t": 499470,
+     "do": "type",
+     "text": "5003",
+     "into": "fm-checkout-postcode",
+     "perCharMs": 120
+    },
+    {
+     "t": 500150,
+     "do": "tap",
+     "id": "fm-checkout-country",
+     "reveal": true
+    },
+    {
+     "t": 501500,
+     "do": "mark",
+     "name": "s8-l2-country-open"
+    },
+    {
+     "t": 502400,
+     "do": "pick",
+     "id": "fm-checkout-country",
+     "value": "Norway",
+     "durationMs": 3000
+    },
+    {
+     "t": 505600,
+     "do": "tap",
+     "id": "fm-checkout-date",
+     "reveal": true
+    },
+    {
+     "t": 506950,
+     "do": "mark",
+     "name": "s8-l2-date-open"
+    },
+    {
+     "t": 507850,
+     "do": "pick",
+     "id": "fm-checkout-date",
+     "value": "+14d",
+     "durationMs": 2500
+    },
+    {
+     "t": 510550,
+     "do": "tap",
+     "id": "fm-checkout-window-1",
+     "reveal": true
+    },
+    {
+     "t": 511900,
+     "do": "tap",
+     "id": "fm-checkout-door",
+     "reveal": true
+    },
+    {
+     "t": 513250,
+     "do": "tap",
+     "id": "fm-checkout-gift",
+     "reveal": true
+    },
+    {
+     "t": 514600,
+     "do": "tap",
+     "id": "fm-checkout-giftnote",
+     "reveal": true
+    },
+    {
+     "t": 515950,
+     "do": "type",
+     "text": "Happy birthday from all of us at the harbour office. Enjoy!!",
+     "into": "fm-checkout-giftnote",
+     "perCharMs": 120
+    },
+    {
+     "t": 523350,
+     "do": "mark",
+     "name": "s8-l2-delivery-done"
+    },
+    {
+     "t": 524250,
+     "do": "tap",
+     "id": "fm-checkout-card",
+     "reveal": true
+    },
+    {
+     "t": 525600,
+     "do": "type",
+     "text": "5105 1051 0510 5100",
+     "into": "fm-checkout-card",
+     "perCharMs": 120
+    },
+    {
+     "t": 528080,
+     "do": "tap",
+     "id": "fm-checkout-expiry"
+    },
+    {
+     "t": 528530,
+     "do": "type",
+     "text": "12/29",
+     "into": "fm-checkout-expiry",
+     "perCharMs": 120
+    },
+    {
+     "t": 529330,
+     "do": "tap",
+     "id": "fm-checkout-cvv"
+    },
+    {
+     "t": 529780,
+     "do": "type",
+     "text": "7391",
+     "into": "fm-checkout-cvv",
+     "perCharMs": 120
+    },
+    {
+     "t": 530460,
+     "do": "mark",
+     "name": "s8-l2-payment-typed"
+    },
+    {
+     "t": 531360,
+     "do": "tap",
+     "id": "fm-checkout-cardname",
+     "reveal": true
+    },
+    {
+     "t": 532710,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-cardname",
+     "perCharMs": 120
+    },
+    {
+     "t": 534470,
+     "do": "tap",
+     "id": "fm-checkout-savecard",
+     "reveal": true
+    },
+    {
+     "t": 535820,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.02,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "durationMs": 800,
+     "reveal": true
+    },
+    {
+     "t": 537720,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.667,
+      "y": 0.5
+     },
+     "durationMs": 500
+    },
+    {
+     "t": 538420,
+     "do": "mark",
+     "name": "s8-l2-tip"
+    },
+    {
+     "t": 539320,
+     "do": "tap",
+     "id": "fm-checkout-promo",
+     "reveal": true
+    },
+    {
+     "t": 540670,
+     "do": "type",
+     "text": "FIELD1",
+     "into": "fm-checkout-promo",
+     "perCharMs": 120
+    },
+    {
+     "t": 541590,
+     "do": "mark",
+     "name": "s8-l2-promo-open"
+    },
+    {
+     "t": 542790,
+     "do": "tap",
+     "id": "fm-checkout-promo-option-0"
+    },
+    {
+     "t": 543240,
+     "do": "mark",
+     "name": "s8-l2-payment-done"
+    },
+    {
+     "t": 544140,
+     "do": "tap",
+     "id": "fm-checkout-terms",
+     "reveal": true
+    },
+    {
+     "t": 545490,
+     "do": "mark",
+     "name": "s8-l2-terms-open"
+    },
+    {
+     "t": 546390,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 547240,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 548090,
+     "do": "tap",
+     "id": "fm-checkout-terms-agree",
+     "reveal": true
+    },
+    {
+     "t": 549440,
+     "do": "tap",
+     "id": "fm-checkout-menu",
+     "reveal": true
+    },
+    {
+     "t": 550790,
+     "do": "mark",
+     "name": "s8-l2-menu-open"
+    },
+    {
+     "t": 551690,
+     "do": "tap",
+     "id": "fm-checkout-menu-item-2"
+    },
+    {
+     "t": 552140,
+     "do": "tap",
+     "id": "fm-checkout-edit",
+     "reveal": true
+    },
+    {
+     "t": 553490,
+     "do": "mark",
+     "name": "s8-l2-sheet-open"
+    },
+    {
+     "t": 554390,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 554840,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 555290,
+     "do": "tap",
+     "id": "fm-checkout-edit-done"
+    },
+    {
+     "t": 555740,
+     "do": "tap",
+     "id": "fm-checkout-rating-4",
+     "reveal": true
+    },
+    {
+     "t": 557090,
+     "do": "mark",
+     "name": "s8-l2-review"
+    },
+    {
+     "t": 557990,
+     "do": "tap",
+     "id": "fm-checkout-place",
+     "reveal": true
+    },
+    {
+     "t": 559340,
+     "do": "mark",
+     "name": "s8-l2-success"
+    },
+    {
+     "t": 576000,
+     "do": "tap",
+     "id": "fm-nav-home",
+     "reveal": true
+    },
+    {
+     "t": 578000,
+     "do": "mark",
+     "name": "s8-l2-home-end"
+    },
+    {
+     "t": 594000,
+     "do": "checkpoint",
+     "name": "s8-loop-2",
+     "shows": [
+      "Fieldmart",
+      "Home"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391",
+      "LOY-88442211"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 603000,
+     "do": "mark",
+     "name": "s8-l3-home"
+    },
+    {
+     "t": 605000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 608500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 612000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 615500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 618200,
+     "do": "mark",
+     "name": "s8-l3-grid-1"
+    },
+    {
+     "t": 621000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 624500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 628000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 631500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 634200,
+     "do": "mark",
+     "name": "s8-l3-grid-2"
+    },
+    {
+     "t": 636500,
+     "do": "tap",
+     "id": "fm-home-logo"
+    },
+    {
+     "t": 637800,
+     "do": "mark",
+     "name": "s8-l3-home-top"
+    },
+    {
+     "t": 639500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 641500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 643500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 645000,
+     "do": "mark",
+     "name": "s8-l3-deals"
+    },
+    {
+     "t": 648000,
+     "do": "tap",
+     "id": "fm-home-chip-3",
+     "reveal": true
+    },
+    {
+     "t": 650500,
+     "do": "mark",
+     "name": "s8-l3-category"
+    },
+    {
+     "t": 656000,
+     "do": "tap",
+     "id": "fm-home-product-17",
+     "reveal": true
+    },
+    {
+     "t": 659000,
+     "do": "mark",
+     "name": "s8-l3-product"
+    },
+    {
+     "t": 661000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 663500,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 666000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 667500,
+     "do": "mark",
+     "name": "s8-l3-gallery"
+    },
+    {
+     "t": 669500,
+     "do": "tap",
+     "id": "fm-product-size-2",
+     "reveal": true
+    },
+    {
+     "t": 672000,
+     "do": "tap",
+     "id": "fm-product-colour-5",
+     "reveal": true
+    },
+    {
+     "t": 674500,
+     "do": "mark",
+     "name": "s8-l3-variants"
+    },
+    {
+     "t": 676000,
+     "do": "tap",
+     "id": "fm-product-helpful-r17-0",
+     "reveal": true
+    },
+    {
+     "t": 678500,
+     "do": "mark",
+     "name": "s8-l3-reviews-top"
+    },
+    {
+     "t": 680000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 682500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 685000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 687500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 689800,
+     "do": "mark",
+     "name": "s8-l3-reviews"
+    },
+    {
+     "t": 692000,
+     "do": "tap",
+     "id": "fm-product-add"
+    },
+    {
+     "t": 692600,
+     "do": "mark",
+     "name": "s8-l3-added"
+    },
+    {
+     "t": 696000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 697300,
+     "do": "mark",
+     "name": "s8-l3-back-home"
+    },
+    {
+     "t": 700000,
+     "do": "tap",
+     "id": "fm-home-search",
+     "reveal": true
+    },
+    {
+     "t": 702000,
+     "do": "mark",
+     "name": "s8-l3-search"
+    },
+    {
+     "t": 703000,
+     "do": "tap",
+     "id": "fm-search-field"
+    },
+    {
+     "t": 703300,
+     "do": "type",
+     "text": "trail",
+     "into": "fm-search-field",
+     "perCharMs": 120
+    },
+    {
+     "t": 704500,
+     "do": "mark",
+     "name": "s8-l3-search-results"
+    },
+    {
+     "t": 706800,
+     "do": "tap",
+     "id": "fm-search-result-1"
+    },
+    {
+     "t": 708300,
+     "do": "mark",
+     "name": "s8-l3-search-product"
+    },
+    {
+     "t": 712000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 713300,
+     "do": "mark",
+     "name": "s8-l3-search-back"
+    },
+    {
+     "t": 716000,
+     "do": "tap",
+     "id": "fm-nav-back",
+     "reveal": true
+    },
+    {
+     "t": 718000,
+     "do": "mark",
+     "name": "s8-l3-home-again"
+    },
+    {
+     "t": 722000,
+     "do": "tap",
+     "id": "fm-nav-markets"
+    },
+    {
+     "t": 723800,
+     "do": "mark",
+     "name": "s8-l3-markets"
+    },
+    {
+     "t": 731000,
+     "do": "mark",
+     "name": "s8-l3-markets-watch"
+    },
+    {
+     "t": 736000,
+     "do": "tap",
+     "id": "fm-markets-tf-1W"
+    },
+    {
+     "t": 737200,
+     "do": "mark",
+     "name": "s8-l3-markets-1W"
+    },
+    {
+     "t": 739000,
+     "do": "drag",
+     "id": "fm-markets-chart",
+     "from": {
+      "x": 0.15,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.85,
+      "y": 0.5
+     },
+     "durationMs": 3000,
+     "hold": true
+    },
+    {
+     "t": 742100,
+     "do": "mark",
+     "name": "s8-l3-crosshair"
+    },
+    {
+     "t": 742700,
+     "do": "release"
+    },
+    {
+     "t": 744000,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250,
+     "reveal": true
+    },
+    {
+     "t": 746200,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 748400,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 749500,
+     "do": "mark",
+     "name": "s8-l3-watchlist"
+    },
+    {
+     "t": 751500,
+     "do": "tap",
+     "id": "fm-nav-feed"
+    },
+    {
+     "t": 753000,
+     "do": "mark",
+     "name": "s8-l3-feed-top"
+    },
+    {
+     "t": 754500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 755900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 757300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 758700,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 760100,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 761500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 762900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 764300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 766000,
+     "do": "tap",
+     "id": "fm-feed-jump-end"
+    },
+    {
+     "t": 766800,
+     "do": "mark",
+     "name": "s8-l3-feed-end"
+    },
+    {
+     "t": 768500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 769900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 771300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 772400,
+     "do": "mark",
+     "name": "s8-l3-feed-back"
+    },
+    {
+     "t": 774500,
+     "do": "tap",
+     "id": "fm-nav-checkout",
+     "reveal": true
+    },
+    {
+     "t": 775950,
+     "do": "mark",
+     "name": "s8-l3-form-empty"
+    },
+    {
+     "t": 776850,
+     "do": "tap",
+     "id": "fm-checkout-name"
+    },
+    {
+     "t": 777300,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-name",
+     "perCharMs": 120
+    },
+    {
+     "t": 779060,
+     "do": "mark",
+     "name": "s8-l3-name-typed"
+    },
+    {
+     "t": 779960,
+     "do": "tap",
+     "id": "fm-checkout-email"
+    },
+    {
+     "t": 780410,
+     "do": "type",
+     "text": "ada.fieldtest@example.test",
+     "into": "fm-checkout-email",
+     "perCharMs": 120
+    },
+    {
+     "t": 783730,
+     "do": "tap",
+     "id": "fm-checkout-phone"
+    },
+    {
+     "t": 784180,
+     "do": "type",
+     "text": "4155550188",
+     "into": "fm-checkout-phone",
+     "perCharMs": 120
+    },
+    {
+     "t": 785580,
+     "do": "tap",
+     "id": "fm-checkout-account",
+     "reveal": true
+    },
+    {
+     "t": 786930,
+     "do": "tap",
+     "id": "fm-checkout-password",
+     "reveal": true
+    },
+    {
+     "t": 788280,
+     "do": "type",
+     "text": "Zx9!fieldmart-PW",
+     "into": "fm-checkout-password",
+     "perCharMs": 120
+    },
+    {
+     "t": 790400,
+     "do": "mark",
+     "name": "s8-l3-contact-done"
+    },
+    {
+     "t": 791300,
+     "do": "tap",
+     "id": "fm-checkout-address",
+     "reveal": true
+    },
+    {
+     "t": 792650,
+     "do": "type",
+     "text": "77 Sentinel Quay, Flat 12",
+     "into": "fm-checkout-address",
+     "perCharMs": 120
+    },
+    {
+     "t": 795850,
+     "do": "tap",
+     "id": "fm-checkout-city",
+     "reveal": true
+    },
+    {
+     "t": 797200,
+     "do": "type",
+     "text": "Bergen",
+     "into": "fm-checkout-city",
+     "perCharMs": 120
+    },
+    {
+     "t": 798120,
+     "do": "tap",
+     "id": "fm-checkout-postcode",
+     "reveal": true
+    },
+    {
+     "t": 799470,
+     "do": "type",
+     "text": "5003",
+     "into": "fm-checkout-postcode",
+     "perCharMs": 120
+    },
+    {
+     "t": 800150,
+     "do": "tap",
+     "id": "fm-checkout-country",
+     "reveal": true
+    },
+    {
+     "t": 801500,
+     "do": "mark",
+     "name": "s8-l3-country-open"
+    },
+    {
+     "t": 802400,
+     "do": "pick",
+     "id": "fm-checkout-country",
+     "value": "Norway",
+     "durationMs": 3000
+    },
+    {
+     "t": 805600,
+     "do": "tap",
+     "id": "fm-checkout-date",
+     "reveal": true
+    },
+    {
+     "t": 806950,
+     "do": "mark",
+     "name": "s8-l3-date-open"
+    },
+    {
+     "t": 807850,
+     "do": "pick",
+     "id": "fm-checkout-date",
+     "value": "+14d",
+     "durationMs": 2500
+    },
+    {
+     "t": 810550,
+     "do": "tap",
+     "id": "fm-checkout-window-1",
+     "reveal": true
+    },
+    {
+     "t": 811900,
+     "do": "tap",
+     "id": "fm-checkout-door",
+     "reveal": true
+    },
+    {
+     "t": 813250,
+     "do": "tap",
+     "id": "fm-checkout-gift",
+     "reveal": true
+    },
+    {
+     "t": 814600,
+     "do": "tap",
+     "id": "fm-checkout-giftnote",
+     "reveal": true
+    },
+    {
+     "t": 815950,
+     "do": "type",
+     "text": "Happy birthday from all of us at the harbour office. Enjoy!!",
+     "into": "fm-checkout-giftnote",
+     "perCharMs": 120
+    },
+    {
+     "t": 823350,
+     "do": "mark",
+     "name": "s8-l3-delivery-done"
+    },
+    {
+     "t": 824250,
+     "do": "tap",
+     "id": "fm-checkout-card",
+     "reveal": true
+    },
+    {
+     "t": 825600,
+     "do": "type",
+     "text": "5105 1051 0510 5100",
+     "into": "fm-checkout-card",
+     "perCharMs": 120
+    },
+    {
+     "t": 828080,
+     "do": "tap",
+     "id": "fm-checkout-expiry"
+    },
+    {
+     "t": 828530,
+     "do": "type",
+     "text": "12/29",
+     "into": "fm-checkout-expiry",
+     "perCharMs": 120
+    },
+    {
+     "t": 829330,
+     "do": "tap",
+     "id": "fm-checkout-cvv"
+    },
+    {
+     "t": 829780,
+     "do": "type",
+     "text": "7391",
+     "into": "fm-checkout-cvv",
+     "perCharMs": 120
+    },
+    {
+     "t": 830460,
+     "do": "mark",
+     "name": "s8-l3-payment-typed"
+    },
+    {
+     "t": 831360,
+     "do": "tap",
+     "id": "fm-checkout-cardname",
+     "reveal": true
+    },
+    {
+     "t": 832710,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-cardname",
+     "perCharMs": 120
+    },
+    {
+     "t": 834470,
+     "do": "tap",
+     "id": "fm-checkout-savecard",
+     "reveal": true
+    },
+    {
+     "t": 835820,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.02,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "durationMs": 800,
+     "reveal": true
+    },
+    {
+     "t": 837720,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.667,
+      "y": 0.5
+     },
+     "durationMs": 500
+    },
+    {
+     "t": 838420,
+     "do": "mark",
+     "name": "s8-l3-tip"
+    },
+    {
+     "t": 839320,
+     "do": "tap",
+     "id": "fm-checkout-promo",
+     "reveal": true
+    },
+    {
+     "t": 840670,
+     "do": "type",
+     "text": "FIELD1",
+     "into": "fm-checkout-promo",
+     "perCharMs": 120
+    },
+    {
+     "t": 841590,
+     "do": "mark",
+     "name": "s8-l3-promo-open"
+    },
+    {
+     "t": 842790,
+     "do": "tap",
+     "id": "fm-checkout-promo-option-0"
+    },
+    {
+     "t": 843240,
+     "do": "mark",
+     "name": "s8-l3-payment-done"
+    },
+    {
+     "t": 844140,
+     "do": "tap",
+     "id": "fm-checkout-terms",
+     "reveal": true
+    },
+    {
+     "t": 845490,
+     "do": "mark",
+     "name": "s8-l3-terms-open"
+    },
+    {
+     "t": 846390,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 847240,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 848090,
+     "do": "tap",
+     "id": "fm-checkout-terms-agree",
+     "reveal": true
+    },
+    {
+     "t": 849440,
+     "do": "tap",
+     "id": "fm-checkout-menu",
+     "reveal": true
+    },
+    {
+     "t": 850790,
+     "do": "mark",
+     "name": "s8-l3-menu-open"
+    },
+    {
+     "t": 851690,
+     "do": "tap",
+     "id": "fm-checkout-menu-item-2"
+    },
+    {
+     "t": 852140,
+     "do": "tap",
+     "id": "fm-checkout-edit",
+     "reveal": true
+    },
+    {
+     "t": 853490,
+     "do": "mark",
+     "name": "s8-l3-sheet-open"
+    },
+    {
+     "t": 854390,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 854840,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 855290,
+     "do": "tap",
+     "id": "fm-checkout-edit-done"
+    },
+    {
+     "t": 855740,
+     "do": "tap",
+     "id": "fm-checkout-rating-4",
+     "reveal": true
+    },
+    {
+     "t": 857090,
+     "do": "mark",
+     "name": "s8-l3-review"
+    },
+    {
+     "t": 857990,
+     "do": "tap",
+     "id": "fm-checkout-place",
+     "reveal": true
+    },
+    {
+     "t": 859340,
+     "do": "mark",
+     "name": "s8-l3-success"
+    },
+    {
+     "t": 876000,
+     "do": "tap",
+     "id": "fm-nav-home",
+     "reveal": true
+    },
+    {
+     "t": 878000,
+     "do": "mark",
+     "name": "s8-l3-home-end"
+    },
+    {
+     "t": 894000,
+     "do": "checkpoint",
+     "name": "s8-loop-3",
+     "shows": [
+      "Fieldmart",
+      "Home"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391",
+      "LOY-88442211"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    },
+    {
+     "t": 903000,
+     "do": "mark",
+     "name": "s8-l4-home"
+    },
+    {
+     "t": 905000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 908500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 912000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 915500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 918200,
+     "do": "mark",
+     "name": "s8-l4-grid-1"
+    },
+    {
+     "t": 921000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 924500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 928000,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 931500,
+     "do": "fling",
+     "id": "fm-home-grid",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 934200,
+     "do": "mark",
+     "name": "s8-l4-grid-2"
+    },
+    {
+     "t": 936500,
+     "do": "tap",
+     "id": "fm-home-logo"
+    },
+    {
+     "t": 937800,
+     "do": "mark",
+     "name": "s8-l4-home-top"
+    },
+    {
+     "t": 939500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 941500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 943500,
+     "do": "fling",
+     "id": "fm-home-deals",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 945000,
+     "do": "mark",
+     "name": "s8-l4-deals"
+    },
+    {
+     "t": 948000,
+     "do": "tap",
+     "id": "fm-home-chip-3",
+     "reveal": true
+    },
+    {
+     "t": 950500,
+     "do": "mark",
+     "name": "s8-l4-category"
+    },
+    {
+     "t": 956000,
+     "do": "tap",
+     "id": "fm-home-product-17",
+     "reveal": true
+    },
+    {
+     "t": 959000,
+     "do": "mark",
+     "name": "s8-l4-product"
+    },
+    {
+     "t": 961000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 963500,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 966000,
+     "do": "fling",
+     "id": "fm-product-gallery",
+     "dir": "left",
+     "distance": 0.6,
+     "durationMs": 200
+    },
+    {
+     "t": 967500,
+     "do": "mark",
+     "name": "s8-l4-gallery"
+    },
+    {
+     "t": 969500,
+     "do": "tap",
+     "id": "fm-product-size-2",
+     "reveal": true
+    },
+    {
+     "t": 972000,
+     "do": "tap",
+     "id": "fm-product-colour-5",
+     "reveal": true
+    },
+    {
+     "t": 974500,
+     "do": "mark",
+     "name": "s8-l4-variants"
+    },
+    {
+     "t": 976000,
+     "do": "tap",
+     "id": "fm-product-helpful-r17-0",
+     "reveal": true
+    },
+    {
+     "t": 978500,
+     "do": "mark",
+     "name": "s8-l4-reviews-top"
+    },
+    {
+     "t": 980000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 982500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 985000,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 987500,
+     "do": "fling",
+     "id": "fm-product-reviews",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 989800,
+     "do": "mark",
+     "name": "s8-l4-reviews"
+    },
+    {
+     "t": 992000,
+     "do": "tap",
+     "id": "fm-product-add"
+    },
+    {
+     "t": 992600,
+     "do": "mark",
+     "name": "s8-l4-added"
+    },
+    {
+     "t": 996000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 997300,
+     "do": "mark",
+     "name": "s8-l4-back-home"
+    },
+    {
+     "t": 1000000,
+     "do": "tap",
+     "id": "fm-home-search",
+     "reveal": true
+    },
+    {
+     "t": 1002000,
+     "do": "mark",
+     "name": "s8-l4-search"
+    },
+    {
+     "t": 1003000,
+     "do": "tap",
+     "id": "fm-search-field"
+    },
+    {
+     "t": 1003300,
+     "do": "type",
+     "text": "trail",
+     "into": "fm-search-field",
+     "perCharMs": 120
+    },
+    {
+     "t": 1004500,
+     "do": "mark",
+     "name": "s8-l4-search-results"
+    },
+    {
+     "t": 1006800,
+     "do": "tap",
+     "id": "fm-search-result-1"
+    },
+    {
+     "t": 1008300,
+     "do": "mark",
+     "name": "s8-l4-search-product"
+    },
+    {
+     "t": 1012000,
+     "do": "tap",
+     "id": "fm-nav-back"
+    },
+    {
+     "t": 1013300,
+     "do": "mark",
+     "name": "s8-l4-search-back"
+    },
+    {
+     "t": 1016000,
+     "do": "tap",
+     "id": "fm-nav-back",
+     "reveal": true
+    },
+    {
+     "t": 1018000,
+     "do": "mark",
+     "name": "s8-l4-home-again"
+    },
+    {
+     "t": 1022000,
+     "do": "tap",
+     "id": "fm-nav-markets"
+    },
+    {
+     "t": 1023800,
+     "do": "mark",
+     "name": "s8-l4-markets"
+    },
+    {
+     "t": 1031000,
+     "do": "mark",
+     "name": "s8-l4-markets-watch"
+    },
+    {
+     "t": 1036000,
+     "do": "tap",
+     "id": "fm-markets-tf-1W"
+    },
+    {
+     "t": 1037200,
+     "do": "mark",
+     "name": "s8-l4-markets-1W"
+    },
+    {
+     "t": 1039000,
+     "do": "drag",
+     "id": "fm-markets-chart",
+     "from": {
+      "x": 0.15,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.85,
+      "y": 0.5
+     },
+     "durationMs": 3000,
+     "hold": true
+    },
+    {
+     "t": 1042100,
+     "do": "mark",
+     "name": "s8-l4-crosshair"
+    },
+    {
+     "t": 1042700,
+     "do": "release"
+    },
+    {
+     "t": 1044000,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250,
+     "reveal": true
+    },
+    {
+     "t": 1046200,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1048400,
+     "do": "fling",
+     "id": "fm-markets-watchlist",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1049500,
+     "do": "mark",
+     "name": "s8-l4-watchlist"
+    },
+    {
+     "t": 1051500,
+     "do": "tap",
+     "id": "fm-nav-feed"
+    },
+    {
+     "t": 1053000,
+     "do": "mark",
+     "name": "s8-l4-feed-top"
+    },
+    {
+     "t": 1054500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1055900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1057300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1058700,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1060100,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1061500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1062900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1064300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1066000,
+     "do": "tap",
+     "id": "fm-feed-jump-end"
+    },
+    {
+     "t": 1066800,
+     "do": "mark",
+     "name": "s8-l4-feed-end"
+    },
+    {
+     "t": 1068500,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1069900,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1071300,
+     "do": "fling",
+     "id": "fm-feed-list",
+     "dir": "down",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1072400,
+     "do": "mark",
+     "name": "s8-l4-feed-back"
+    },
+    {
+     "t": 1074500,
+     "do": "tap",
+     "id": "fm-nav-checkout",
+     "reveal": true
+    },
+    {
+     "t": 1075950,
+     "do": "mark",
+     "name": "s8-l4-form-empty"
+    },
+    {
+     "t": 1076850,
+     "do": "tap",
+     "id": "fm-checkout-name"
+    },
+    {
+     "t": 1077300,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-name",
+     "perCharMs": 120
+    },
+    {
+     "t": 1079060,
+     "do": "mark",
+     "name": "s8-l4-name-typed"
+    },
+    {
+     "t": 1079960,
+     "do": "tap",
+     "id": "fm-checkout-email"
+    },
+    {
+     "t": 1080410,
+     "do": "type",
+     "text": "ada.fieldtest@example.test",
+     "into": "fm-checkout-email",
+     "perCharMs": 120
+    },
+    {
+     "t": 1083730,
+     "do": "tap",
+     "id": "fm-checkout-phone"
+    },
+    {
+     "t": 1084180,
+     "do": "type",
+     "text": "4155550188",
+     "into": "fm-checkout-phone",
+     "perCharMs": 120
+    },
+    {
+     "t": 1085580,
+     "do": "tap",
+     "id": "fm-checkout-account",
+     "reveal": true
+    },
+    {
+     "t": 1086930,
+     "do": "tap",
+     "id": "fm-checkout-password",
+     "reveal": true
+    },
+    {
+     "t": 1088280,
+     "do": "type",
+     "text": "Zx9!fieldmart-PW",
+     "into": "fm-checkout-password",
+     "perCharMs": 120
+    },
+    {
+     "t": 1090400,
+     "do": "mark",
+     "name": "s8-l4-contact-done"
+    },
+    {
+     "t": 1091300,
+     "do": "tap",
+     "id": "fm-checkout-address",
+     "reveal": true
+    },
+    {
+     "t": 1092650,
+     "do": "type",
+     "text": "77 Sentinel Quay, Flat 12",
+     "into": "fm-checkout-address",
+     "perCharMs": 120
+    },
+    {
+     "t": 1095850,
+     "do": "tap",
+     "id": "fm-checkout-city",
+     "reveal": true
+    },
+    {
+     "t": 1097200,
+     "do": "type",
+     "text": "Bergen",
+     "into": "fm-checkout-city",
+     "perCharMs": 120
+    },
+    {
+     "t": 1098120,
+     "do": "tap",
+     "id": "fm-checkout-postcode",
+     "reveal": true
+    },
+    {
+     "t": 1099470,
+     "do": "type",
+     "text": "5003",
+     "into": "fm-checkout-postcode",
+     "perCharMs": 120
+    },
+    {
+     "t": 1100150,
+     "do": "tap",
+     "id": "fm-checkout-country",
+     "reveal": true
+    },
+    {
+     "t": 1101500,
+     "do": "mark",
+     "name": "s8-l4-country-open"
+    },
+    {
+     "t": 1102400,
+     "do": "pick",
+     "id": "fm-checkout-country",
+     "value": "Norway",
+     "durationMs": 3000
+    },
+    {
+     "t": 1105600,
+     "do": "tap",
+     "id": "fm-checkout-date",
+     "reveal": true
+    },
+    {
+     "t": 1106950,
+     "do": "mark",
+     "name": "s8-l4-date-open"
+    },
+    {
+     "t": 1107850,
+     "do": "pick",
+     "id": "fm-checkout-date",
+     "value": "+14d",
+     "durationMs": 2500
+    },
+    {
+     "t": 1110550,
+     "do": "tap",
+     "id": "fm-checkout-window-1",
+     "reveal": true
+    },
+    {
+     "t": 1111900,
+     "do": "tap",
+     "id": "fm-checkout-door",
+     "reveal": true
+    },
+    {
+     "t": 1113250,
+     "do": "tap",
+     "id": "fm-checkout-gift",
+     "reveal": true
+    },
+    {
+     "t": 1114600,
+     "do": "tap",
+     "id": "fm-checkout-giftnote",
+     "reveal": true
+    },
+    {
+     "t": 1115950,
+     "do": "type",
+     "text": "Happy birthday from all of us at the harbour office. Enjoy!!",
+     "into": "fm-checkout-giftnote",
+     "perCharMs": 120
+    },
+    {
+     "t": 1123350,
+     "do": "mark",
+     "name": "s8-l4-delivery-done"
+    },
+    {
+     "t": 1124250,
+     "do": "tap",
+     "id": "fm-checkout-card",
+     "reveal": true
+    },
+    {
+     "t": 1125600,
+     "do": "type",
+     "text": "5105 1051 0510 5100",
+     "into": "fm-checkout-card",
+     "perCharMs": 120
+    },
+    {
+     "t": 1128080,
+     "do": "tap",
+     "id": "fm-checkout-expiry"
+    },
+    {
+     "t": 1128530,
+     "do": "type",
+     "text": "12/29",
+     "into": "fm-checkout-expiry",
+     "perCharMs": 120
+    },
+    {
+     "t": 1129330,
+     "do": "tap",
+     "id": "fm-checkout-cvv"
+    },
+    {
+     "t": 1129780,
+     "do": "type",
+     "text": "7391",
+     "into": "fm-checkout-cvv",
+     "perCharMs": 120
+    },
+    {
+     "t": 1130460,
+     "do": "mark",
+     "name": "s8-l4-payment-typed"
+    },
+    {
+     "t": 1131360,
+     "do": "tap",
+     "id": "fm-checkout-cardname",
+     "reveal": true
+    },
+    {
+     "t": 1132710,
+     "do": "type",
+     "text": "Ada Fieldtest",
+     "into": "fm-checkout-cardname",
+     "perCharMs": 120
+    },
+    {
+     "t": 1134470,
+     "do": "tap",
+     "id": "fm-checkout-savecard",
+     "reveal": true
+    },
+    {
+     "t": 1135820,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.02,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "durationMs": 800,
+     "reveal": true
+    },
+    {
+     "t": 1137720,
+     "do": "drag",
+     "id": "fm-checkout-tip",
+     "from": {
+      "x": 0.5,
+      "y": 0.5
+     },
+     "to": {
+      "x": 0.667,
+      "y": 0.5
+     },
+     "durationMs": 500
+    },
+    {
+     "t": 1138420,
+     "do": "mark",
+     "name": "s8-l4-tip"
+    },
+    {
+     "t": 1139320,
+     "do": "tap",
+     "id": "fm-checkout-promo",
+     "reveal": true
+    },
+    {
+     "t": 1140670,
+     "do": "type",
+     "text": "FIELD1",
+     "into": "fm-checkout-promo",
+     "perCharMs": 120
+    },
+    {
+     "t": 1141590,
+     "do": "mark",
+     "name": "s8-l4-promo-open"
+    },
+    {
+     "t": 1142790,
+     "do": "tap",
+     "id": "fm-checkout-promo-option-0"
+    },
+    {
+     "t": 1143240,
+     "do": "mark",
+     "name": "s8-l4-payment-done"
+    },
+    {
+     "t": 1144140,
+     "do": "tap",
+     "id": "fm-checkout-terms",
+     "reveal": true
+    },
+    {
+     "t": 1145490,
+     "do": "mark",
+     "name": "s8-l4-terms-open"
+    },
+    {
+     "t": 1146390,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1147240,
+     "do": "fling",
+     "id": "fm-checkout-terms-text",
+     "dir": "up",
+     "distance": 0.6,
+     "durationMs": 250
+    },
+    {
+     "t": 1148090,
+     "do": "tap",
+     "id": "fm-checkout-terms-agree",
+     "reveal": true
+    },
+    {
+     "t": 1149440,
+     "do": "tap",
+     "id": "fm-checkout-menu",
+     "reveal": true
+    },
+    {
+     "t": 1150790,
+     "do": "mark",
+     "name": "s8-l4-menu-open"
+    },
+    {
+     "t": 1151690,
+     "do": "tap",
+     "id": "fm-checkout-menu-item-2"
+    },
+    {
+     "t": 1152140,
+     "do": "tap",
+     "id": "fm-checkout-edit",
+     "reveal": true
+    },
+    {
+     "t": 1153490,
+     "do": "mark",
+     "name": "s8-l4-sheet-open"
+    },
+    {
+     "t": 1154390,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 1154840,
+     "do": "tap",
+     "id": "fm-checkout-edit-plus-0"
+    },
+    {
+     "t": 1155290,
+     "do": "tap",
+     "id": "fm-checkout-edit-done"
+    },
+    {
+     "t": 1155740,
+     "do": "tap",
+     "id": "fm-checkout-rating-4",
+     "reveal": true
+    },
+    {
+     "t": 1157090,
+     "do": "mark",
+     "name": "s8-l4-review"
+    },
+    {
+     "t": 1157990,
+     "do": "tap",
+     "id": "fm-checkout-place",
+     "reveal": true
+    },
+    {
+     "t": 1159340,
+     "do": "mark",
+     "name": "s8-l4-success"
+    },
+    {
+     "t": 1176000,
+     "do": "tap",
+     "id": "fm-nav-home",
+     "reveal": true
+    },
+    {
+     "t": 1178000,
+     "do": "mark",
+     "name": "s8-l4-home-end"
+    },
+    {
+     "t": 1194000,
+     "do": "checkpoint",
+     "name": "s8-loop-4",
+     "shows": [
+      "Fieldmart",
+      "Home"
+     ],
+     "hides": [
+      "Ada Fieldtest",
+      "ada.fieldtest@example.test",
+      "Zx9!fieldmart-PW",
+      "77 Sentinel Quay, Flat 12",
+      "5105 1051 0510 5100",
+      "7391",
+      "LOY-88442211"
+     ],
+     "masked": [],
+     "settleMs": 400,
+     "screen": "home"
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,21 @@
+name: app_off
+description: "Fieldmart field-test app without the Traceway SDK (variants off and off2)."
+publish_to: 'none'
+version: 2.1.0+1
+
+environment:
+  sdk: ^3.10.0
+
+# No traceway here, directly or through fieldmart_ui: this build is the
+# baseline every SDK variant is compared with.
+dependencies:
+  flutter:
+    sdk: flutter
+  fieldmart_ui:
+    path: ../fieldmart_ui
+
+dev_dependencies:
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
