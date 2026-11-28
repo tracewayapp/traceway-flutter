@@ -1,13 +1,20 @@
-name: Field test (Fieldmart, Android emulator)
+name: Field test (Fieldmart, Android emulator and Linux desktop)
 
 # Started by hand only. Builds the Fieldmart field-test apps in fieldtest/
-# and runs them on an Android emulator on this runner. The field-test
-# gateway runs next to the emulator in capture mode and answers the SDK
-# itself; what the SDK sent leaves the runner only as the workflow artifact,
-# to be forwarded into a Traceway instance afterwards. Uses no secrets.
+# and runs them on an Android emulator on one runner and as Linux desktop
+# apps on an X display (Xvfb) on another, with the same harnesses as on a
+# workstation. On each runner the field-test gateway runs in capture mode
+# and answers the SDK itself; what the SDK sent leaves the runner only as
+# the workflow artifact, to be forwarded into a Traceway instance
+# afterwards. Uses no secrets.
 on:
   workflow_dispatch:
     inputs:
+      targets:
+        description: 'Where to run: both, android (the emulator) or linux (the desktop app on Xvfb)'
+        type: choice
+        options: [both, android, linux]
+        default: both
       mode:
         description: 'build: APKs only; smoke: S6 stream-img with evidence and one S1 block of off and off2; plan: blocks of the scenarios below'
         type: choice
@@ -37,6 +44,10 @@ on:
         description: 'Seed for the order of variants inside a block'
         type: string
         default: '1'
+      relaunch:
+        description: 'Evidence runs: a session inactivity timeout of this many seconds, and a launch of the app after it expired, so the SDK ends the killed session (0: off)'
+        type: string
+        default: '45'
 
 permissions:
   contents: read
@@ -49,6 +60,7 @@ concurrency:
 
 jobs:
   android-emulator:
+    if: inputs.targets != 'linux'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
@@ -60,6 +72,7 @@ jobs:
       FM_REPETITIONS: ${{ inputs.repetitions }}
       FM_EVIDENCE: ${{ inputs.evidence }}
       FM_SEED: ${{ inputs.seed }}
+      FM_RELAUNCH: ${{ inputs.relaunch }}
     steps:
       - uses: actions/checkout@v4
 
@@ -130,5 +143,87 @@ jobs:
           path: |
             out/
             fieldtest/app_*/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
+          if-no-files-found: warn
+
+  linux-xvfb:
+    if: inputs.targets != 'android'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      RESULTS: ${{ github.workspace }}/out/${{ inputs.campaign }}
+      LEDGER: ${{ github.workspace }}/out/ledger
+      FM_MODE: ${{ inputs.mode }}
+      FM_SCENARIOS: ${{ inputs.scenarios }}
+      FM_VARIANTS: ${{ inputs.variants }}
+      FM_REPETITIONS: ${{ inputs.repetitions }}
+      FM_EVIDENCE: ${{ inputs.evidence }}
+      FM_SEED: ${{ inputs.seed }}
+      FM_RELAUNCH: ${{ inputs.relaunch }}
+      FM_XVFB: /usr/bin/Xvfb
+      FM_DISPLAY: ':78'
+    steps:
+      - uses: actions/checkout@v4
+
+      # What `flutter build linux` needs, and the X server, Mesa's software
+      # renderer and ffmpeg the harness runs the app with.
+      - name: Linux packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            xvfb libgl1-mesa-dri libglx-mesa0 libegl-mesa0 ffmpeg binutils
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.50.0'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build the Linux apps (release)
+        run: |
+          for app in app_off app_sdk; do
+            (cd "fieldtest/$app" && flutter pub get && flutter build linux --release)
+          done
+          mkdir -p out
+          ls -l fieldtest/app_*/build/linux/x64/release/bundle/lib/libapp.so | tee out/linux-sizes.txt
+          # The off build must not contain the SDK (its Dart libraries show as
+          # package:traceway/ URIs in the snapshot).
+          if strings -a fieldtest/app_off/build/linux/x64/release/bundle/lib/libapp.so | grep -q 'package:traceway/'; then
+            echo "the off build contains the SDK" >&2
+            exit 1
+          fi
+
+      - name: Fixtures, and the gateway in capture mode
+        if: inputs.mode != 'build'
+        run: |
+          FIXTURES="$RUNNER_TEMP/fixtures"
+          node fieldtest/shared/fixtures/gen.mjs --out "$FIXTURES" --seed 20261128
+          node fieldtest/shared/fixtures/gen.mjs --check "$FIXTURES" --lock fieldtest/shared/fixtures.lock.json
+          mkdir -p "$LEDGER"
+          nohup node fieldtest/shared/gateway/gateway.mjs --mode capture --port 18190 \
+            --fixtures "$FIXTURES" --ledger "$LEDGER" > out/gateway.log 2>&1 &
+          for i in $(seq 30); do curl -sf http://127.0.0.1:18190/ctl/health && break; sleep 1; done
+
+      - name: X display
+        if: inputs.mode != 'build'
+        run: |
+          python3 fieldtest/harness/fmh.py --display "$FM_DISPLAY" xvfb start
+          cp ~/.cache/sdk-field-test/flutter/xvfb*.log out/ 2>/dev/null || true
+
+      - name: Runs on the X display
+        if: inputs.mode != 'build'
+        run: bash fieldtest/harness/ci-linux.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fieldtest-flutter-linux-${{ github.run_id }}
+          path: |
+            out/
+            fieldtest/app_*/build/linux/x64/release/bundle/
           retention-days: 14
           if-no-files-found: warn

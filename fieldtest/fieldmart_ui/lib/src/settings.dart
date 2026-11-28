@@ -24,6 +24,8 @@ class LaunchSettings {
     required this.journeyPath,
     required this.crashExit,
     required this.probeDir,
+    this.sessionIdleMs,
+    this.sessions = true,
   });
 
   final String run;
@@ -50,6 +52,15 @@ class LaunchSettings {
   /// Where the probe writes its file; the platform default when null.
   final String? probeDir;
 
+  /// The SDK's session inactivity timeout instead of 15 minutes, so a
+  /// harness can let a killed app's session expire and launch the app
+  /// again within a run.
+  final int? sessionIdleMs;
+
+  /// `fmSessions=0`: the SDK reports no session of this launch. The
+  /// harness's launch after a kill uses it, so the run keeps one session.
+  final bool sessions;
+
   static const _names = {
     'fmRun': 'FM_RUN',
     'fmVariant': 'FM_VARIANT',
@@ -66,6 +77,8 @@ class LaunchSettings {
     'fmJourney': 'FM_JOURNEY',
     'fmCrashExit': 'FM_CRASH_EXIT',
     'fmProbeDir': 'FM_PROBE_DIR',
+    'fmSessionIdleMs': 'FM_SESSION_IDLE_MS',
+    'fmSessions': 'FM_SESSIONS',
   };
 
   /// Reads `--fmX=value` arguments first, then `FM_X` environment variables.
@@ -99,6 +112,8 @@ class LaunchSettings {
       journeyPath: get('fmJourney'),
       crashExit: get('fmCrashExit') == '1',
       probeDir: get('fmProbeDir'),
+      sessionIdleMs: int.tryParse(get('fmSessionIdleMs') ?? ''),
+      sessions: get('fmSessions') != '0',
     );
   }
 
@@ -120,5 +135,7 @@ class LaunchSettings {
   @override
   String toString() =>
       'run=$run variant=$variant scenario=$scenario target=$target '
-      'evidence=$evidence autopilot=$autopilot fps=$fps remote=$remote';
+      'evidence=$evidence autopilot=$autopilot fps=$fps remote=$remote'
+      '${sessionIdleMs == null ? '' : ' sessionIdleMs=$sessionIdleMs'}'
+      '${sessions ? '' : ' sessions=off'}';
 }
