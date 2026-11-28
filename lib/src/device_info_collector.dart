@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 class DeviceInfoCollector {
   const DeviceInfoCollector._();
@@ -48,6 +49,47 @@ class DeviceInfoCollector {
     return {};
   }
 
+  /// Where the views are read: the binding's dispatcher (the engine's, or
+  /// the one a test drives), or the engine's when there is no binding.
+  static ui.PlatformDispatcher get _dispatcher {
+    try {
+      return WidgetsBinding.instance.platformDispatcher;
+    } catch (_) {
+      return ui.PlatformDispatcher.instance;
+    }
+  }
+
+  /// The first view, once the engine knows its size.
+  static ui.FlutterView? _sizedView() {
+    try {
+      final views = _dispatcher.views;
+      if (views.isEmpty) return null;
+      final view = views.first;
+      return view.physicalSize.isEmpty || view.devicePixelRatio <= 0
+          ? null
+          : view;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Completes once the first view has a size, or after [timeout]. On
+  /// Android the engine learns the window's metrics a moment after `main`
+  /// started, which is where `Traceway.run` starts the SDK: until then the
+  /// view is 0x0 at a ratio of 1.0. An app started without a window (in
+  /// the background) gets none, and [collectSync] leaves the screen out.
+  static Future<void> screenKnown({
+    Duration timeout = const Duration(seconds: 2),
+    Duration every = const Duration(milliseconds: 16),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (_sizedView() == null && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(every);
+    }
+  }
+
+  /// The screen is read as it is now: after [screenKnown] at start. Before
+  /// the view has a size it is left out, not reported as 0x0.
   static Map<String, String> collectSync() {
     final info = collectOs();
     info['device.locale'] = Platform.localeName;
@@ -56,19 +98,19 @@ class DeviceInfoCollector {
     if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
       info['device.form_factor'] = 'desktop';
     }
-    try {
-      final view = ui.PlatformDispatcher.instance.views.first;
+    final view = _sizedView();
+    if (view != null) {
       final size = view.physicalSize;
       info['screen.resolution'] =
           '${size.width.toInt()}x${size.height.toInt()}';
       info['screen.density'] = view.devicePixelRatio.toStringAsFixed(1);
-      if ((Platform.isAndroid || Platform.isIOS) && view.devicePixelRatio > 0) {
+      if (Platform.isAndroid || Platform.isIOS) {
         final shortest = (size.width < size.height ? size.width : size.height) /
             view.devicePixelRatio;
         // Material's breakpoint between a phone and a tablet.
         info['device.form_factor'] = shortest >= 600 ? 'tablet' : 'phone';
       }
-    } catch (_) {}
+    }
 
     return info;
   }

@@ -12,6 +12,17 @@
 `tools/bin/benchrun`. The app runs on the private display (default :78),
 pinned to cores 0-1; the sampler, the screen recorder and this script run
 on cores 2-3. Standard library only.
+
+On a GitHub runner (ci-linux.sh) the same commands run with `--tools
+fieldtest/shared` (the vendored copy), `--capture` (the gateway answers the
+SDK and keeps what it sent) and FM_PLATFORM=flutter-linux@ci. Without the
+shared sampler in --tools, `fmh.py sample`, a port of it, samples the app.
+
+`--expire-and-relaunch S` starts the SDK variants with an inactivity timeout
+of S seconds and, after the standard ending, launches the app once more when
+that session has expired: without the autopilot and with no session of its
+own (FM_SESSIONS=0), so the SDK ends the killed session (session.end,
+app.memory.peak) and the run keeps one session.
 """
 import argparse
 import json
@@ -35,6 +46,8 @@ FLUTTER = os.environ.get('FM_FLUTTER', os.path.expanduser('~/development/flutter
 HEAVY = os.environ.get('FM_HEAVY', os.path.expanduser('~/.cache/sdk-parity/bin/heavy'))
 XVFB = os.environ.get('FM_XVFB', os.path.expanduser('~/.cache/flutter-sdk-main.Rwxr4CBI/xorg/usr/bin/Xvfb'))
 WIDTH, HEIGHT = 412, 892
+# flutter-linux here, flutter-linux@ci on a GitHub runner.
+PLATFORM = os.environ.get('FM_PLATFORM', common.PLATFORM_LINUX)
 
 APPS = {
     'off': {'dir': 'app_off', 'exe': 'fieldmart_off', 'id': 'com.tracewayapp.fieldmart.flutter.off'},
@@ -192,7 +205,7 @@ def proof_off(args):
     text = '\n'.join(out) + '\n'
     print(text, end='')
     if args.results:
-        d = os.path.join(args.results, common.PLATFORM_LINUX)
+        d = os.path.join(args.results, PLATFORM)
         os.makedirs(d, exist_ok=True)
         open(os.path.join(d, 'off-proof.txt'), 'w').write(text)
 
@@ -263,14 +276,16 @@ class Run:
         self.evidence = args.evidence
         self.block = block
         self.order = order
-        self.platform = common.PLATFORM_LINUX
-        self.id = args.run_id or common.run_id(self.platform, args.scenario, variant, block or 0, self.evidence)
+        self.platform = PLATFORM
+        self.id = args.run_id or common.run_id(PLATFORM.split('@')[0], args.scenario, variant, block or 0,
+                                               self.evidence)
         sub = 'evidence' if self.evidence else 'runs'
         self.dir = os.path.join(args.results, self.platform, sub, self.id)
         os.makedirs(self.dir)
         self.gateway = common.Gateway(args.gateway)
         self.markers = common.Markers()
-        self.flags = []
+        self.flags = ['capture-mode'] if args.capture else []
+        self.relaunched = None
         self.problems = []
         self.cpu = {}
         self.threads = {}
@@ -339,12 +354,52 @@ class Run:
             'FM_TOKEN': 'flutter-dev-token',
             'FM_EVIDENCE': '1' if self.evidence else '0',
             'FM_AUTOPILOT': '1',
-            'FM_TARGET': 'linux-xvfb',
+            'FM_TARGET': self.args.target,
             'FM_CAMPAIGN': os.path.basename(os.path.normpath(self.args.results)),
         })
         if self.args.fps:
             e['FM_FPS'] = str(self.args.fps)
+        if self.relaunches():
+            e['FM_SESSION_IDLE_MS'] = str(self.args.expire_and_relaunch * 1000)
         return e
+
+    # -- the launch after the kill
+    def relaunches(self):
+        return bool(self.args.expire_and_relaunch) and self.app is APPS['sdk']
+
+    def relaunch(self):
+        """Once the killed session has expired: the app again, without the autopilot, with
+        no session of its own and its probe file elsewhere; 10 s, then the standard ending.
+        The SDK ends the stored session at this start."""
+        idle = self.args.expire_and_relaunch
+        wait = (self.markers.done + (idle + 5) * 1000 - now_ms()) / 1000
+        self.log(f'relaunch in {max(0, wait):.0f} s, once the {idle} s inactivity timeout has passed')
+        if wait > 0:
+            time.sleep(wait)
+        env = self.env()
+        env.update({'FM_AUTOPILOT': '0', 'FM_SESSIONS': '0',
+                    'FM_PROBE_DIR': os.path.join(self.dir, 'relaunch-probe')})
+        started = now_ms()
+        with open(os.path.join(self.dir, 'app-relaunch.log'), 'w') as log:
+            p = subprocess.Popen(['taskset', '-c', '0,1', bundle(self.app)], env=env,
+                                 stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+            time.sleep(10)
+            if p.poll() is None:
+                p.send_signal(signal.SIGUSR1)
+                time.sleep(5)
+            if p.poll() is None:
+                p.send_signal(signal.SIGTERM)
+            try:
+                p.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                p.wait()
+        ended = now_ms()
+        self.relaunched = {'inactivityS': idle, 'startEpochMs': started, 'endEpochMs': ended,
+                           'exitCode': p.returncode,
+                           'what': 'launched again after the session expired: no autopilot, no session of its own '
+                                   '(FM_SESSIONS=0); 10 s, Home (SIGUSR1), 5 s, SIGTERM'}
+        self.log(f'relaunch done ({(ended - started) / 1000:.1f} s, exit {p.returncode})')
 
     # -- screen recording (evidence)
     def start_recorder(self):
@@ -436,10 +491,13 @@ class Run:
         self.cpu['t0'] = proc_cpu(pid)
         self.threads['t0'] = proc_threads(pid)
         sampler = os.path.join(self.tools, 'sampler', 'proc-sampler.mjs')
+        argv = ['--pid', str(pid), '--out', os.path.join(self.dir, 'samples.jsonl'),
+                '--interval-ms', '1000', '--threads', '--t0', str(self.markers.ready),
+                '--exclude-pids', ','.join(str(p) for p in self._exclude_pids())]
+        # The shared sampler, or its port here when --tools is the vendored copy.
+        cmd = [self.args.node, sampler] if os.path.exists(sampler) else [sys.executable, os.path.abspath(__file__), 'sample']
         self.sampler = subprocess.Popen(
-            ['taskset', '-c', '2,3', self.args.node, sampler, '--pid', str(pid), '--out', os.path.join(self.dir, 'samples.jsonl'),
-             '--interval-ms', '1000', '--threads', '--t0', str(self.markers.ready),
-             '--exclude-pids', ','.join(str(p) for p in self._exclude_pids())],
+            ['taskset', '-c', '2,3', *cmd, *argv],
             stdout=open(os.path.join(self.dir, 'sampler.log'), 'w'), stderr=subprocess.STDOUT)
 
     def _grab(self, name, at):
@@ -508,6 +566,8 @@ class Run:
         if self.evidence:
             self.stop_recorder()
             self.grabber.close()
+        if self.relaunches() and self.markers.done:
+            self.relaunch()
         return self.collect()
 
     def collect(self):
@@ -609,7 +669,7 @@ class Run:
             'runId': self.id,
             'campaign': os.path.basename(os.path.normpath(self.args.results)),
             'platform': self.platform,
-            'target': f'linux-xvfb release build, {WIDTH}x{HEIGHT} @1x, software rendering (Mesa llvmpipe)',
+            'target': f'{self.args.target} release build, {WIDTH}x{HEIGHT} @1x, software rendering (Mesa llvmpipe)',
             'scenario': self.args.scenario,
             'variant': self.variant,
             'block': self.block,
@@ -638,6 +698,7 @@ class Run:
             'noise': {'otherPct': noise, 'over25': noise is not None and noise > 25, 'thresholdPct': common.NOISY_PCT},
             'benchrun': os.environ.get('BENCHRUN_STATE'),
             'exitCode': rc,
+            **({'relaunch': self.relaunched} if self.relaunched else {}),
         }
         write_json(os.path.join(self.dir, 'run.json'), run)
         self.validate()
@@ -647,11 +708,16 @@ class Run:
     def validate(self):
         """Checks the files against tools/schema; the result goes into schema.txt."""
         out = []
+        validator = os.path.join(self.tools, 'schema', 'validate.mjs')
+        if not os.path.exists(validator):
+            open(os.path.join(self.dir, 'schema.txt'), 'w').write(
+                f'not checked: no schema/validate.mjs in {self.tools}; check after download with tools/schema\n')
+            return
         for kind, name in (('run', 'run.json'), ('checkpoints', 'checkpoints.json'), ('actions', 'actions.json'),
                            ('boxes', 'boxes.json'), ('screen', 'screen.json')):
             f = os.path.join(self.dir, name)
             if os.path.exists(f):
-                r = self.node(os.path.join(self.tools, 'schema', 'validate.mjs'), kind, f)
+                r = self.node(validator, kind, f)
                 out.append(f'{name}: {"ok" if r.returncode == 0 else "FAIL"} {(r.stdout + r.stderr).strip()[:400]}')
         open(os.path.join(self.dir, 'schema.txt'), 'w').write('\n'.join(out) + '\n')
         if any('FAIL' in x for x in out):
@@ -693,8 +759,8 @@ def startup_cmd(args):
     gw = common.Gateway(args.gateway)
     for i, v in enumerate(order):
         app = app_for(v)
-        rid = common.run_id(common.PLATFORM_LINUX, scenario, v, args.block)
-        d = os.path.join(args.results, common.PLATFORM_LINUX, 'runs', rid)
+        rid = common.run_id(PLATFORM.split('@')[0], scenario, v, args.block)
+        d = os.path.join(args.results, PLATFORM, 'runs', rid)
         os.makedirs(d)
         gw.start_run(rid)
         if not args.keep_state:
@@ -707,7 +773,7 @@ def startup_cmd(args):
         env = {k: val for k, val in os.environ.items() if k not in ('WAYLAND_DISPLAY', 'WAYLAND_SOCKET')}
         env.update({'GDK_BACKEND': 'x11', 'DISPLAY': args.display, 'FM_RUN': rid, 'FM_VARIANT': v, 'FM_SCENARIO': scenario,
                     'FM_BASE_URL': args.gateway, 'FM_FIXTURES': args.gateway + '/fx', 'FM_TOKEN': 'flutter-dev-token',
-                    'FM_EVIDENCE': '0', 'FM_AUTOPILOT': '0', 'FM_TARGET': 'linux-xvfb',
+                    'FM_EVIDENCE': '0', 'FM_AUTOPILOT': '0', 'FM_TARGET': args.target,
                     'FM_CAMPAIGN': os.path.basename(os.path.normpath(args.results))})
         spawn = now_ms()
         p = subprocess.Popen(['taskset', '-c', '0,1', bundle(app)], env=env, stdin=subprocess.DEVNULL,
@@ -744,8 +810,8 @@ def startup_cmd(args):
         if os.environ.get('BENCHRUN_STATE') == 'noisy':
             flags.append('noisy')
         write_json(os.path.join(d, 'run.json'), {
-            'runId': rid, 'campaign': os.path.basename(os.path.normpath(args.results)), 'platform': common.PLATFORM_LINUX,
-            'target': f'linux-xvfb release build, {WIDTH}x{HEIGHT} @1x, software rendering (Mesa llvmpipe)',
+            'runId': rid, 'campaign': os.path.basename(os.path.normpath(args.results)), 'platform': PLATFORM,
+            'target': f'{args.target} release build, {WIDTH}x{HEIGHT} @1x, software rendering (Mesa llvmpipe)',
             'scenario': scenario, 'variant': v, 'block': args.block, 'orderInBlock': i, 'evidence': False,
             't0EpochMs': markers.ready or 0, 'endEpochMs': markers.fully or 0, 'valid': ok, 'flags': flags,
             'sessionId': markers.session, 'projectId': None, 'device': {'width': WIDTH, 'height': HEIGHT, 'scale': 1},
@@ -769,7 +835,8 @@ def plan_cmd(args):
     benchrun = os.path.join(os.path.abspath(args.tools), 'bin', 'benchrun')
     base = [sys.executable, me, '--display', args.display]
     common_args = ['--results', args.results, '--tools', args.tools, '--node', args.node, '--gateway', args.gateway,
-                   '--seed', str(args.seed)]
+                   '--seed', str(args.seed), '--target', args.target, *(['--capture'] if args.capture else []),
+                   *(['--expire-and-relaunch', str(args.expire_and_relaunch)] if args.expire_and_relaunch else [])]
     steps = []
     for scenario in args.scenarios.split(','):
         variants = args.variants + (',stream-noimg' if scenario in args.noimg.split(',') else '')
@@ -793,7 +860,7 @@ def plan_cmd(args):
         r = subprocess.run([benchrun, *cmd])
         print(f'== {i + 1}/{len(steps)} exit {r.returncode} {time.strftime("%H:%M:%S")}', flush=True)
         runs = []
-        root = os.path.join(args.results, common.PLATFORM_LINUX, 'runs')
+        root = os.path.join(args.results, PLATFORM, 'runs')
         for d in os.listdir(root):
             f = os.path.join(root, d, 'run.json')
             if os.path.exists(f):
@@ -805,6 +872,89 @@ def plan_cmd(args):
             print('STOP: most runs are noisy', flush=True)
             return
     print('PLAN DONE', flush=True)
+
+
+# ---- sampler ------------------------------------------------------------------------------
+
+def sample_cmd(args):
+    """tools/sampler/proc-sampler.mjs in Python, line for line the same output, for a
+    runner that has only the vendored shared/ folder: one JSON line per tick (t, epochMs,
+    cumulative cpuUserMs/cpuSysMs, rssKb, pssKb, threads, hostOtherPct: what everything but
+    the app and --exclude-pids used since the last tick, in % of one core), until SIGINT,
+    SIGTERM or the app's exit; the last line is {"final": true, "vmHwmKb", "reason"}."""
+    ms_per_tick = 1000 / os.sysconf('SC_CLK_TCK')
+    pid = args.pid
+    t0 = args.t0 or now_ms()
+    exclude = [int(x) for x in (args.exclude_pids or '').split(',') if x.strip()]
+
+    def cpu_of(path):
+        with open(path) as f:
+            raw = f.read()
+        fields = raw[raw.rindex(')') + 2:].split(' ')
+        return int(fields[11]) * ms_per_tick, int(fields[12]) * ms_per_tick, raw[raw.index('(') + 1:raw.rindex(')')]
+
+    def safe_cpu(p):
+        try:
+            u, s, _ = cpu_of(f'/proc/{p}/stat')
+            return u + s
+        except (OSError, ValueError, IndexError):
+            return 0
+
+    def kb(path, name):
+        try:
+            with open(path) as f:
+                for line in f:
+                    if line.startswith(name + ':'):
+                        return int(line.split()[1])
+        except (OSError, ValueError, IndexError):
+            pass
+        return None
+
+    def host_busy():
+        with open('/proc/stat') as f:
+            cpu = [int(x) for x in f.readline().split()[1:]]
+        return (sum(cpu) - cpu[3] - (cpu[4] if len(cpu) > 4 else 0)) * ms_per_tick
+
+    stop = {}
+    signal.signal(signal.SIGINT, lambda *_: stop.setdefault('reason', 'SIGINT'))
+    signal.signal(signal.SIGTERM, lambda *_: stop.setdefault('reason', 'SIGTERM'))
+    out = open(args.out, 'a')
+
+    def write(line):
+        out.write(json.dumps(line) + '\n')
+        out.flush()
+
+    last_busy, last_own, last_at = host_busy(), safe_cpu(pid) + sum(safe_cpu(p) for p in exclude), now_ms()
+    while 'reason' not in stop:
+        now = now_ms()
+        try:
+            u, s, _ = cpu_of(f'/proc/{pid}/stat')
+        except (OSError, ValueError, IndexError):
+            stop['reason'] = 'the process exited'
+            break
+        line = {'t': now - t0, 'epochMs': now, 'cpuUserMs': round(u), 'cpuSysMs': round(s),
+                'rssKb': kb(f'/proc/{pid}/status', 'VmRSS'), 'pssKb': kb(f'/proc/{pid}/smaps_rollup', 'Pss')}
+        if args.threads:
+            threads = {}
+            try:
+                for tid in os.listdir(f'/proc/{pid}/task'):
+                    try:
+                        tu, ts, comm = cpu_of(f'/proc/{pid}/task/{tid}/stat')
+                        threads[comm] = round(threads.get(comm, 0) + tu + ts)
+                    except (OSError, ValueError, IndexError):
+                        pass
+            except OSError:
+                pass
+            line['threads'] = threads
+        busy = host_busy()
+        mine = u + s + sum(safe_cpu(p) for p in exclude)
+        if now > last_at:
+            line['hostOtherPct'] = round(max(0, busy - last_busy - (mine - last_own)) / (now - last_at) * 1000) / 10
+        last_busy, last_own, last_at = busy, mine, now
+        write(line)
+        time.sleep(max(0.0, args.interval_ms / 1000 - (now_ms() - now) / 1000))
+    write({'final': True, 'epochMs': now_ms(), 'vmHwmKb': kb(f'/proc/{pid}/status', 'VmHWM'), 'reason': stop['reason']})
+    out.close()
 
 
 def main():
@@ -827,6 +977,14 @@ def main():
     p = sub.add_parser('proof-off')
     p.add_argument('--results')
 
+    sm = sub.add_parser('sample')
+    sm.add_argument('--pid', type=int, required=True)
+    sm.add_argument('--out', required=True)
+    sm.add_argument('--interval-ms', type=int, default=1000)
+    sm.add_argument('--threads', action='store_true')
+    sm.add_argument('--t0', type=int)
+    sm.add_argument('--exclude-pids', default='')
+
     for name in ('run', 'block', 'startup', 'plan'):
         r = sub.add_parser(name)
         r.add_argument('--results', required=True, help='results/<campaign> folder')
@@ -837,6 +995,10 @@ def main():
         r.add_argument('--evidence', action='store_true')
         r.add_argument('--warmup', action='store_true', help='a warm-up block: its runs are flagged warmup')
         r.add_argument('--keep-state', action='store_true')
+        r.add_argument('--capture', action='store_true', help='the gateway is in capture mode')
+        r.add_argument('--target', default='linux-xvfb', help='fm.target, and the start of run.json target')
+        r.add_argument('--expire-and-relaunch', type=int, default=0, metavar='S',
+                       help='SDK variants: an inactivity timeout of S s, and a launch after the session expired')
         r.add_argument('--fps', type=int)
         r.add_argument('--run-id')
         r.add_argument('--block', type=int, default=0)
@@ -859,7 +1021,7 @@ def main():
 
     args = ap.parse_args()
     {'xvfb': xvfb, 'gateway': gateway, 'build': build, 'proof-off': proof_off, 'run': run_cmd,
-     'block': block_cmd, 'startup': startup_cmd, 'plan': plan_cmd}[args.cmd](args)
+     'block': block_cmd, 'startup': startup_cmd, 'plan': plan_cmd, 'sample': sample_cmd}[args.cmd](args)
 
 
 if __name__ == '__main__':

@@ -10,6 +10,12 @@ void main(List<String> args) {
   // start it: it sets the binding up in its own zone, which is where it
   // sees `print` lines.
   final settings = LaunchSettings.read(args);
+  final idle = settings.sessionIdleMs;
+  if (idle != null) {
+    // The harness lets a killed app's session expire within the run.
+    // ignore: invalid_use_of_visible_for_testing_member
+    TracewayClient.sessionInactivityOverride = Duration(milliseconds: idle);
+  }
   Traceway.run(
     token: settings.token,
     baseUrl: settings.baseUrl,
@@ -40,6 +46,7 @@ TracewayOptions optionsFor(LaunchSettings s) {
           }
         : null,
     fps: s.fps ?? const TracewayOptions().fps,
+    sessions: s.sessions,
   );
 }
 

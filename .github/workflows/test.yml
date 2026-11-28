@@ -1,0 +1,53 @@
+name: Tests
+
+# The SDK's analysis and tests, on every pull request and every push to
+# main. The release workflows run the same steps before they publish; this
+# one runs them while a change is still under review.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # The analysis at the root covers every package below it: the add-on
+      # and the field-test apps too, which need their own dependencies.
+      - name: Install dependencies
+        run: |
+          flutter --version
+          flutter pub get
+          for p in packages/traceway_video fieldtest/fieldmart_ui fieldtest/app_off fieldtest/app_sdk; do
+            (cd "$p" && flutter pub get)
+          done
+
+      # Infos (deprecations in a newer Flutter) are reported, not fatal.
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test
+
+      - name: Test the video add-on
+        working-directory: packages/traceway_video
+        run: flutter test
+
+      - name: Test the field-test app
+        working-directory: fieldtest/fieldmart_ui
+        run: flutter test

@@ -145,7 +145,9 @@ class TracewayOptions {
   /// ```
   final Map<String, Object?>? collection;
 
-  /// Track sessions (`session.start` / `session.end`).
+  /// Track sessions (`session.start` / `session.end`). A session an earlier
+  /// launch reported is still ended, so the server never keeps a start
+  /// without an end.
   final bool sessions;
 
   /// Share of sessions whose breadcrumbs (logs, network, navigation, actions)

@@ -11,12 +11,16 @@ echo "device: $(adb shell getprop ro.product.model) Android $(adb shell getprop 
 python3 $H install \
   --apk-off fieldtest/app_off/build/app/outputs/flutter-apk/app-release.apk \
   --apk-sdk fieldtest/app_sdk/build/app/outputs/flutter-apk/app-release.apk || exit 1
+# The evidence runs launch the app once more after their session expired, so
+# the SDK ends the killed session (fieldtest/README.md, "After the kill").
+relaunch=()
+[ "${FM_RELAUNCH:-0}" != "0" ] && relaunch=(--expire-and-relaunch "$FM_RELAUNCH")
 evidence=()
-[ "${FM_EVIDENCE:-false}" = "true" ] && evidence=(--evidence)
+[ "${FM_EVIDENCE:-false}" = "true" ] && evidence=(--evidence "${relaunch[@]}")
 status=0
 case "$FM_MODE" in
   smoke)
-    python3 $H run --results "$RESULTS" --capture --scenario S6 --variant stream-img --evidence || status=1
+    python3 $H run --results "$RESULTS" --capture --scenario S6 --variant stream-img --evidence "${relaunch[@]}" || status=1
     python3 $H block --results "$RESULTS" --capture --scenario S1 --variants off,off2 --block 1 --seed "$FM_SEED" || status=1
     ;;
   plan)

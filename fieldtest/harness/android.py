@@ -9,6 +9,12 @@ with the gateway in capture mode next to it) and a phone on this machine.
   android.py block --serial S --results DIR --scenario S1 --variants off,off2 --block 1
   android.py plan --serial S --results DIR --scenarios S1,S6 --variants off,off2,core,stream-img --repetitions 5
 
+`--expire-and-relaunch S` (run, block, plan) starts the SDK variants with an
+inactivity timeout of S seconds and, after the standard ending, launches the
+app once more when that session has expired: without the autopilot and with
+no session of its own, so the SDK ends the killed session (session.end,
+app.memory.peak) and the run keeps one session.
+
 The app is driven by its own autopilot; this script launches it with the
 launch settings as intent extras, reads the marker lines from logcat (tag
 FM), samples /proc once a second, takes screenshots at checkpoints and
@@ -19,6 +25,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -210,13 +217,14 @@ class Run:
         self.actions = []
         self.done_cpu = None
         self.tck = 100
+        self.relaunched = None
 
     def log(self, msg):
         print(f'[{self.id}] {msg}', flush=True)
         with open(os.path.join(self.dir, 'harness.log'), 'a') as f:
             f.write(f'{now_ms()} {msg}\n')
 
-    def extras(self):
+    def extras(self, **more):
         e = {
             'fmRun': self.id, 'fmVariant': self.variant, 'fmScenario': self.args.scenario,
             'fmBaseUrl': self.args.gateway, 'fmFixtures': self.args.gateway + '/fx',
@@ -226,9 +234,14 @@ class Run:
         }
         if self.args.fps:
             e['fmFps'] = str(self.args.fps)
+        if self.relaunches():
+            e['fmSessionIdleMs'] = str(self.args.expire_and_relaunch * 1000)
+        e.update(more)
+        # The command runs in the device's shell: a value with a space (the target)
+        # must stay one word, or am stops reading extras there.
         out = []
         for k, v in e.items():
-            out += ['--es', k, v]
+            out += ['--es', k, shlex.quote(v)]
         return out
 
     # -- logcat
@@ -351,6 +364,36 @@ class Run:
         except Exception as e:  # noqa: BLE001
             self.log(f'request {parts}: {e}')
 
+    def relaunches(self):
+        return bool(getattr(self.args, 'expire_and_relaunch', 0)) and self.pkg == PACKAGES['sdk']
+
+    def relaunch(self):
+        """The launch after the kill, once the session has expired: no autopilot, no
+        session of its own (fmSessions=0), the probe file elsewhere; 10 s, then the
+        standard ending. The SDK ends the stored session at this start."""
+        idle = self.args.expire_and_relaunch
+        due = self.markers.done + (idle + 5) * 1000
+        wait = (due - self.adb.epoch_ms()) / 1000
+        self.log(f'relaunch in {max(0, wait):.0f} s, once the {idle} s inactivity timeout has passed')
+        if wait > 0:
+            time.sleep(wait)
+        self.adb.run('logcat', '-c')
+        started = self.adb.epoch_ms()
+        extras = self.extras(fmAutopilot='0', fmSessions='0',
+                             fmProbeDir=f'/sdcard/Android/data/{self.pkg}/files/fm-probe-relaunch')
+        self.adb.shell(f'am start -W -n {self.pkg}/.MainActivity ' + ' '.join(extras), timeout=60)
+        time.sleep(10)
+        self.adb.shell('input keyevent 3')
+        time.sleep(5)
+        self.adb.shell(f'am force-stop {self.pkg}')
+        ended = self.adb.epoch_ms()
+        log = self.adb.run('logcat', '-d', '-v', 'epoch', '-s', 'FM:I', 'flutter:I', 'AndroidRuntime:E', timeout=60)
+        open(os.path.join(self.dir, 'app-relaunch.log'), 'w').write(log)
+        self.relaunched = {'inactivityS': idle, 'startEpochMs': started, 'endEpochMs': ended,
+                           'what': 'launched again after the session expired: no autopilot, no session of its own '
+                                   '(fmSessions=0); 10 s, Home, 5 s, force-stop'}
+        self.log(f'relaunch done ({(ended - started) / 1000:.1f} s)')
+
     def on_done(self):
         if self.pid:
             self.done_cpu = self.read_proc()
@@ -418,6 +461,8 @@ class Run:
             write_screen_json(self.dir, self.records)
             if len(self.records) == 1:
                 shutil.copy(os.path.join(self.dir, self.records[0]['file']), os.path.join(self.dir, 'screen.mp4'))
+        if self.relaunches() and self.markers.done:
+            self.relaunch()
         self.collect(scenario_id, scenario, int(total.group(1)) if total else None, jpath)
 
     def collect(self, scenario_id, scenario, start_total, jpath):
@@ -494,6 +539,7 @@ class Run:
                        'summary': m.summary, 'errors': m.errors},
             'ledger': {'lines': len(ledger), 'quiet': quiet},
             'problems': problems,
+            **({'relaunch': self.relaunched} if self.relaunched else {}),
         }
         write_json(os.path.join(self.dir, 'run.json'), run)
         self.log(f'done: valid={valid} flags={self.flags} worstLate={worst} ms session={m.session}')
@@ -541,6 +587,8 @@ def main():
         r.add_argument('--capture', action='store_true', help='the gateway is in capture mode')
         r.add_argument('--evidence', action='store_true')
         r.add_argument('--keep-state', action='store_true')
+        r.add_argument('--expire-and-relaunch', type=int, default=0, metavar='S',
+                       help='SDK variants: an inactivity timeout of S s, and a launch after the session expired')
         r.add_argument('--fps', type=int)
         r.add_argument('--run-id')
         r.add_argument('--block', type=int, default=0)

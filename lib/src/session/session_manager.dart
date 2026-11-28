@@ -22,6 +22,7 @@ class SessionManager {
     required this.store,
     required this.onStart,
     required this.onEnd,
+    this.onEndedBetweenRuns,
     this.inactivityMs = defaultInactivityMs,
     this.maxDurationMs = defaultMaxDurationMs,
     int Function()? now,
@@ -30,6 +31,11 @@ class SessionManager {
   final StateStore store;
   final void Function(SessionInfo session, bool resumed) onStart;
   final void Function(SessionInfo session, int endedAtMs) onEnd;
+
+  /// A session an earlier run of the app left open (it was killed, or it
+  /// crashed) and that expired before this start: called at [start], before
+  /// the new session's [onStart], with the session's last activity.
+  final void Function(SessionInfo session, int endedAtMs)? onEndedBetweenRuns;
   final int inactivityMs;
   final int maxDurationMs;
   final int Function() _now;
@@ -56,6 +62,10 @@ class SessionManager {
     _persist();
     _session = null;
   }
+
+  /// Stores the session as it is now, its last activity exact: the app may
+  /// be killed before it runs again.
+  void persist() => _persist();
 
   /// Next index for a replay segment of this session.
   int nextSegmentIndex() {
@@ -95,14 +105,19 @@ class SessionManager {
       final id = stored['id'];
       final startedAt = stored['startedAtMs'];
       final lastActivity = stored['lastActivityMs'];
-      if (id is String &&
-          startedAt is int &&
-          lastActivity is int &&
-          now - lastActivity < inactivityMs &&
-          now - startedAt < maxDurationMs) {
-        resumed = SessionInfo(id, startedAt);
-        _segmentIndex =
-            stored['segmentIndex'] is int ? stored['segmentIndex'] as int : 0;
+      if (id is String && startedAt is int && lastActivity is int) {
+        if (now - lastActivity < inactivityMs &&
+            now - startedAt < maxDurationMs) {
+          resumed = SessionInfo(id, startedAt);
+          _segmentIndex = stored['segmentIndex'] is int
+              ? stored['segmentIndex'] as int
+              : 0;
+        } else {
+          // Nothing ended it while the app ran: it ends now, at the last
+          // thing it did.
+          store.set(_storeKey, null);
+          onEndedBetweenRuns?.call(SessionInfo(id, startedAt), lastActivity);
+        }
       }
     }
     if (resumed == null) _segmentIndex = 0;

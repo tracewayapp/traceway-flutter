@@ -698,7 +698,7 @@ Shared with the Android and iOS SDKs, in their order, then Flutter's own:
 | `metricDimensions` | `{}` | Up to two app-defined dimensions on every metric (`custom.<key>`) |
 | `recordAllSessions` | `false` | Stream breadcrumbs and the screen recording all the time instead of keeping them for errors |
 | `collection` | — | Local collection settings, the same document as a remote-config rule (see [Local config](#local-config)) |
-| `sessions` | `true` | Send session records (`session.start` / `session.end`). The session id exists either way, so captures and rules that stream replay still work |
+| `sessions` | `true` | Send session records (`session.start` / `session.end`). The session id exists either way, so captures and rules that stream replay still work. A session an earlier launch reported is still ended |
 | `baselineSampleRate` | `0` | Share of sessions whose breadcrumbs are sent continuously, not only around errors |
 | `remoteConfig` | `true` | Poll the server for collection settings over OpAMP |
 | `exportDelayMs` | `1000` | How long finished records wait to be sent as one batch |
