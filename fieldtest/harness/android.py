@@ -447,6 +447,8 @@ class Run:
             write_json(os.path.join(self.dir, 'boxes-detail.json'), m.boxes)
             write_json(os.path.join(self.dir, 'screenshots.json'), self.grabs)
         failed = [s for s in m.steps if not s.get('ok')]
+        if self.block == 0 and getattr(self.args, 'warmup', False):
+            self.flags.append('warmup')
         if worst > common.LATE_LIMIT_MS:
             self.flags.append('late')
         if end is None:
