@@ -102,7 +102,7 @@ bool canExportLog(ControlState control, String? eventName) {
 /// Decides for every log record and span whether it is sent now, kept in the
 /// ring buffer or dropped, according to the [ControlState]. Triggers are
 /// observed after routing so a triggered flush includes the record that
-/// caused it.
+/// caused it, and an issue that causes one is sent before what it flushes.
 class TelemetryRouter {
   TelemetryRouter({
     required this.control,
@@ -113,6 +113,7 @@ class TelemetryRouter {
     required this.spanExporter,
     required this.hooks,
     this.persistIssue,
+    this.sendPersisted,
     double Function()? random,
   }) : _random = random ?? Random().nextDouble;
 
@@ -126,6 +127,9 @@ class TelemetryRouter {
   final SpanExporter spanExporter;
   final RouterHooks hooks;
   final bool Function(ReadableLogRecord)? persistIssue;
+
+  /// Sends what [persistIssue] wrote now; completes once it was tried.
+  final Future<void> Function()? sendPersisted;
   final double Function() _random;
 
   /// The dashboard's captures running now: their ids go on every record
@@ -192,14 +196,34 @@ class TelemetryRouter {
   /// Triggers see a record before it is handed to the exporter, because the
   /// batch processor copies it there and later attributes would be lost. A
   /// buffered record is already in the buffer at that point, so a flush it
-  /// triggers includes it; a streamed one follows the flushed breadcrumbs.
+  /// triggers includes it. A flush the triggers ask for is held until the
+  /// record was sent: an issue goes to the exporter before the breadcrumbs
+  /// it flushes, since the server admits a bounded number of log records
+  /// per client and must not spend it on the breadcrumbs first.
   ///
   /// A failure in the triggers costs what they would have done, never the
   /// record that ran them.
   void _observeAndSend(ObservedRecord observed) {
+    // A record the triggers emit (a capture's start) is observed in turn.
+    final nested = _observing;
+    _observing = true;
     guarded('triggers', () => hooks.observe(observed));
+    _observing = nested;
     if (observed.routed == Routed.stream) _send(observed.item);
+    if (!nested && _flushHeld) {
+      _flushHeld = false;
+      unawaited(settle());
+    }
   }
+
+  /// Whether a record's triggers are running, and whether they flushed the
+  /// buffer: what they took waits in [_flushedLogs] and [_flushedSpans].
+  bool _observing = false;
+  bool _flushHeld = false;
+
+  /// The upload of the issue that flushed the buffer, when it is sent from
+  /// the disk queue: [settle] exports the breadcrumbs after it.
+  Future<void>? _issueFirst;
 
   void stampSpan(Span span) {
     final sessionId = hooks.sessionId;
@@ -275,7 +299,11 @@ class TelemetryRouter {
           _flushedSpans.add(span);
       }
     }
-    unawaited(settle());
+    if (_observing) {
+      _flushHeld = true;
+    } else {
+      unawaited(settle());
+    }
     return entries.length;
   }
 
@@ -283,6 +311,15 @@ class TelemetryRouter {
   /// The requests of the last batches may still be on their way: the
   /// exporters' own `forceFlush` waits for those.
   Future<void> settle() async {
+    final issue = _issueFirst;
+    if (issue != null) {
+      try {
+        await issue;
+      } catch (_) {
+        // The breadcrumbs go either way.
+      }
+      if (identical(issue, _issueFirst)) _issueFirst = null;
+    }
     while (_flushedLogs.isNotEmpty) {
       final batch = _takeBatch(_flushedLogs);
       try {
@@ -348,14 +385,24 @@ class TelemetryRouter {
   /// An issue is written to disk before it is sent, when there is a disk:
   /// the app may not live to see the answer.
   bool _persistIssue(ReadableLogRecord record) =>
-      (record.eventName == eventException ||
-          record.eventName == eventMessage) &&
-      persistIssue?.call(record) == true;
+      _isIssue(record) && persistIssue?.call(record) == true;
+
+  static bool _isIssue(ReadableLogRecord record) =>
+      record.eventName == eventException || record.eventName == eventMessage;
 
   void _send(TelemetryItem item) {
     switch (item) {
       case LogItem(:final record):
-        if (!_persistIssue(record)) logSink.onEmit(record, null);
+        // The issue whose triggers flushed the buffer leaves first: from the
+        // disk queue it was written to, else at the head of what is flushed.
+        final first = _flushHeld && _isIssue(record);
+        if (_persistIssue(record)) {
+          if (first) _issueFirst = sendPersisted?.call();
+        } else if (first) {
+          _flushedLogs.insert(0, record);
+        } else {
+          logSink.onEmit(record, null);
+        }
       case SpanItem(:final span):
         spanSink.onEnd(span);
     }

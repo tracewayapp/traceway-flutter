@@ -81,4 +81,85 @@ void main() {
         const Color(0xFF000000));
     expect(regions[2].rect.top, 80);
   });
+
+  testWidgets('a mask on a sliver covers what the sliver paints',
+      (tester) async {
+    final inner = GlobalKey();
+    await tester.pumpWidget(app(CustomScrollView(slivers: [
+      const SliverToBoxAdapter(child: SizedBox(height: 100)),
+      const SliverToBoxAdapter(
+        key: ValueKey('traceway-mask'),
+        child: SizedBox(height: 60),
+      ),
+      TracewayMask(
+        mode: const TracewayMaskMode.blank(color: Color(0xFFFF0000)),
+        child: SliverList(
+          delegate: SliverChildListDelegate([
+            SizedBox(
+                height: 40, child: TracewayMask(child: SizedBox(key: inner))),
+            const SizedBox(height: 40),
+          ]),
+        ),
+      ),
+      const SliverPadding(
+        key: ValueKey('traceway-blank'),
+        padding: EdgeInsets.all(10),
+        sliver: SliverToBoxAdapter(child: SizedBox(height: 30)),
+      ),
+      const TracewayMask(
+        child: SliverToBoxAdapter(child: SizedBox(height: 2000)),
+      ),
+    ])));
+    var regions = maskRegionsIn(root());
+    expect(regions.map((r) => r.mode.runtimeType).toList(), [
+      TracewayMaskBlur,
+      TracewayMaskBlank,
+      TracewayMaskBlank,
+      TracewayMaskBlur,
+    ]);
+    expect(regions.map((r) => r.rect).toList(), const [
+      Rect.fromLTWH(0, 100, 800, 60),
+      Rect.fromLTWH(0, 160, 800, 80),
+      Rect.fromLTWH(0, 240, 800, 50),
+      // What is on screen of a sliver that goes on below it.
+      Rect.fromLTWH(0, 290, 800, 310),
+    ]);
+    expect((regions[1].mode as TracewayMaskBlank).color,
+        const Color(0xFFFF0000));
+
+    // Partly scrolled off the top, the mask is what is left on screen.
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -130));
+    await tester.pumpAndSettle();
+    regions = maskRegionsIn(root());
+    expect(regions.map((r) => r.rect).toList(), const [
+      Rect.fromLTWH(0, 0, 800, 30),
+      Rect.fromLTWH(0, 30, 800, 80),
+      Rect.fromLTWH(0, 110, 800, 50),
+      Rect.fromLTWH(0, 160, 800, 440),
+    ]);
+
+    // Scrolled away, a sliver paints nothing and has no mask.
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -400));
+    await tester.pumpAndSettle();
+    regions = maskRegionsIn(root());
+    expect(regions.map((r) => r.rect).toList(),
+        const [Rect.fromLTWH(0, 0, 800, 600)]);
+  });
+
+  testWidgets('a mask on a sliver of a horizontal scroll view',
+      (tester) async {
+    await tester.pumpWidget(app(const CustomScrollView(
+      scrollDirection: Axis.horizontal,
+      slivers: [
+        SliverToBoxAdapter(child: SizedBox(width: 50)),
+        SliverToBoxAdapter(
+          key: ValueKey('traceway-blank'),
+          child: SizedBox(width: 120),
+        ),
+      ],
+    )));
+    final region = maskRegionsIn(root()).single;
+    expect(region.mode, isA<TracewayMaskBlank>());
+    expect(region.rect, const Rect.fromLTWH(50, 0, 120, 600));
+  });
 }

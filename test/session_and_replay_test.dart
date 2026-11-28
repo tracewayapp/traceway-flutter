@@ -208,6 +208,25 @@ void main() {
       expect(calls, 1);
       expect(rejected.failedSegments, 1);
     });
+
+    test('a batch discarded while its body is made is not posted', () async {
+      var calls = 0;
+      final transport = RecordingsTransport(
+        url: 'https://h/api/recordings',
+        token: 'tok',
+        httpClient: MockClient((_) async {
+          calls++;
+          return http.Response('{}', 200);
+        }),
+      );
+      transport.send([segment()]);
+      final flushing = transport.flush();
+      transport.discard();
+      await flushing;
+      expect(calls, 0);
+      expect(transport.sentSegments, 0);
+      expect(transport.pending, 0);
+    });
   });
 
   group('ReplayController', () {
@@ -444,6 +463,25 @@ void main() {
       await c.drain();
       expect(c.hasReplayFor('s1'), isTrue);
       expect(c.budget.hasUploaded('s1'), isTrue);
+    });
+
+    test('a clip still being made when the unsent ones are dropped is not '
+        'uploaded; the next one is', () async {
+      final source = SlowReplaySource();
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.buffer, maxAgeMs: 600000);
+      expect(c.flush(30000, 'e1'), isTrue);
+      c.dropUnsent();
+      source.release();
+      await c.drain();
+      expect(posts, isEmpty);
+
+      now = now.add(const Duration(seconds: 60));
+      expect(c.flush(30000, 'e2'), isTrue);
+      source.release();
+      await c.drain();
+      expect(segments().single['exceptionId'], 'e2');
     });
 
     test('a clip that encodes to nothing leaves the session without replay',

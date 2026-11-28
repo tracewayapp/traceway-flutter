@@ -154,6 +154,7 @@ class RecordingsTransport {
     _schedule(0);
   }
 
+  /// Forgets what waits to be sent; a request already made is not retried.
   void discard() {
     _generation++;
     _queue.clear();
@@ -186,7 +187,7 @@ class RecordingsTransport {
         final batch = _queue.removeAt(0);
         _queuedBytes -= batch.bytes;
         final generation = _generation;
-        final retryAfterMs = await _post(batch);
+        final retryAfterMs = await _post(batch, generation);
         if (generation != _generation) continue;
         if (retryAfterMs != null) {
           _queue.insert(0, batch);
@@ -202,12 +203,14 @@ class RecordingsTransport {
   }
 
   /// Returns null when the batch is done (sent or given up), else how long to
-  /// wait before retrying.
-  Future<int?> _post(_Batch batch) async {
+  /// wait before retrying. A batch discarded while its body was made is not
+  /// posted.
+  Future<int?> _post(_Batch batch, int generation) async {
     batch.attempts++;
     http.Response response;
     try {
       final body = await _body(batch);
+      if (generation != _generation) return null;
       response = await _http
           .post(
             Uri.parse(url),

@@ -109,17 +109,19 @@ class WireframeRecorder with WidgetsBindingObserver implements ReplaySource {
   /// `replay.images` policy, `wifi` until the client sets it (see
   /// [WireframeCapture.imagePolicy]). Whether a frame inlines pictures is
   /// decided when it is captured, so a picture recorded on Wi-Fi stays in
-  /// its clip; `off` drops the frames held, which may show images, and
-  /// takes the screen again at once.
+  /// its clip when the network changes; a stricter policy (`always` to
+  /// `wifi` or `off`, `wifi` to `off`) drops the frames held, which may show
+  /// what it no longer allows, and the screen is taken again at once.
   TracewayImagePolicy get imagePolicy => _capture.imagePolicy;
   set imagePolicy(TracewayImagePolicy value) {
-    if (value == _capture.imagePolicy) return;
+    final previous = _capture.imagePolicy;
+    if (value == previous) return;
     _capture.imagePolicy = value;
     _capture.reset();
     _timer?.cancel();
     _timer = null;
     // The frames held show the images: none of them may go up now.
-    if (value == TracewayImagePolicy.off) _frames.clear();
+    if (value.index < previous.index) _frames.clear();
     _schedule(immediately: true);
   }
 

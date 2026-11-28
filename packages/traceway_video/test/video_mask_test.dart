@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:traceway/video.dart' show maskRegionsIn;
 import 'package:traceway/traceway.dart';
 import 'package:traceway_video/src/screen_recorder.dart';
 
@@ -148,5 +149,63 @@ void main() {
     expect(pixel(400, 125), [255, 0, 0]);
     // Where it was before the scroll, nothing is masked.
     expect(pixel(400, 325), isNot([255, 0, 0]));
+  });
+
+  testWidgets('the recorded frame is masked where a masked sliver was painted',
+      (tester) async {
+    final encoder = _RecordingEncoder();
+    ScreenRecorder.encoderOverride = encoder;
+    addTearDown(() => ScreenRecorder.encoderOverride = null);
+    const green = ColoredBox(color: Color(0xFF00FF00));
+    await tester.pumpWidget(app(CustomScrollView(slivers: [
+      const SliverToBoxAdapter(child: SizedBox(height: 100, child: green)),
+      const SliverToBoxAdapter(
+        key: ValueKey('traceway-blank'),
+        child: SizedBox(height: 60, child: green),
+      ),
+      const SliverToBoxAdapter(child: SizedBox(height: 40, child: green)),
+      TracewayMask(
+        mode: const TracewayMaskMode.blank(color: Color(0xFFFF0000)),
+        child: SliverList(
+          delegate: SliverChildListDelegate(const [
+            SizedBox(height: 50, child: green),
+            SizedBox(height: 50, child: green),
+          ]),
+        ),
+      ),
+      const SliverToBoxAdapter(child: SizedBox(height: 2000, child: green)),
+    ])));
+    final regions =
+        maskRegionsIn(boundary.currentContext!).map((r) => r.rect).toList();
+    expect(regions, const [
+      Rect.fromLTWH(0, 100, 800, 60),
+      Rect.fromLTWH(0, 200, 800, 100),
+    ]);
+
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (call) async => Directory.systemTemp.path);
+    await tester.runAsync(() async {
+      final recorder = ScreenRecorder(
+          repaintBoundaryKey: boundary, maxFrames: 1, pixelRatio: 1);
+      await recorder.captureFrameForTest();
+      await recorder.captureRecording('slivers');
+    });
+
+    List<int> pixel(int x, int y) {
+      final offset = (y * encoder.width + x) * 4;
+      return encoder.frames.single.sublist(offset, offset + 3);
+    }
+
+    const shown = [0, 255, 0];
+    expect(pixel(400, 50), shown);
+    for (final y in [101, 130, 158]) {
+      expect(pixel(400, y), [0, 0, 0], reason: 'the keyed sliver at y=$y');
+    }
+    expect(pixel(400, 180), shown);
+    for (final y in [201, 250, 298]) {
+      expect(pixel(400, y), [255, 0, 0], reason: 'the wrapped sliver at y=$y');
+    }
+    expect(pixel(400, 320), shown);
   });
 }

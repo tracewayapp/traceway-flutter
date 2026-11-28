@@ -706,6 +706,107 @@ void main() {
     });
   });
 
+  group('stricter replay privacy and the clips waiting to be uploaded', () {
+    const video = TracewayVideoRecorderConfig(
+        repaintBoundaryKey: GlobalObjectKey('video'),
+        maxFrames: 10,
+        pixelRatio: 1,
+        fps: 15,
+        debug: false);
+    late bool reject;
+    late Harness h;
+
+    Future<void> start() async {
+      reject = true;
+      h = await startHarness(
+        options:
+            const TracewayOptions(remoteConfig: false, screenCapture: true),
+        handler: (request) async =>
+            reject && request.url.path.endsWith('/api/recordings')
+                ? http.Response('', 503)
+                : null,
+      );
+    }
+
+    void settings(String replay) => h.client.control
+        .applyRemote(parseSettingsDocument('{"replay":$replay}'));
+
+    /// An exception whose clip the server turns away for now.
+    Future<void> queueClip(String message) async {
+      h.client.captureException(StateError(message));
+      await h.client.flush();
+      expect(h.client.replay.transport.pending, 1, reason: message);
+    }
+
+    Future<int> postsOnceAccepted() async {
+      reject = false;
+      final before = h.requestsTo('/api/recordings').length;
+      await h.client.flush();
+      return h.requestsTo('/api/recordings').length - before;
+    }
+
+    test('masking inputs again drops them', () async {
+      await start();
+      h.client.screenRecorder = FakeVideoRecorder(video);
+      settings('{"maskAllInputs":false}');
+      await queueClip('typed in the clear');
+      settings('{"maskAllInputs":true}');
+      expect(h.client.replay.transport.pending, 0);
+      expect(await postsOnceAccepted(), 0);
+      h.client.screenRecorder = null;
+    });
+
+    test('unmasking inputs keeps them', () async {
+      await start();
+      h.client.screenRecorder = FakeVideoRecorder(video);
+      await queueClip('masked');
+      settings('{"maskAllInputs":false}');
+      expect(h.client.replay.transport.pending, 1);
+      expect(await postsOnceAccepted(), 1);
+      h.client.screenRecorder = null;
+    });
+
+    for (final (from, to) in [('always', 'wifi'), ('always', 'off'), ('wifi', 'off')]) {
+      test('image policy $from to $to drops them', () async {
+        await start();
+        h.client.screenRecorder =
+            WireframeRecorder(rootKey: GlobalKey(), maxFrames: 10);
+        h.client.replaySource = FakeReplaySource();
+        settings('{"images":"$from"}');
+        await queueClip('pictures');
+        settings('{"images":"$to"}');
+        expect(h.client.replay.transport.pending, 0);
+        expect(await postsOnceAccepted(), 0);
+        h.client.screenRecorder = null;
+      });
+    }
+
+    test('a looser image policy keeps them', () async {
+      await start();
+      h.client.screenRecorder =
+          WireframeRecorder(rootKey: GlobalKey(), maxFrames: 10);
+      h.client.replaySource = FakeReplaySource();
+      settings('{"images":"off"}');
+      await queueClip('placeholders');
+      settings('{"images":"always"}');
+      expect(h.client.replay.transport.pending, 1);
+      expect(await postsOnceAccepted(), 1);
+      h.client.screenRecorder = null;
+    });
+
+    test('a video shows the same pixels under every image policy: its '
+        'clips stay', () async {
+      await start();
+      h.client.screenRecorder = FakeVideoRecorder(video);
+      settings('{"images":"always"}');
+      await queueClip('video');
+      settings('{"images":"off"}');
+      expect(h.client.replay.transport.pending, 1);
+      expect(await postsOnceAccepted(), 1);
+      h.client.screenRecorder = null;
+    });
+  });
+
   group('FLT-12: the Traceway widget across clients', () {
     testWidgets('keeps the app\'s state when the SDK stops and records for a '
         'client started later', (tester) async {

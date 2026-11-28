@@ -49,8 +49,12 @@ jobs:
             fi
           done
 
+      # Both packages: the analysis at the root covers packages/ too, and an
+      # add-on without its dependencies is full of unresolved imports.
       - name: Install dependencies
-        run: flutter pub get
+        run: |
+          flutter pub get
+          (cd packages/traceway_video && flutter pub get)
 
       # Infos (deprecations in a newer Flutter) are reported, not fatal.
       - name: Analyze
@@ -62,7 +66,6 @@ jobs:
       - name: Analyze and test the video add-on
         working-directory: packages/traceway_video
         run: |
-          flutter pub get
           flutter analyze --no-fatal-infos
           flutter test
 
@@ -75,7 +78,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
           git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart packages/traceway_video/{pubspec.yaml,CHANGELOG.md}
-          git commit -m "v$INPUT_VERSION"
+          # A checkout that was already prepared for this version has
+          # nothing to commit: it is tagged as it is.
+          git diff --cached --quiet || git commit -m "v$INPUT_VERSION"
           git tag "$TAG"
           git push origin "HEAD:$BRANCH" "$TAG"
 

@@ -394,6 +394,23 @@ void main() {
       });
     }
 
+    test('with captureNavigation off a reported navigation still names the '
+        'screen; only its record is left out', () async {
+      final h = await startHarness(
+          options: const TracewayOptions(
+              remoteConfig: false, captureNavigation: false));
+      Traceway.recordNavigation('/orders/8841', route: '/orders/:id');
+      expect(h.client.currentScreen, '/orders/8841');
+      expect(h.client.currentRoute, '/orders/:id');
+      h.client.captureException(StateError('order failed'));
+      await h.client.flush();
+
+      final error = h.named(eventException).single;
+      expect(attr(error, 'app.screen.name'), '/orders/8841');
+      expect(attr(error, 'app.screen.route'), '/orders/:id');
+      expect(h.named(eventNavigation), isEmpty);
+    });
+
     test('a navigation with a template names the screen until the next one',
         () async {
       final h = await startHarness();

@@ -133,6 +133,33 @@ void main() {
       expect(lines.single, isNot(contains('secret-token')));
     });
 
+    test('next to a connection string, token: and baseUrl: are not used: '
+        'both come from the string, as in the browser and Android SDKs', () {
+      const old = 'OLD@https://old.traceway.test/api/report';
+      final withToken = resolveStart(token: 'NEW', connectionString: old);
+      expect(withToken!.token, 'OLD');
+      expect(withToken.baseUrl, 'https://old.traceway.test');
+
+      final withBoth = resolveStart(
+          token: 'NEW',
+          baseUrl: 'https://new.traceway.test',
+          connectionString: old);
+      expect(withBoth!.token, 'OLD');
+      expect(withBoth.baseUrl, 'https://old.traceway.test');
+
+      // A baseUrl that is not used is not checked either.
+      final unusable =
+          resolveStart(baseUrl: 'ftp://host', connectionString: old);
+      expect(unusable!.token, 'OLD');
+      expect(unusable.baseUrl, 'https://old.traceway.test');
+
+      // A blank string is none.
+      final blank = resolveStart(
+          token: 'NEW', baseUrl: 'new.traceway.test', connectionString: ' ');
+      expect(blank!.token, 'NEW');
+      expect(blank.baseUrl, 'https://new.traceway.test');
+    });
+
     test('for Traceway Cloud the warning leaves baseUrl out', () {
       final lines = printed(() => resolveStart(
           connectionString: 'tok@https://cloud.tracewayapp.com/api/report'));

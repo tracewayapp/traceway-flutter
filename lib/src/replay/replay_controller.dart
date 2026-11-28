@@ -71,6 +71,9 @@ class ReplayController {
   /// How many failed clips wait for the app to come back, the newest kept.
   static const int maxRetries = 3;
 
+  /// Counts [dropUnsent]: a clip asked for before the last one is not sent.
+  int _generation = 0;
+
   Mode get mode => _mode;
 
   void attach(ReplaySource? source) {
@@ -130,6 +133,14 @@ class ReplayController {
   void _stopTimer() {
     _segmentTimer?.cancel();
     _segmentTimer = null;
+  }
+
+  /// Masking or the image policy became stricter: the clips made so far
+  /// that have not gone to the network (waiting for their first upload or a
+  /// retry, or still being made) show what may no longer be uploaded.
+  void dropUnsent() {
+    _generation++;
+    transport.discard();
   }
 
   /// Uploads the frames of the last [lookbackMs]. With [exceptionId] the
@@ -221,6 +232,7 @@ class ReplayController {
     // budget of the session it happened in.
     final budgetSession =
         retry == null ? session ?? sessionId() : retry.budgetSession;
+    final generation = _generation;
     final future = () async {
       try {
         SessionRecordingPayload? clip;
@@ -232,7 +244,7 @@ class ReplayController {
         } catch (_) {
           // Failed like a clip that came back empty.
         }
-        if (_mode == Mode.off) return;
+        if (_mode == Mode.off || generation != _generation) return;
         if (clip == null) {
           // The platform encoder may not work in the background: tried
           // again once the app is back, while the frames are in the ring.

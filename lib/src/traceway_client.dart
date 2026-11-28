@@ -328,6 +328,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   late final ImageBudget _imageBudget = _SessionImageBudget(this);
   OpampHttpClient? _opamp;
   Uint8List _instanceUid = Uint8List(16);
+
+  /// Whether [_instanceUid] has been read from the state or made: it is
+  /// zeros until then.
+  bool _instanceKnown = false;
   ReplaySource? _screenRecorder;
   Timer? _flushTimer;
   Timer? _refreshTimer;
@@ -532,6 +536,26 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     }
   }
 
+  /// The replay privacy settings last applied.
+  bool? _replayMasked;
+  TracewayImagePolicy? _replayImages;
+
+  /// When input masking turns on or the image policy becomes stricter, the
+  /// clips made under the looser setting and not yet uploaded are dropped,
+  /// as the recorder drops its frames. A looser setting drops nothing.
+  void _dropLooserClips(Settings settings) {
+    final wasMasked = _replayMasked;
+    final hadImages = _replayImages;
+    final masked = _replayMasked = settings.replayMaskAllInputs;
+    final images = _replayImages = settings.replayImages;
+    final stricter = (masked && wasMasked == false) ||
+        // A video shows the same pixels under every image policy.
+        (hadImages != null &&
+            images.index < hadImages.index &&
+            _screenRecorder is! TracewayVideoRecorder);
+    if (stricter) _replay.dropUnsent();
+  }
+
   /// Uses [source] instead of the screen recorder as the origin of clips.
   @visibleForTesting
   set replaySource(ReplaySource? source) {
@@ -551,7 +575,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   /// [UnsupportedError] on the web.
   ///
   /// [connectionString] (`YOUR_TOKEN@https://cloud.tracewayapp.com`) is
-  /// deprecated: it is read as [token] and [baseUrl], with one warning.
+  /// deprecated: it is read as [token] and [baseUrl], with one warning, and
+  /// replaces both when they are given too.
   static TracewayClient? initialize({
     String? token,
     String? baseUrl,
@@ -655,6 +680,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       _instanceUid = uuidToBytes(uuidv7())!;
       _store.set('instanceUid', bytesToUuid(_instanceUid));
     }
+    _instanceKnown = true;
 
     Uint8List? appliedHash;
     final cached = _store.get('config');
@@ -811,6 +837,8 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
         } else {
           // The operating system only: no model, name, address or locale.
           attrs.addAll(DeviceInfoCollector.collectOs());
+          attrs.addAll(await DeviceInfoCollector.collectOsVersion()
+              .timeout(const Duration(seconds: 2), onTimeout: () => {}));
         }
       } catch (_) {}
     }
@@ -940,6 +968,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
       persistIssue: stateDir == null || _overrides?.logExporter != null
           ? null
           : (tracewayOutbox ?? outbox).persistLog,
+      sendPersisted: (tracewayOutbox ?? outbox).drain,
       random: _overrides?.random,
     );
 
@@ -994,8 +1023,10 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
   // ------------------------------------------------------------- public API
 
   /// The id this installation reports to the server (`service.instance.id`),
-  /// usable to target it from the dashboard.
-  String getInstanceId() => bytesToUuid(_instanceUid);
+  /// usable to target it from the dashboard. Null until the SDK has read it
+  /// from its state or made it, while it starts (see [ready]).
+  String? getInstanceId() =>
+      _instanceKnown ? bytesToUuid(_instanceUid) : null;
 
   void captureException(
     Object error, [
@@ -2611,6 +2642,7 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     final session = sessionId ?? _sessions?.currentId;
     _updateCaptureMode(session);
     final settings = _control.settings;
+    _dropLooserClips(settings);
     _configureRecorder(_screenRecorder, settings);
     _replay.apply(
       _control.replayMode,

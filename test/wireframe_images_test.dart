@@ -814,6 +814,40 @@ void main() {
       recorder.stop();
     });
 
+    testWidgets(
+        'a stricter policy drops the frames recorded under the looser one, '
+        'a looser one keeps them', (tester) async {
+      var now = DateTime.utc(2026, 1, 1, 12);
+      final photo = (await tester.runAsync(() => imageOf(gradient(64, 40), 64, 40)))!;
+      await tester.pumpWidget(_screen([_box(Image(image: _Picture(photo)))]));
+      final recorder =
+          WireframeRecorder(rootKey: _rootKey, maxFrames: 50, now: () => now)
+            ..imagePolicy = TracewayImagePolicy.always;
+      final start = now;
+      await tester.runAsync(() async {
+        recorder.start();
+        for (var i = 0; i < 500 && !recorder.isSettled; i++) {
+          now = now.add(const Duration(milliseconds: 10));
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      });
+      expect(recorder.bufferedFrameCount, 2);
+
+      // Metered here: `wifi` allows no pixels.
+      now = now.add(const Duration(seconds: 1));
+      recorder.imagePolicy = TracewayImagePolicy.wifi;
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(recorder.bufferedFrameCount, 1);
+      now = now.add(const Duration(seconds: 1));
+      final wifi =
+          (await recorder.captureRecording('c', since: start, until: now))!;
+      expect(jsonEncode(wifi.events), isNot(contains('data:image')));
+
+      recorder.imagePolicy = TracewayImagePolicy.always;
+      expect(recorder.bufferedFrameCount, 1);
+      recorder.stop();
+    });
+
     testWidgets('a rendered photo falls back to layout across repeated snapshots',
         (tester) async {
       var now = DateTime.utc(2026, 1, 1, 12);

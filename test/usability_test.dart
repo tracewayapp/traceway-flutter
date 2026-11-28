@@ -3,6 +3,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dartastic_opentelemetry/proto/opentelemetry_proto_dart.dart'
+    as proto;
 import 'package:dartastic_opentelemetry/testing.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -93,6 +95,93 @@ void main() {
       expect(inside.parentSpanContext?.spanId.hexString, checkout.spanId);
       final declined = logs.records.singleWhere((r) => r.eventName == eventException);
       expect((declined as dynamic).traceId?.hexString, checkout.traceId);
+    });
+  });
+
+  group('a metric or a count recorded while the SDK starts', () {
+    test('is sent once it is ready', () async {
+      final dir = await Directory.systemTemp.createTemp('traceway_early');
+      final gate = Completer<void>();
+      final requests = <http.Request>[];
+      final starting = TracewayClient.initializeForTest(
+        connectionString,
+        const TracewayOptions(remoteConfig: false),
+        overrides: TracewayTestOverrides(
+          spanExporter: InMemorySpanExporter(),
+          logExporter: InMemoryLogExporter(),
+          httpClient: MockClient((request) async {
+            requests.add(request);
+            return http.Response('{}', 200);
+          }),
+          stateDirectory: dir,
+          startGate: gate.future,
+        ),
+      );
+      while (TracewayClient.instance == null) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      Traceway.count('launch');
+      Traceway.metric('config.load', 42, {'source': 'cache'});
+      Traceway.metric('Bad Name', 1);
+
+      gate.complete();
+      await starting;
+      await Traceway.ready;
+      await TracewayClient.instance!.flush();
+
+      final sent = <String>{
+        for (final request in requests)
+          if (request.url.path.endsWith('/api/otel/v1/metrics'))
+            for (final rm in proto.ExportMetricsServiceRequest.fromBuffer(
+                    otlpBody(request))
+                .resourceMetrics)
+              for (final sm in rm.scopeMetrics)
+                for (final m in sm.metrics) m.name,
+      };
+      expect(sent, containsAll(['launch', 'config.load']));
+      expect(sent, isNot(contains('Bad Name')));
+      await TracewayClient.resetForTest();
+      await dir.delete(recursive: true);
+    });
+  });
+
+  group('the installation id while the SDK starts', () {
+    test('is null until it is known, then the id on every record', () async {
+      final gate = Completer<void>();
+      final logs = InMemoryLogExporter();
+      final starting = TracewayClient.initializeForTest(
+        connectionString,
+        const TracewayOptions(remoteConfig: false, captureMetrics: false),
+        overrides: TracewayTestOverrides(
+          spanExporter: InMemorySpanExporter(),
+          logExporter: logs,
+          httpClient: MockClient((_) async => http.Response('{}', 200)),
+          startGate: gate.future,
+        ),
+      );
+      while (TracewayClient.instance == null) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      expect(Traceway.getInstanceId(), isNull);
+      expect(TracewayClient.instance!.getInstanceId(), isNull);
+
+      gate.complete();
+      await starting;
+      await Traceway.ready;
+      final id = Traceway.getInstanceId();
+      expect(id, matches(RegExp(r'^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')));
+      expect(id, isNot('00000000-0000-0000-0000-000000000000'));
+      Traceway.captureMessage('hello');
+      await TracewayClient.instance!.flush();
+      final record =
+          logs.records.firstWhere((r) => r.eventName == eventMessage);
+      expect(
+          (record as dynamic)
+              .resource
+              .attributes
+              .toMap()['service.instance.id']
+              .value,
+          id);
     });
   });
 

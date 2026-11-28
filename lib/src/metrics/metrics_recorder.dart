@@ -386,13 +386,17 @@ class MetricsRecorder {
 
   /// An app-defined distribution, e.g. `checkout.duration`.
   void metric(String name, double value, [Map<String, Object>? dims]) {
-    if (!_isCustomName(name) || !active) return;
+    if (!_isCustomName(name)) return;
+    if (_defer(() => metric(name, value, dims))) return;
+    if (!active) return;
     _aggregator.observe(name, value, dims: _customDims(dims));
   }
 
   /// An app-defined counter.
   void count(String name, [double n = 1, Map<String, Object>? dims]) {
-    if (!_isCustomName(name) || !active) return;
+    if (!_isCustomName(name)) return;
+    if (_defer(() => count(name, n, dims))) return;
+    if (!active) return;
     _aggregator.count(name, n, _customDims(dims));
   }
 

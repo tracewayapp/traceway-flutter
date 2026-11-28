@@ -1,7 +1,13 @@
 # What `dart pub publish` leaves out of the traceway package: .gitignore's
-# entries (pub reads this file instead of it) and the add-on packages, which
-# are published on their own.
+# entries (pub reads this file instead of it), the add-on packages, which
+# are published on their own, and docs/, which pub's layout check refuses
+# under that name (the README links to it in the repository).
+#
+# pub applies this file to every package of the repository: with packages/
+# ignored here, an add-on is published from a copy outside the repository
+# (tool/export_video_addon.sh).
 /packages/
+/docs/
 
 # Miscellaneous
 *.class

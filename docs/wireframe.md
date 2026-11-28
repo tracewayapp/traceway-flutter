@@ -115,7 +115,7 @@ What a frame does with an image is decided when it is captured, so a picture rec
 - **Dedup and bounds**: one picture per decoded image (`ui.Image.isCloneOf`, so the same photo in every cell of a list is encoded once) and per source, size and tint. At most 8 new pictures per frame and 4 being made at a time; at most 128 per recorder, the one shown longest ago evicted to make room. An image that changes more than 3 times within a second (an animated GIF) is not recorded frame by frame: it falls back.
 - **Budget**: each encoded byte counts against the session's 4 MiB in `CollectionBudget` (`imageBytes`, saved with the replay budget); a picture shown again in a new session counts there too. Past it, images fall back. Sessions report `traceway.replay.image_bytes`.
 - **Unmetered** (`NetworkState`): `TracewayOptions.isUnmeteredNetwork` when the app sets it, else the interfaces up with an address (Android `wlan*`/`eth*`, iOS `en0`, macOS `en*`, Linux `wl*`/`eth*`/`en*`, Windows Wi-Fi/Ethernet names). Asked once per frame under `wifi`; the answer is cached for 2 s and refreshed in the background, metered until known.
-- Under `off` the frames held are dropped and the screen is captured again at once (`WireframeRecorder.imagePolicy`), as when `maskAllInputs` turns on; no picture style stays on the page.
+- A stricter policy (`always` to `wifi` or `off`, `wifi` to `off`) drops the frames held and captures the screen again at once (`WireframeRecorder.imagePolicy`), as when `maskAllInputs` turns on, and the client drops the clips made before it that have not gone to the network (`ReplayController.dropUnsent`: queued for their first upload or a retry, or still being made). A looser one drops nothing. Under `off` no picture style stays on the page.
 - Every image inside a blur mask is a placeholder, and nothing of it is drawn or encoded.
 - Session events carry the policy in effect (`traceway.replay.images`; `off` when the screen is not recorded).
 
@@ -124,8 +124,8 @@ What a frame does with an image is decided when it is captured, so a picture rec
 - `TracewayMask(mode: TracewayMaskMode.blank(color))`, or `ValueKey('traceway-blank')` on any widget (black): the widget becomes one box of that color; nothing of its subtree is walked.
 - `TracewayMask(child: …)` (blur), or `ValueKey('traceway-mask')` on any widget: the layout stays, every non-space character of its text becomes `*`, and its images are placeholders. A marker key on a widget masks it as a `TracewayMask` around it would.
 - A mask covers its subtree. Tap records leave out the shown text, label and keys of a masked widget, and a marker key is never reported as a widget's id. `TracewayPrivacyMask` is a deprecated alias of `TracewayMask`.
-- Video clips use the same masks: `maskRegionsIn` walks the elements under the recorded `RepaintBoundary` as each frame is taken and pixelates or fills the bounds each mask was painted at.
-- `replay.maskAllInputs` (on by default, as rrweb's `maskAllInputs`) replaces every non-space character typed into an editable field with `*`; read-only text (`SelectableText`) is shown. Obscured fields always show their obscuring character. Turning it on drops the frames held and captures the screen again at once.
+- Video clips use the same masks: `maskRegionsIn` walks the elements under the recorded `RepaintBoundary` as each frame is taken and pixelates or fills the bounds each mask was painted at. A mask whose render object is a sliver has no box: its region is the sliver's paint bounds, the part of the viewport it paints, and none while it is scrolled out of view.
+- `replay.maskAllInputs` (on by default, as rrweb's `maskAllInputs`) replaces every non-space character typed into an editable field with `*`; read-only text (`SelectableText`) is shown. Obscured fields always show their obscuring character. Turning it on drops the frames held and the clips not yet uploaded, and captures the screen again at once.
 
 ## Scrolling
 

@@ -53,8 +53,9 @@ void _warnOnce(String kind, String message) {
 /// (CONTRACT §16): [token] and [baseUrl] (Traceway Cloud by default), or the
 /// deprecated [connectionString], read as `token` + `baseUrl` with one
 /// deprecation warning per process that names the new form (never the
-/// token). An empty token, a build without its `--dart-define`, counts as
-/// none.
+/// token). A connection string given together with [token] or [baseUrl]
+/// replaces both. An empty token, a build without its `--dart-define`,
+/// counts as none.
 ///
 /// Null, after one warning, when the connection string or [baseUrl] is not
 /// one the SDK can use: the SDK stays off, nothing throws. Throws an
@@ -66,20 +67,8 @@ TracewayStart? resolveStart({
   String? connectionString,
   TracewayTelemetry? telemetry,
 }) {
-  String? resolvedToken =
-      token == null || token.trim().isEmpty ? null : token.trim();
+  String? resolvedToken;
   String? resolvedBase;
-  if (baseUrl != null && baseUrl.trim().isNotEmpty) {
-    resolvedBase = normalizeBaseUrl(baseUrl);
-    if (resolvedBase == null) {
-      _warnOnce(
-          'baseUrl',
-          'Traceway: baseUrl must be an HTTP(S) URL such as '
-              'https://cloud.tracewayapp.com, got "${baseUrl.trim()}"; the '
-              'SDK is off.');
-      return null;
-    }
-  }
   if (connectionString != null && connectionString.trim().isNotEmpty) {
     final parsed = parseConnectionString(connectionString);
     if (parsed == null) {
@@ -91,14 +80,29 @@ TracewayStart? resolveStart({
               "'YOUR_TOKEN', child: …).");
       return null;
     }
-    resolvedToken ??= parsed.token;
-    resolvedBase ??= parsed.baseUrl;
+    // Both come from the string, as in the browser and Android SDKs: a
+    // token or baseUrl given next to it is not used.
+    resolvedToken = parsed.token;
+    resolvedBase = parsed.baseUrl;
     final named =
         resolvedBase == defaultBaseUrl ? '' : ", baseUrl: '$resolvedBase'";
     _warnOnce(
         'deprecated',
         'Traceway: connection strings are deprecated: use '
             "Traceway.run(token: '…'$named, child: …).");
+  } else {
+    resolvedToken = token == null || token.trim().isEmpty ? null : token.trim();
+    if (baseUrl != null && baseUrl.trim().isNotEmpty) {
+      resolvedBase = normalizeBaseUrl(baseUrl);
+      if (resolvedBase == null) {
+        _warnOnce(
+            'baseUrl',
+            'Traceway: baseUrl must be an HTTP(S) URL such as '
+                'https://cloud.tracewayapp.com, got "${baseUrl.trim()}"; the '
+                'SDK is off.');
+        return null;
+      }
+    }
   }
   if (resolvedToken == null && telemetry?.coversAllSignals != true) {
     throw ArgumentError("Traceway needs a token, as in Traceway.run(token: "

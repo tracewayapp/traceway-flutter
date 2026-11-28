@@ -1,4 +1,4 @@
-import 'package:flutter/rendering.dart' show RenderEditable;
+import 'package:flutter/rendering.dart' show RenderEditable, RenderSliver;
 import 'package:flutter/widgets.dart';
 
 import 'traceway_mask_mode.dart';
@@ -61,18 +61,30 @@ bool isMaskMarker(Key? key) =>
 /// user types into (blurred). Read from the render tree when a frame is
 /// captured, so a mask stays on its widget while that scrolls, animates or
 /// is transformed: the rectangle is the bounds of the widget as it was last
-/// painted. Nothing under a blank mask is listed, its box already covers it.
+/// painted, and for a mask on a sliver the part of the viewport the sliver
+/// paints. Nothing under a blank mask is listed, its box already covers it.
 List<MaskRegion> maskRegionsIn(BuildContext root,
     {bool maskAllInputs = false}) {
   final boundary = root.findRenderObject();
   if (boundary is! RenderBox) return const [];
   final regions = <MaskRegion>[];
-  void add(RenderObject? box, TracewayMaskMode mode) {
-    if (box is! RenderBox || !box.attached || !box.hasSize) return;
+  void add(RenderObject? object, TracewayMaskMode mode) {
+    if (object == null || !object.attached) return;
+    final Rect bounds;
+    if (object is RenderBox) {
+      if (!object.hasSize) return;
+      bounds = Offset.zero & object.size;
+    } else if (object is RenderSliver) {
+      // A sliver has no size: it paints its visible extent in the viewport.
+      if (!(object.geometry?.visible ?? false)) return;
+      bounds = object.paintBounds;
+    } else {
+      return;
+    }
     try {
-      final transform = box.getTransformTo(boundary);
+      final transform = object.getTransformTo(boundary);
       regions.add(MaskRegion(
-        rect: MatrixUtils.transformRect(transform, Offset.zero & box.size),
+        rect: MatrixUtils.transformRect(transform, bounds),
         mode: mode,
       ));
     } catch (_) {

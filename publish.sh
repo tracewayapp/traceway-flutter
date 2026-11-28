@@ -64,14 +64,18 @@ echo ""
 echo "CHANGELOG.md updated."
 
 # --- 6b. Commit version bump before publish ---
+# Nothing to commit when an earlier run of this version already did.
 echo ""
 echo "Committing version bump and changelog..."
 git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart packages/traceway_video/{pubspec.yaml,CHANGELOG.md}
-git commit -m "v$NEW_VERSION"
+git diff --cached --quiet || git commit -m "v$NEW_VERSION"
 
 # --- 7. Run analysis and tests ---
+# Both packages are resolved first: the analysis covers packages/ too.
 echo ""
 echo "Running analysis..."
+flutter pub get
+(cd packages/traceway_video && flutter pub get)
 flutter analyze --no-fatal-infos
 
 echo ""
@@ -86,7 +90,7 @@ dart pub publish --dry-run
 echo ""
 read -rp "Dry run passed. Publish for real? (y/N) " CONFIRM2
 if [[ "$CONFIRM2" != "y" && "$CONFIRM2" != "Y" ]]; then
-  echo "Aborted. Version bump is still in pubspec.yaml — revert if needed."
+  echo "Aborted. The version bump is committed as \"v$NEW_VERSION\" and not tagged: run this script again to continue, or reset the commit."
   exit 0
 fi
 
@@ -106,9 +110,10 @@ echo "========================================"
 echo "  Published traceway v$NEW_VERSION"
 echo "========================================"
 echo ""
-echo "Publish the video add-on with the same version once traceway is live:"
-echo "  Publish from a clean copy of the tag with packages/traceway_video/pubspec_overrides.yaml removed."
-echo "  From packages/traceway_video run flutter pub get, dart pub publish --dry-run, then dart pub publish."
+echo "Publish the video add-on with the same version once traceway is live,"
+echo "from a copy outside the repository (inside it pub hides the add-on's files):"
+echo "  bash tool/export_video_addon.sh /tmp/traceway_video v$NEW_VERSION"
+echo "  cd /tmp/traceway_video && flutter pub get && dart pub publish --dry-run && dart pub publish"
 echo ""
 echo "Don't forget to push commits and tags:"
 echo "  git push && git push --tags"

@@ -705,7 +705,7 @@ void main() {
       var h = await startHarness(
           options: const TracewayOptions(), handler: handler, stateDirectory: dir);
       await Future<void>.delayed(const Duration(milliseconds: 100));
-      final instanceId = h.client.getInstanceId();
+      final instanceId = h.client.getInstanceId()!;
       expect(instanceId, matches(_uuid));
       expect(instanceId[14], '7');
       expect(h.client.settings.signals['custom']!.mode, Mode.stream);

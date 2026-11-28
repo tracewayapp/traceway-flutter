@@ -92,7 +92,10 @@ class TracewayOptions {
   final bool captureNetwork;
 
   /// Record navigation transitions reported by [TracewayNavigatorObserver].
-  /// The observer must still be wired into the app's navigator.
+  /// The observer must still be wired into the app's navigator. False sends
+  /// no navigation record and makes the observer do nothing; a navigation
+  /// the app reports itself (`Traceway.recordNavigation`) still names the
+  /// screen for issues and screen metrics.
   final bool captureNavigation;
 
   /// Record taps (`browser.user_action.click`) with a selector naming the
@@ -203,7 +206,7 @@ class TracewayOptions {
   /// Describe the device on every record: model, manufacturer, name, local
   /// IP address, locale, screen and Dart runtime (`device.*`, `screen.*`,
   /// `runtime.version`). False keeps only the operating system (`os.name`,
-  /// `os.version`).
+  /// and `os.version`, its bare version number).
   final bool captureDeviceInfo;
 
   /// Report hangs (`app.hang`) in debug builds too. Off by default: a

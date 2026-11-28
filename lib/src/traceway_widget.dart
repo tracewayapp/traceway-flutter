@@ -102,7 +102,8 @@ class Traceway extends StatefulWidget {
       TracewayClient.instance?.refreshConfig();
 
   /// This installation's id (`service.instance.id`), which the dashboard
-  /// can aim a capture at; null before the SDK has started.
+  /// can aim a capture at; null before the SDK has started and while it
+  /// starts (`await Traceway.ready` first).
   static String? getInstanceId() => TracewayClient.instance?.getInstanceId();
 
   /// The current session's id (`session.id`); null before the SDK has
@@ -139,11 +140,15 @@ class Traceway extends StatefulWidget {
   /// ```
   ///
   /// Navigation steps of recording triggers match [path].
+  ///
+  /// With `captureNavigation: false` the screen is still named (issues carry
+  /// it, screen metrics group by it); only the navigation record is left
+  /// out.
   static void recordNavigation(String path,
       {String? from, String action = 'push', String? route}) {
     guarded('recordNavigation', () {
       final client = TracewayClient.instance;
-      if (client == null || !client.options.captureNavigation) return;
+      if (client == null) return;
       client.recordNavigationEvent(NavigationEvent(
         action: action,
         from: from ?? client.currentScreen,
@@ -238,7 +243,8 @@ class Traceway extends StatefulWidget {
   /// ```
   ///
   /// [connectionString] (`YOUR_TOKEN@https://cloud.tracewayapp.com`) is
-  /// deprecated: it is read as [token] and [baseUrl], with one warning.
+  /// deprecated: it is read as [token] and [baseUrl], with one warning, and
+  /// replaces both when they are given too.
   /// With a connection string or [baseUrl] it cannot use, the SDK prints
   /// one warning and the app runs without it; other settings it cannot use
   /// (no token and no telemetry destination, a malformed telemetry URL) are

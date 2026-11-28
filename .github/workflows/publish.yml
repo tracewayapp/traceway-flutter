@@ -103,16 +103,18 @@ jobs:
         if: steps.published.outputs.traceway != 'true'
         run: dart pub publish --force
 
-      # The add-on resolves `traceway` from pub.dev, as its users will: the
-      # path override used for development is dropped, and the step waits
-      # until pub.dev serves the version published above.
+      # The add-on is published from a copy of the tagged files outside the
+      # checkout: pub applies the repository's ignore files to every package
+      # in it, and the root .pubignore, which keeps packages/ out of
+      # `traceway`, hides the add-on's own files here. The copy has no path
+      # override, so it resolves `traceway` from pub.dev, as its users will,
+      # and the step waits until pub.dev serves the version published above.
       - name: Resolve traceway_video against the published traceway
         if: steps.published.outputs.traceway_video != 'true'
-        working-directory: packages/traceway_video
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          rm -f pubspec_overrides.yaml
+          bash tool/export_video_addon.sh "$RUNNER_TEMP/traceway_video"
           for attempt in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w '%{http_code}' "https://pub.dev/api/packages/traceway/versions/$VERSION")
             [ "$code" = 200 ] && break
@@ -120,16 +122,17 @@ jobs:
             sleep 20
           done
           [ "$code" = 200 ] || { echo "traceway $VERSION did not appear on pub.dev" >&2; exit 1; }
+          cd "$RUNNER_TEMP/traceway_video"
           flutter pub get
 
       - name: Publish traceway_video - dry run
         if: steps.published.outputs.traceway_video != 'true'
-        working-directory: packages/traceway_video
+        working-directory: ${{ runner.temp }}/traceway_video
         run: dart pub publish --dry-run
 
       - name: Publish traceway_video to pub.dev
         if: steps.published.outputs.traceway_video != 'true'
-        working-directory: packages/traceway_video
+        working-directory: ${{ runner.temp }}/traceway_video
         run: dart pub publish --force
 
       - name: Create GitHub release

@@ -201,7 +201,7 @@ Traceway.removeAttribute('team');
 Traceway.clearAttributes(); // also the ones from TracewayOptions.attributes
 ```
 
-There is no `setUser`: a user is the `user.id` attribute, as in the browser SDK. Up to 64 attributes are kept. A change sends a `traceway.session.update`, so the session gets a `user.id` set after sign-in at once (changes made together send one), and asks the server for settings about 2 seconds later, so a rule targeting the attribute applies soon. `Traceway.refreshConfig()` asks at once. `Traceway.getInstanceId()` is the installation's id (`service.instance.id`) a dashboard capture can target, and `Traceway.currentSessionId` the current session's `session.id`.
+There is no `setUser`: a user is the `user.id` attribute, as in the browser SDK. Up to 64 attributes are kept. A change sends a `traceway.session.update`, so the session gets a `user.id` set after sign-in at once (changes made together send one), and asks the server for settings about 2 seconds later, so a rule targeting the attribute applies soon. `Traceway.refreshConfig()` asks at once. `Traceway.getInstanceId()` is the installation's id (`service.instance.id`) a dashboard capture can target (null until the SDK has started: `await Traceway.ready` first), and `Traceway.currentSessionId` the current session's `session.id`.
 
 ### Interactions
 
@@ -254,7 +254,7 @@ Every record is an OpenTelemetry log record or span and belongs to a *signal*. E
 | `custom` | `Traceway.recordAction`, `Traceway.track` | buffer |
 | replay | screen recording | buffer |
 
-Breadcrumbs are OpenTelemetry records held in the ring buffer and shown on the session timeline next to the exception that flushed them. The built-in trigger fires on every exception: it uploads the buffered breadcrumbs of the last 10 minutes and the screen-recording clip. An app that never throws sends only its session and control records (`session.start`, `session.end`, `traceway.session.update`, `traceway.config.applied`) and its metrics. Clips are rationed to one per 5 seconds and 20 per session; breadcrumbs are still sent for the exceptions in between.
+Breadcrumbs are OpenTelemetry records held in the ring buffer and shown on the session timeline next to the exception that flushed them. The built-in trigger fires on every exception: it uploads the exception, then the buffered breadcrumbs of the last 10 minutes, and the screen-recording clip. An app that never throws sends only its session and control records (`session.start`, `session.end`, `traceway.session.update`, `traceway.config.applied`) and its metrics. Clips are rationed to one per 5 seconds and 20 per session; breadcrumbs are still sent for the exceptions in between.
 
 `recordAllSessions: true` streams every breadcrumb signal and the screen recording instead. The signal names, modes, triggers and limits are the browser SDK's, so one rule can target both.
 
@@ -435,7 +435,7 @@ What a wireframe shows of an image is decided when the frame is captured (a pict
 - **Bounded**: the same image at the same size is one picture however many widgets show it; at most 128 per recorder (the one shown longest ago makes room), and 4 MiB of pictures per session, counted with the replay budget (`traceway.replay.image_bytes` on session events). An animated image (a GIF) is not recorded frame by frame.
 - **Unmetered** is what `TracewayOptions.isUnmeteredNetwork` says when the app sets it (from `connectivity_plus`, say); otherwise the SDK guesses from the network interfaces that are up (Android `wlan*`/`eth*`, iOS `en0`, desktop Wi-Fi and Ethernet), without a plugin. The guess takes a hotspot shared by a phone for Wi-Fi; until it is known, the network counts as metered.
 - A `DecorationImage` (a `BoxDecoration` image, `CircleAvatar.backgroundImage`) keeps its URL or the placeholder: its pixels are not inlined.
-- `off` takes effect as soon as the setting arrives: the frames held are dropped and the screen is taken again. Every image inside a mask is a placeholder, and nothing of it is drawn or encoded.
+- A stricter setting (`always` to `wifi` or `off`, `wifi` to `off`) takes effect as soon as it arrives: the frames held and the clips not yet uploaded are dropped, and the screen is taken again. A looser one drops nothing. Every image inside a mask is a placeholder, and nothing of it is drawn or encoded.
 - Video recordings are not affected.
 - With `debug: true` the console says when a picture was dropped for its size or the session's budget.
 
@@ -489,11 +489,13 @@ Text(card.number, key: const ValueKey('traceway-mask'))
 ListTile(key: const ValueKey('traceway-blank'), title: Text(account.iban))
 ```
 
+A mask and a marker key work on a sliver too (`TracewayMask(child: SliverList(…))`, a keyed `SliverToBoxAdapter`): a video masks the part of the scroll view the sliver paints.
+
 The marker takes the place of the widget's own key and is never reported as its id. Flutter requires the keys of the children of one `Row`, `Column`, `Stack` or other multi-child widget to differ, so mark one of them this way and wrap the others in `TracewayMask`.
 
 Each wireframe clip or streamed segment allows 128 KiB of inline raster data URLs, including repeats in snapshots and mutations. Larger segments use layout-only image and icon placeholders throughout. The next segment starts with a fresh allowance. This limit applies to wireframe replay.
 
-In a [wireframe](#wireframe) a blank mask is a box of its color and nothing inside it is recorded; a blur mask keeps the layout but replaces its text with `*` and its images with placeholders. Text typed into fields is replaced with `*` unless remote settings set `replay.maskAllInputs: false`; obscured fields always are. Turning `maskAllInputs` on drops the frames recorded without it. In a video the same setting pixelates the text area of every field the user types into, like a blur mask; password fields always receive an opaque mask, including the last character shown while typing. Read-only, non-password fields keep their displayed text. Enabling input masking discards older video frames and clips still encoding.
+In a [wireframe](#wireframe) a blank mask is a box of its color and nothing inside it is recorded; a blur mask keeps the layout but replaces its text with `*` and its images with placeholders. Text typed into fields is replaced with `*` unless remote settings set `replay.maskAllInputs: false`; obscured fields always are. Turning `maskAllInputs` on drops the frames recorded without it and the clips not yet uploaded. In a video the same setting pixelates the text area of every field the user types into, like a blur mask; password fields always receive an opaque mask, including the last character shown while typing. Read-only, non-password fields keep their displayed text. Enabling input masking discards older video frames, clips still encoding and clips waiting to be uploaded.
 
 The mask covers the widget where it is in each recorded frame: its place is read from the render tree when the frame is captured, so it stays on the widget while that scrolls in a list, animates or is transformed.
 
@@ -584,7 +586,7 @@ Traceway.count('cart.add');
 Traceway.setMetricDimension('experiment', 'b'); // `custom.experiment` on every metric
 ```
 
-`captureMetrics: false` turns it all off. A rule's `metrics` section switches metrics off (`enabled`), samples sessions (`sampleRate`; counts are weighted back by the server) or changes the upload interval (`flushSeconds`, 30–3600). An upload that fails is kept and retried once.
+A metric or count recorded while the SDK is still starting (in `main` right after `Traceway.run`, in the first `initState`) is kept and recorded once it is ready. `captureMetrics: false` turns it all off. A rule's `metrics` section switches metrics off (`enabled`), samples sessions (`sampleRate`; counts are weighted back by the server) or changes the upload interval (`flushSeconds`, 30–3600). An upload that fails is kept and retried once.
 
 ## Send telemetry to another OpenTelemetry provider
 
@@ -690,7 +692,7 @@ Shared with the Android and iOS SDKs, in their order, then Flutter's own:
 | `persistToDisk` | `true` | Keep SDK state and undelivered telemetry on disk across restarts |
 | `captureLogs` | `true` | Capture `package:logging` records, `Traceway.log` and every `print` / `debugPrint` |
 | `captureNetwork` | `true` | Install `HttpOverrides.global` to record every dart:io HTTP call |
-| `captureNavigation` | `true` | Record navigation transitions reported by `Traceway.navigatorObserver` |
+| `captureNavigation` | `true` | Record navigation transitions; `false` sends none and ignores `Traceway.navigatorObserver`, while `Traceway.recordNavigation` still names the screen for issues and screen metrics |
 | `captureUserActions` | `true` | Record taps with the selector of the widget, and feed taps and hovers to recording triggers |
 | `captureMetrics` | `true` | Measure app start, screen display times, frames, hangs, unhandled errors, sessions, users and requests, and upload them as metrics |
 | `metricDimensions` | `{}` | Up to two app-defined dimensions on every metric (`custom.<key>`) |
@@ -706,7 +708,7 @@ Shared with the Android and iOS SDKs, in their order, then Flutter's own:
 | `beforeCapture` | — | Called before an exception or message is recorded; return `false` to drop it |
 | `screenCaptureMode` | `wireframe` | `TracewayScreenCaptureMode.wireframe` (the widget tree replayed as HTML, every platform) or `.video` (MP4 with the [`traceway_video` add-on](#video-replay-add-on), Android, iOS, macOS; a wireframe elsewhere); remote `replay.captureMode` overrides it |
 | `capturePixelRatio` | `0.75` | Video frame resolution scale factor (the video add-on) |
-| `captureDeviceInfo` | `true` | Describe the device (model, name, local IP, locale, screen, Dart runtime); `false` keeps only `os.name` and `os.version` |
+| `captureDeviceInfo` | `true` | Describe the device (model, name, local IP, locale, screen, Dart runtime); `false` keeps only `os.name` and `os.version` (the bare version number, `17.4` or `14`) |
 | `reportHangsInDebug` | `false` | Report hangs in debug builds too |
 | `captureAppHangs` | `true` | Report hangs, for the `app.hang` metric; Flutter reports no `AppHang` issue |
 | `appHangThresholdMs` | `2000` | How long the UI isolate must be blocked to count as a hang, for the `app.hang` metric (at least 250) |
@@ -851,7 +853,7 @@ The API has the names of the browser, Android and iOS SDKs. Where Flutter differ
 
 ### From 2.0 to 2.1
 
-- **Start with a token**: `Traceway.run(token: 'YOUR_TOKEN', child: …)`, with `baseUrl: 'https://your-server'` only for a self-hosted server (Traceway Cloud, `https://cloud.tracewayapp.com`, is the default). Keep the token out of the source with `--dart-define=TRACEWAY_TOKEN=…`. The `connectionString` parameter still works and is deprecated: it is read as the token and the server URL (the API path the old strings ended in dropped, `https://` added when there is no scheme) and prints one warning naming the new form. One it cannot read prints one warning and leaves the SDK off; it never throws.
+- **Start with a token**: `Traceway.run(token: 'YOUR_TOKEN', child: …)`, with `baseUrl: 'https://your-server'` only for a self-hosted server (Traceway Cloud, `https://cloud.tracewayapp.com`, is the default). Keep the token out of the source with `--dart-define=TRACEWAY_TOKEN=…`. The `connectionString` parameter still works and is deprecated: it is read as the token and the server URL (the API path the old strings ended in dropped, `https://` added when there is no scheme) and prints one warning naming the new form. Given together with `token:` or `baseUrl:` it replaces both, as in the browser and Android SDKs. One it cannot read prints one warning and leaves the SDK off; it never throws.
 - **`TracewayClient.initialize`** takes the same named parameters, `initialize(token:, baseUrl:, options:)`, and returns `null` when the server URL is unusable.
 - **Video is an add-on**: the default `screenCaptureMode` is now `wireframe`, and the `traceway` package no longer depends on `flutter_quick_video_encoder` (no Gradle patch, no CocoaPods requirement). For video, add [`traceway_video`](#video-replay-add-on) and call `TracewayVideo.register()` before `Traceway.run`; without it, video mode warns once and records a wireframe. Remove the `flutter_quick_video_encoder` Gradle block from an app that does not use the add-on: Gradle fails on a project that no longer exists.
 - **`legacyConnectionString` is gone**: 2.1 converts pending reports that a 2.0 beta associated with the current Traceway server and project token into OTLP records with their original timestamps. Matching reports follow error and message sampling. Reports selected for delivery stay in their original queue until the server accepts them or they expire. The beta stored a hash of the exact legacy URL and credential. Unassigned 1.x files and destination hashes that cannot be matched stay on device and expire after 12 hours. Legacy video is discarded. Nothing is sent to the 1.x report endpoint any more.
@@ -919,7 +921,9 @@ Caveats:
 
 Run the **Release (bump + tag)** workflow with the prepared, untagged version and release notes. It dates both changelogs, tests both packages, tags the release and starts the **Publish to pub.dev** workflow. The publisher uploads `traceway`, waits until that version is available from pub.dev, then resolves and publishes `traceway_video` against it.
 
-For the first `traceway_video` release, let the publisher upload core first. Once core is visible on pub.dev, use a clean checkout of that tag. In `packages/traceway_video`, remove the local `pubspec_overrides.yaml`, run `flutter pub get` and `dart pub publish --dry-run`, then publish the add-on with an authorized maintainer account. Configure automated publishing on the add-on's pub.dev admin page for `tracewayapp/traceway-flutter`, tag pattern `v{{version}}`, with workflow-dispatch publishing enabled. Rerun **Publish to pub.dev** on the same tag to finish the release. Already-published versions are skipped.
+The add-on is always published from a copy outside the repository: the root `.pubignore` keeps `packages/` out of the `traceway` package, and pub applies it to every package of the repository, so inside a checkout `dart pub publish` finds none of the add-on's files. `tool/export_video_addon.sh <directory> [<tag>]` makes that copy from the committed files, without the `pubspec_overrides.yaml` used for development; the publisher runs it.
+
+For the first `traceway_video` release, let the publisher upload core first. Once core is visible on pub.dev, run `bash tool/export_video_addon.sh /tmp/traceway_video v<version>` in a checkout that has the tag. In `/tmp/traceway_video`, run `flutter pub get` and `dart pub publish --dry-run`, then publish the add-on with an authorized maintainer account. Configure automated publishing on the add-on's pub.dev admin page for `tracewayapp/traceway-flutter`, tag pattern `v{{version}}`, with workflow-dispatch publishing enabled. Rerun **Publish to pub.dev** on the same tag to finish the release. Already-published versions are skipped.
 
 ## License
 
