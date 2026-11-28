@@ -12,10 +12,17 @@ const String eventTriggerFired = 'traceway.trigger.fired';
 const String eventCaptureStarted = 'traceway.capture.started';
 const String eventConfigApplied = 'traceway.config.applied';
 
+/// Data was dropped: the session's budget ran out, the error flood guard
+/// held errors back, or replay segments failed to upload.
+const String eventCollectionHealth = 'traceway.collection.health';
+
 const String attrSessionId = 'session.id';
 const String attrSessionStartedAt = 'traceway.session.started_at';
 const String attrExceptionId = 'traceway.exception.id';
 const String attrReplayStatus = 'traceway.replay.status';
+
+/// The captures a record was collected under, a JSON array of ids.
+const String attrCaptureIds = 'traceway.capture.ids';
 
 /// `control` records describe the SDK itself (sessions, triggers, config) and
 /// are always sent.
@@ -28,7 +35,7 @@ const Set<String> _controlEvents = {
   eventTriggerFired,
   eventCaptureStarted,
   eventConfigApplied,
-  'traceway.collection.health',
+  eventCollectionHealth,
 };
 
 /// Maps a log record's event name to the signal whose settings govern it.

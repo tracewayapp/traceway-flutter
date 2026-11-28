@@ -13,9 +13,9 @@ at each point:
   3. a recording trigger from the app's local settings (navigation
      /users/{id}, a tap on #open-profile, a log line) starts a capture:
      the session lists the trigger as a recording reason, logs stream while
-     it runs and not after, and the session gets consecutive video segments
+     it runs and not after, and the session gets consecutive replay segments
   4. a capture started from the dashboard API: its lookback comes up, logs
-     and video stream, and cancelling it stops both
+     and replay stream, and cancelling it stops both
   5. a remote rule whose click step is the selector the server recorded for
      a tap: the server accepts it and the app matches it on the next tap
   6. the app saves its buffer going to the background and is killed; the
@@ -25,7 +25,7 @@ at each point:
      OpenTelemetry Collector receives the logs, taps, request span and
      metrics; Traceway keeps the issue, its replay clip and the session, and
      none of the breadcrumbs
-  9. (with --otelcol) standalone, without a connection string: the
+  9. (with --otelcol) standalone, without a token: the
      collector receives everything, the exception included, and Traceway
      nothing
   7. (checked before 6) the app's performance arrives as client metrics:
@@ -43,7 +43,7 @@ the app command. The harness clears the example app's data for fresh installs,
 preserves it across restart scenarios and forwards the local test ports.
 
 The app must be built with TRACEWAY_DSN pointing at a Flutter project of that
-account. Needs ffprobe on PATH to inspect the clips. With --storage (a local
+account. The example records wireframe replay (rrweb events). With --storage (a local
 storage backend) every stored segment is checked on its own.
 """
 import argparse, base64, datetime, glob, json, os, shutil, subprocess, sys, tempfile, threading, time
@@ -51,6 +51,7 @@ import urllib.error, urllib.parse, urllib.request
 
 from android import AndroidApp
 
+FPS = 15
 MAX_CLIP_SECONDS = 10.5  # 150 frames at 15 fps, plus rounding
 JOURNEY_CAPTURE_SECONDS = 30
 DEFAULT_STATE_DIR = os.path.expanduser('~/.local/share/com.example.traceway_example/traceway_v2')
@@ -149,6 +150,21 @@ def probe(data_b64):
         float((out.get('format') or {}).get('duration') or 0), stream
 
 
+def wireframe_clip(events):
+    """A wireframe clip's rrweb events: (has a Meta and a full snapshot, seconds from first to last event)."""
+    kinds = {e.get('type') for e in events}
+    stamps = [e.get('timestamp') for e in events if isinstance(e.get('timestamp'), (int, float))]
+    span = (max(stamps) - min(stamps)) / 1000 if stamps else 0.0
+    return 4 in kinds and 2 in kinds, span
+
+
+def segment_count(events):
+    """The full snapshots in a session's concatenated replay events (a video segment is one flutter_video event):
+    each wireframe segment starts with one, and a window size change within it adds another (docs/wireframe.md,
+    Clips and segments), so this is at least the number of clips and segments."""
+    return sum(1 for e in events if e.get('type') in (2, 'flutter_video'))
+
+
 def stored_segments(storage, project_id, session_id):
     """Every segment the server stored for a session, by index."""
     if not storage:
@@ -160,6 +176,20 @@ def stored_segments(storage, project_id, session_id):
         with open(path) as f:
             out[int(os.path.basename(path)[:-5])] = json.load(f)
     return dict(sorted(out.items()))
+
+
+def issue_clip(events, storage, project_id, session_id, exception_id):
+    """(the issue's replay is one wireframe clip, detail). The clip starts with a Meta and a full snapshot, and a
+    window size change adds another pair (a desktop window settles in its first second), so its full snapshots do
+    not count clips: with --storage the stored segments do, exactly one of them carrying the exception."""
+    complete, _ = wireframe_clip(events)
+    starts = bool(events) and events[0].get('type') == 4
+    segments = stored_segments(storage, project_id, session_id)
+    if segments is None:
+        return complete and starts, f'{segment_count(events)} full snapshots'
+    clips = [i for i, s in segments.items() if s.get('exceptionId') == exception_id]
+    return complete and starts and len(clips) == 1, f'stored segments of the exception: {clips}, ' \
+                                                    f'{segment_count(events)} full snapshots'
 
 
 COLLECTOR_PORT = 4318
@@ -281,7 +311,7 @@ exporters:
         self.log.close()
 
 
-def check_other_backend(api, check, collector, echo, launch, wait_phase, state_dir, scenario):
+def check_other_backend(api, check, collector, echo, launch, wait_phase, state_dir, scenario, storage=''):
     """Phases 8 and 9: telemetry to an OpenTelemetry Collector. Each runs as a
     fresh installation, so its records are told apart by its instance id."""
     if state_dir and os.path.isdir(state_dir):
@@ -356,11 +386,8 @@ def check_other_backend(api, check, collector, echo, launch, wait_phase, state_d
         check(status == 200 and (detail.get('exception') or {}).get('stackTrace', '').startswith(boom),
               'the issue has its stack trace', f'{status}')
         events = (detail.get('sessionRecording') or {}).get('events') or []
-        check(len(events) == 1 and events[0].get('type') == 'flutter_video',
-              'the replay clip went to Traceway\'s recordings endpoint')
-        if events:
-            _, codec, frames, duration, _ = probe(events[0]['data'])
-            check(codec == 'h264' and frames > 0, 'the clip is a playable H.264 MP4', f'{codec} {frames} frames')
+        one, clip_detail = issue_clip(events, storage, api.project['id'], session, exception_id)
+        check(one, 'the replay clip (one wireframe recording) went to Traceway\'s recordings endpoint', clip_detail)
         return {'session': session, 'issue': exception_id}
     check(len(in_collector) == 1 and str(in_collector[0][1].get('exception.stacktrace', '')).startswith(boom),
           'the collector received the exception with its stack trace')
@@ -486,6 +513,7 @@ def main():
 
     phases, lines = {}, []
     proc = None
+    log_dir = tempfile.mkdtemp(prefix='traceway-e2e-app-')
 
     def launch(scenario=None, extra_env=None):
         nonlocal proc
@@ -498,15 +526,18 @@ def main():
         proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                 errors='replace', env=env)
 
-        def pump(stream):
+        def pump(stream, log):
             for line in stream:
                 lines.append(line.rstrip())
+                log.write(line)
+                log.flush()
                 if 'E2E_PHASE ' in line:
                     name = line.split('E2E_PHASE ', 1)[1].strip()
                     phases[name.split(' ')[0]] = (time.time(), name)
                     print('app: ' + name)
 
-        threading.Thread(target=pump, args=(proc.stdout,), daemon=True).start()
+        log = open(os.path.join(log_dir, f"app-{scenario or 'main'}.log"), 'a')
+        threading.Thread(target=pump, args=(proc.stdout, log), daemon=True).start()
 
     def stop():
         nonlocal proc
@@ -592,13 +623,15 @@ def main():
         check(issue_attrs.get('traceway.replay.status') == 'requested', 'replay status is requested')
         recording = detail.get('sessionRecording') or {}
         events = recording.get('events') or []
-        check(len(events) == 1 and events[0].get('type') == 'flutter_video', 'the issue has one flutter_video clip')
+        # The example records a wireframe (video is the traceway_video add-on): one clip starts with a Meta and a
+        # full snapshot, then the rrweb events after it.
+        _, duration = wireframe_clip(events)
+        one, clip_detail = issue_clip(events, args.storage, api.project['id'], session_id, exception_id)
+        check(one, 'the issue has one wireframe clip (Meta and full snapshot)', clip_detail)
         if events:
-            clip, codec, frames, duration, stream = probe(events[0]['data'])
-            print(f"        clip: {clip}  {codec} {stream.get('width')}x{stream.get('height')}  {frames} frames  {duration:.2f}s")
-            check(codec == 'h264', 'clip is a playable H.264 MP4')
-            check(30 <= frames <= 150, 'clip holds real frames, never more than the 150-frame buffer', f'{frames}')
-            check(0 < duration <= MAX_CLIP_SECONDS, f'clip is not longer than {MAX_CLIP_SECONDS:.1f}s', f'{duration:.2f}s')
+            print(f'        clip: {len(events)} rrweb events  {duration:.2f}s')
+            check(any(e.get('type') == 3 for e in events), 'the clip records what changed (incremental snapshots)')
+            check(0 < duration <= 30.5, 'clip is not longer than the 30 s lookback', f'{duration:.2f}s')
 
         until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=5)).isoformat()
         status, timeline = api.call('GET', f"/api/sessions/{session_id}/timeline?from={urllib.parse.quote(since.isoformat())}"
@@ -630,8 +663,6 @@ def main():
               and profile[0].get('app.screen.name') == '/users/42', 'the journey tap was uploaded with the lookback')
         check(any(b and 'Profile loaded for 42' in b for b in bodies(names)), 'the journey log line was uploaded')
         ticks = [b for b in bodies(names) if b and b.startswith('e2e journey tick')]
-        check(not any(str(body).startswith('[FQVE]') for body in bodies(names)),
-              'native video encoder diagnostics stay out of app console telemetry')
         check(len(ticks) >= 5, 'logs stream while the capture runs, without an error', f'{len(ticks)} ticks')
         status, session_detail = api.call('POST', f'/api/sessions/{session_id}', {})
         reasons = ((session_detail or {}).get('session') or {}).get('recordingReasons') or [] if isinstance(session_detail, dict) else []
@@ -651,17 +682,11 @@ def main():
         check('e2e after journey' not in bodies(names), 'logs are buffered again after the capture')
         segments = stored_segments(args.storage, api.project['id'], session_id)
         status, rec = api.call('GET', f"/api/sessions/{session_id}/recording?startedAt={urllib.parse.quote(sessions[0]['startedAt'])}")
-        videos = (rec or {}).get('events') or [] if isinstance(rec, dict) else []
-        check(len(videos) >= 4, 'the session has the error clip and the streamed segments', f'{len(videos)} videos')
-        total = 0.0
-        for video in videos:
-            _, codec, frames, duration, _ = probe(video['data'])
-            total += duration
-            if codec != 'h264' or frames == 0:
-                check(False, 'every segment is a playable H.264 MP4', f'{codec} {frames}')
-                break
-        else:
-            check(bool(videos), 'every segment is a playable H.264 MP4', f'{total:.1f}s of video')
+        replay = (rec or {}).get('events') or [] if isinstance(rec, dict) else []
+        videos = [None] * segment_count(replay)
+        check(len(videos) >= 4, 'the session has the error clip and the streamed segments', f'{len(videos)} segments')
+        complete, total = wireframe_clip(replay)
+        check(complete, 'the segments are wireframe recordings that play', f'{total:.1f}s of replay')
         if segments is not None:
             journey = [s for i, s in segments.items() if i > 0]
             print(f'        stored segments: {list(segments)}')
@@ -700,8 +725,8 @@ def main():
         check(bool(mine) and (mine[0].get('status') or '').lower() == 'collecting', 'the dashboard sees the capture collecting',
               mine[0].get('status') if mine else listing)
         status, rec = api.call('GET', f"/api/sessions/{session_id}/recording?startedAt={urllib.parse.quote(sessions[0]['startedAt'])}")
-        videos_during = len((rec or {}).get('events') or []) if isinstance(rec, dict) else 0
-        check(videos_during >= len(videos) + 2, 'video streams during the capture', f'{len(videos)} -> {videos_during}')
+        videos_during = segment_count((rec or {}).get('events') or []) if isinstance(rec, dict) else 0
+        check(videos_during >= len(videos) + 2, 'replay streams during the capture', f'{len(videos)} -> {videos_during}')
 
         status, _ = api.call('DELETE', f'/api/sdk-config/captures/{capture_id}')
         check(status in (200, 204), 'capture cancelled', f'{status}')
@@ -714,11 +739,11 @@ def main():
         print(f'        capture created at t+0, cancelled at t+{cancelled - created:.0f}s, last streamed tick {stopped_at}')
         check(0 < stopped_at < 55, 'streaming stopped after the cancel', f'last tick {stopped_at}')
         status, rec = api.call('GET', f"/api/sessions/{session_id}/recording?startedAt={urllib.parse.quote(sessions[0]['startedAt'])}")
-        videos_after = len((rec or {}).get('events') or []) if isinstance(rec, dict) else 0
+        videos_after = segment_count((rec or {}).get('events') or []) if isinstance(rec, dict) else 0
         time.sleep(12)
         status, rec = api.call('GET', f"/api/sessions/{session_id}/recording?startedAt={urllib.parse.quote(sessions[0]['startedAt'])}")
-        videos_later = len((rec or {}).get('events') or []) if isinstance(rec, dict) else 0
-        check(videos_later == videos_after, 'no more video after the cancel', f'{videos_after} -> {videos_later}')
+        videos_later = segment_count((rec or {}).get('events') or []) if isinstance(rec, dict) else 0
+        check(videos_later == videos_after, 'no more replay after the cancel', f'{videos_after} -> {videos_later}')
 
         # ---- 5. a rule built from the selector the server recorded ---------
         print('\n[5] a remote rule whose click step is the selector the server recorded')
@@ -789,10 +814,12 @@ def main():
             echo = Echo()
             try:
                 print(f'\n[8] Traceway plus another OpenTelemetry backend (otelcol at {collector.url})')
-                external = check_other_backend(api, check, collector, echo, launch, wait_phase, args.state_dir, 'external')
+                external = check_other_backend(api, check, collector, echo, launch, wait_phase, args.state_dir, 'external',
+                                               args.storage)
                 stop()
                 print(f'\n[9] standalone: no connection string, only the collector')
-                check_other_backend(api, check, collector, echo, launch, wait_phase, args.state_dir, 'standalone')
+                check_other_backend(api, check, collector, echo, launch, wait_phase, args.state_dir, 'standalone',
+                                    args.storage)
                 print(f'        collector output: {collector.dir}')
                 summary = {'external': external, 'collectorDir': collector.dir}
                 with open(os.path.join(collector.dir, 'summary.json'), 'w') as f:
@@ -805,6 +832,7 @@ def main():
         if android:
             android.close()
 
+    print(f'\napp output: {log_dir}')
     print(f"\n{'ALL CHECKS PASSED' if not check.failed else str(check.failed) + ' CHECK(S) FAILED'}")
     sys.exit(1 if check.failed else 0)
 

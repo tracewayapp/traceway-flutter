@@ -56,15 +56,20 @@ class StateStore {
     _writeTimer = null;
     final file = _file;
     if (file == null) return _saving;
-    final body = jsonEncode(
-        {..._values, if (destination != null) 'destination': destination});
+    final String body;
+    try {
+      body = jsonEncode(
+          {..._values, if (destination != null) 'destination': destination});
+    } catch (_) {
+      return _saving;
+    }
     return _saving = _saving.then((_) async {
       try {
         await file.parent.create(recursive: true);
         final tmp = File('${file.path}.${destination ?? ''}.tmp');
         await tmp.writeAsString(body);
         await tmp.rename(file.path);
-      } on FileSystemException {
+      } catch (_) {
         // State is a convenience; losing it only costs a fresh id or config.
       }
     });

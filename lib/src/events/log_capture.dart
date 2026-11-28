@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../guarded.dart';
 import '../traceway_client.dart';
 
 /// Builds a [ZoneSpecification] that mirrors every [print] call into the
@@ -11,11 +12,8 @@ import '../traceway_client.dart';
 ZoneSpecification buildLogZoneSpec() {
   return ZoneSpecification(
     print: (Zone self, ZoneDelegate parent, Zone zone, String line) {
-      try {
-        TracewayClient.instance?.recordLog(line);
-      } catch (_) {
-        // Never let log capture break the host app.
-      }
+      // Never let log capture break the host app.
+      guarded('print capture', () => TracewayClient.instance?.recordLog(line));
       parent.print(zone, line);
     },
   );

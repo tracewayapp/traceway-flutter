@@ -44,8 +44,7 @@ void main() {
     await HttpOverrides.runWithHttpOverrides(() async {
       for (var run = 0; run < 2; run++) {
         final client = TracewayClient.initialize(
-            null,
-            TracewayOptions(
+            options: TracewayOptions(
               telemetry:
                   TracewayTelemetry(url: 'http://127.0.0.1:${collector.port}'),
               captureMetrics: false,
@@ -56,7 +55,7 @@ void main() {
                   'network': {'mode': 'stream'}
                 }
               },
-            ));
+            ))!;
         await client.ready;
         client.captureMessage('from Traceway');
         client.recordNetworkEvent(NetworkEvent(
@@ -86,5 +85,56 @@ void main() {
       expect(span.attributes.toMap(),
           isNot(contains('traceway.collection.source')));
     }
+  });
+
+  test('Traceway.tracer is Traceway\'s, beside the app\'s own OpenTelemetry',
+      () async {
+    final collector = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    addTearDown(() => collector.close(force: true));
+    final names = <String>[];
+    collector.listen((request) async {
+      final body = await gzip.decoder
+          .bind(request)
+          .fold(<int>[], (List<int> acc, part) => acc..addAll(part));
+      if (request.uri.path.endsWith('/traces')) {
+        for (final resource
+            in proto.ExportTraceServiceRequest.fromBuffer(body).resourceSpans) {
+          for (final scope in resource.scopeSpans) {
+            names.addAll(scope.spans.map((s) => s.name));
+          }
+        }
+      }
+      await request.response.close();
+    });
+    await TracewayClient.resetForTest();
+    addTearDown(TracewayClient.resetForTest);
+    final hostSpans = InMemorySpanExporter();
+    await OTel.initialize(
+        serviceName: 'host-service',
+        enableMetrics: false,
+        detectPlatformResources: false,
+        spanProcessor: SimpleSpanProcessor(hostSpans));
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final client = TracewayClient.initialize(
+          options: TracewayOptions(
+            telemetry:
+                TracewayTelemetry(url: 'http://127.0.0.1:${collector.port}'),
+            captureMetrics: false,
+            persistToDisk: false,
+            collection: const {
+              'signals': {
+                'network': {'mode': 'stream'}
+              }
+            },
+          ))!;
+      expect(Traceway.tracer, isNull, reason: 'not started yet');
+      await client.ready;
+      Traceway.tracer!.startSpan('ours', root: true).end();
+      OTel.tracerProvider().getTracer('host').startSpan('theirs', root: true).end();
+      await client.flush();
+      await client.shutdown();
+    }, _LoopbackHttp());
+    expect(names, ['ours']);
+    expect(hostSpans.spans.map((s) => s.name), ['theirs']);
   });
 }

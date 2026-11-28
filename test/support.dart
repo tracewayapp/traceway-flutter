@@ -6,9 +6,10 @@ import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart';
 import 'package:dartastic_opentelemetry/testing.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:traceway/src/models/session_recording_payload.dart';
 import 'package:traceway/src/opamp/messages.dart';
-import 'package:traceway/src/replay/replay_controller.dart';
+import 'package:flutter/widgets.dart' show Offset;
+import 'package:traceway/src/replay/replay_source.dart';
+import 'package:traceway/src/replay/video_recorder.dart';
 import 'package:traceway/src/traceway_client.dart';
 import 'package:traceway/src/traceway_options.dart';
 
@@ -72,6 +73,7 @@ Future<Harness> startHarness({
   Handler? handler,
   Directory? stateDirectory,
   double Function()? random,
+  int? collectionHealthDelayMs,
 }) async {
   final logs = InMemoryLogExporter();
   final spans = InMemorySpanExporter();
@@ -96,6 +98,7 @@ Future<Harness> startHarness({
       stateDirectory: stateDirectory,
       deviceAttributes: const {'os.name': 'test-os'},
       random: random,
+      collectionHealthDelayMs: collectionHealthDelayMs,
     ),
   );
   return Harness(client, logs, spans, requests);
@@ -148,5 +151,37 @@ class FakeReplaySource implements ReplaySource {
       startedAt: since ?? end.subtract(const Duration(seconds: 10)),
       endedAt: end,
     );
+  }
+}
+
+/// What the add-on would register, recording nothing.
+class FakeVideoRecorder extends FakeReplaySource implements TracewayVideoRecorder {
+  FakeVideoRecorder(this.config);
+  final TracewayVideoRecorderConfig config;
+  bool masked = true;
+  Offset? touch;
+
+  @override
+  set maskAllInputs(bool value) => masked = value;
+
+  @override
+  void setTouchPosition(Offset position) => touch = position;
+
+  @override
+  void clearTouchPosition() => touch = null;
+}
+
+class FakeVideoBackend implements TracewayVideoBackend {
+  FakeVideoBackend({this.isSupported = true});
+  final List<FakeVideoRecorder> made = [];
+
+  @override
+  final bool isSupported;
+
+  @override
+  TracewayVideoRecorder createRecorder(TracewayVideoRecorderConfig config) {
+    final recorder = FakeVideoRecorder(config);
+    made.add(recorder);
+    return recorder;
   }
 }

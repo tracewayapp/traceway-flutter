@@ -9,6 +9,7 @@ import '../core/ids.dart';
 import '../core/matcher.dart';
 import '../core/ring_buffer.dart';
 import '../core/settings.dart';
+import '../guarded.dart';
 import 'events.dart';
 
 /// A record waiting in the ring buffer or on its way to an exporter.
@@ -89,10 +90,19 @@ int _estimateBytes(Attributes? attributes, Object? body) {
   return size;
 }
 
+/// Whether a log record may still be exported, checked again when it reaches
+/// the exporter: the kill switch or a rule may have turned its signal off
+/// since it was routed. Control records follow only the kill switch, as when
+/// they are routed: a session's end goes with its start.
+bool canExportLog(ControlState control, String? eventName) {
+  final signal = classifyLog(eventName);
+  return signal == signalControl ? control.enabled : control.canExport(signal);
+}
+
 /// Decides for every log record and span whether it is sent now, kept in the
 /// ring buffer or dropped, according to the [ControlState]. Triggers are
 /// observed after routing so a triggered flush includes the record that
-/// caused it.
+/// caused it, and an issue that causes one is sent before what it flushes.
 class TelemetryRouter {
   TelemetryRouter({
     required this.control,
@@ -103,6 +113,7 @@ class TelemetryRouter {
     required this.spanExporter,
     required this.hooks,
     this.persistIssue,
+    this.sendPersisted,
     double Function()? random,
   }) : _random = random ?? Random().nextDouble;
 
@@ -116,14 +127,37 @@ class TelemetryRouter {
   final SpanExporter spanExporter;
   final RouterHooks hooks;
   final bool Function(ReadableLogRecord)? persistIssue;
+
+  /// Sends what [persistIssue] wrote now; completes once it was tried.
+  final Future<void> Function()? sendPersisted;
   final double Function() _random;
 
+  /// The dashboard's captures running now: their ids go on every record
+  /// (`traceway.capture.ids`), which is how the server tells a capture's
+  /// data from the rest. Captures triggers start on the device are not
+  /// listed, as in the browser SDK.
   List<String> _activeCaptureIds() {
     final now = DateTime.now();
     return [
       for (final capture in control.settings.captures)
         if (capture.until.isAfter(now)) capture.id,
     ];
+  }
+
+  /// Adds [ids] to the capture ids [record] already carries.
+  static void _markCaptures(ReadWriteLogRecord record, List<String> ids) {
+    final merged = <String>{};
+    final existing = _attr(record.attributes, attrCaptureIds);
+    if (existing is String) {
+      try {
+        merged.addAll((jsonDecode(existing) as List).whereType<String>());
+      } catch (_) {}
+    }
+    final before = merged.length;
+    merged.addAll(ids);
+    if (merged.length == before && existing != null) return;
+    record.addAttribute(
+        OTel.attributeString(attrCaptureIds, jsonEncode(merged.toList())));
   }
 
   void routeLog(ReadWriteLogRecord record) {
@@ -135,8 +169,8 @@ class TelemetryRouter {
     if (signal != signalControl) {
       final captureIds = _activeCaptureIds();
       if (captureIds.isNotEmpty) {
-        record.addAttribute(OTel.attributeString(
-            'traceway.capture.ids', jsonEncode(captureIds)));
+        record.addAttribute(
+            OTel.attributeString(attrCaptureIds, jsonEncode(captureIds)));
       }
     }
     if (!hooks.enrichLog(record, signal)) return;
@@ -162,18 +196,41 @@ class TelemetryRouter {
   /// Triggers see a record before it is handed to the exporter, because the
   /// batch processor copies it there and later attributes would be lost. A
   /// buffered record is already in the buffer at that point, so a flush it
-  /// triggers includes it; a streamed one follows the flushed breadcrumbs.
+  /// triggers includes it. A flush the triggers ask for is held until the
+  /// record was sent: an issue goes to the exporter before the breadcrumbs
+  /// it flushes, since the server admits a bounded number of log records
+  /// per client and must not spend it on the breadcrumbs first.
+  ///
+  /// A failure in the triggers costs what they would have done, never the
+  /// record that ran them.
   void _observeAndSend(ObservedRecord observed) {
-    hooks.observe(observed);
+    // A record the triggers emit (a capture's start) is observed in turn.
+    final nested = _observing;
+    _observing = true;
+    guarded('triggers', () => hooks.observe(observed));
+    _observing = nested;
     if (observed.routed == Routed.stream) _send(observed.item);
+    if (!nested && _flushHeld) {
+      _flushHeld = false;
+      unawaited(settle());
+    }
   }
+
+  /// Whether a record's triggers are running, and whether they flushed the
+  /// buffer: what they took waits in [_flushedLogs] and [_flushedSpans].
+  bool _observing = false;
+  bool _flushHeld = false;
+
+  /// The upload of the issue that flushed the buffer, when it is sent from
+  /// the disk queue: [settle] exports the breadcrumbs after it.
+  Future<void>? _issueFirst;
 
   void stampSpan(Span span) {
     final sessionId = hooks.sessionId;
     if (sessionId != null) span.setStringAttribute(attrSessionId, sessionId);
     final captureIds = _activeCaptureIds();
     if (captureIds.isNotEmpty) {
-      span.setStringAttribute('traceway.capture.ids', jsonEncode(captureIds));
+      span.setStringAttribute(attrCaptureIds, jsonEncode(captureIds));
     }
     final baselineRate = control.settings.baselineSampleRate;
     span.setStringAttribute(
@@ -188,7 +245,13 @@ class TelemetryRouter {
   void routeSpan(Span span) {
     final item = SpanItem(span);
     final timeMs = (span.endTime ?? DateTime.now()).millisecondsSinceEpoch;
-    final routed = _decide('network', item, timeMs, () => true);
+    // A failed interaction goes with the exception that failed it, as the
+    // browser SDK sends it, so the issue links to its trace.
+    final failedInteraction =
+        span.attributes.toMap()['traceway.interaction']?.value == true &&
+            span.status == SpanStatusCode.Error;
+    final routed = _decide('network', item, timeMs, () => true,
+        forceStream: failedInteraction);
     _observeAndSend(ObservedRecord(
       signal: 'network',
       timeMs: timeMs,
@@ -217,18 +280,30 @@ class TelemetryRouter {
   /// processors' queues are bounded and drop what does not fit, and a full
   /// buffer holds more than they do. The newest breadcrumbs, the ones right
   /// before the error, would be the ones lost.
+  ///
+  /// What a capture's lookback uploads was recorded before the capture
+  /// existed, so its log records get the running captures' ids here, as the
+  /// browser SDK does: the server counts a capture as delivered by the ids
+  /// on the data it receives. Spans keep the ids they were recorded with:
+  /// an ended span cannot take attributes.
   int flushBuffered(int sinceMs, Set<String>? signals, [int? untilMs]) {
     final entries = buffer.take(sinceMs, signals, untilMs);
+    final captureIds = _activeCaptureIds();
     for (final entry in entries) {
       if (!control.canExport(entry.signal)) continue;
       switch (entry.item) {
         case LogItem(:final record):
+          if (captureIds.isNotEmpty) _markCaptures(record, captureIds);
           if (!_persistIssue(record)) _flushedLogs.add(record);
         case SpanItem(:final span):
           _flushedSpans.add(span);
       }
     }
-    unawaited(settle());
+    if (_observing) {
+      _flushHeld = true;
+    } else {
+      unawaited(settle());
+    }
     return entries.length;
   }
 
@@ -236,6 +311,15 @@ class TelemetryRouter {
   /// The requests of the last batches may still be on their way: the
   /// exporters' own `forceFlush` waits for those.
   Future<void> settle() async {
+    final issue = _issueFirst;
+    if (issue != null) {
+      try {
+        await issue;
+      } catch (_) {
+        // The breadcrumbs go either way.
+      }
+      if (identical(issue, _issueFirst)) _issueFirst = null;
+    }
     while (_flushedLogs.isNotEmpty) {
       final batch = _takeBatch(_flushedLogs);
       try {
@@ -265,8 +349,9 @@ class TelemetryRouter {
     String signal,
     TelemetryItem item,
     int timeMs,
-    bool Function() accept,
-  ) {
+    bool Function() accept, {
+    bool forceStream = false,
+  }) {
     if (signal == signalControl) {
       return control.enabled ? Routed.stream : Routed.off;
     }
@@ -277,10 +362,13 @@ class TelemetryRouter {
     }
     if (mode == Mode.off) return Routed.off;
     final sessionId = hooks.sessionId;
+    // Within the plan's limits: a signal they only let buffer stays here.
     final baselineSampled = _baselineSignals.contains(signal) &&
         sessionId != null &&
-        unitHash(sessionId) < control.settings.baselineSampleRate;
-    if (mode == Mode.stream || baselineSampled) return Routed.stream;
+        unitHash(sessionId) < control.settings.baselineSampleRate &&
+        control.canExport(signal);
+    final forced = forceStream && control.canExport(signal);
+    if (mode == Mode.stream || baselineSampled || forced) return Routed.stream;
     buffer.push(BufferEntry(
       timeMs: timeMs,
       signal: signal,
@@ -297,14 +385,24 @@ class TelemetryRouter {
   /// An issue is written to disk before it is sent, when there is a disk:
   /// the app may not live to see the answer.
   bool _persistIssue(ReadableLogRecord record) =>
-      (record.eventName == eventException ||
-          record.eventName == eventMessage) &&
-      persistIssue?.call(record) == true;
+      _isIssue(record) && persistIssue?.call(record) == true;
+
+  static bool _isIssue(ReadableLogRecord record) =>
+      record.eventName == eventException || record.eventName == eventMessage;
 
   void _send(TelemetryItem item) {
     switch (item) {
       case LogItem(:final record):
-        if (!_persistIssue(record)) logSink.onEmit(record, null);
+        // The issue whose triggers flushed the buffer leaves first: from the
+        // disk queue it was written to, else at the head of what is flushed.
+        final first = _flushHeld && _isIssue(record);
+        if (_persistIssue(record)) {
+          if (first) _issueFirst = sendPersisted?.call();
+        } else if (first) {
+          _flushedLogs.insert(0, record);
+        } else {
+          logSink.onEmit(record, null);
+        }
       case SpanItem(:final span):
         spanSink.onEnd(span);
     }
@@ -377,11 +475,8 @@ class ControlLogProcessor implements LogRecordProcessor {
 
   @override
   Future<void> onEmit(ReadWriteLogRecord logRecord, Context? context) async {
-    try {
-      _router()?.routeLog(logRecord);
-    } catch (_) {
-      // Telemetry must never break the app that produced it.
-    }
+    // Telemetry must never break the app that produced it.
+    guarded('log routing', () => _router()?.routeLog(logRecord));
   }
 
   @override
@@ -408,20 +503,12 @@ class ControlSpanProcessor implements SpanProcessor {
 
   @override
   Future<void> onStart(Span span, Context? parentContext) async {
-    try {
-      _router()?.stampSpan(span);
-    } catch (_) {
-      // ignore
-    }
+    guarded('span stamp', () => _router()?.stampSpan(span));
   }
 
   @override
   Future<void> onEnd(Span span) async {
-    try {
-      _router()?.routeSpan(span);
-    } catch (_) {
-      // ignore
-    }
+    guarded('span routing', () => _router()?.routeSpan(span));
   }
 
   @override

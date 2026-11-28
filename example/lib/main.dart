@@ -1,18 +1,23 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:traceway/traceway.dart';
 
-// Pass via: flutter run --dart-define=TRACEWAY_DSN=token@https://...
-// Falls back to local dev server if not set.
-const _dsn = String.fromEnvironment('TRACEWAY_DSN');
-String get _fallbackDsn =>
-    'flutter-dev-token@http://${Platform.isAndroid ? '10.0.2.2' : 'localhost'}:8082/api/report';
+// flutter run --dart-define=TRACEWAY_TOKEN=YOUR_TOKEN
+// (and --dart-define=TRACEWAY_URL=https://your-server for a self-hosted
+// Traceway; Traceway Cloud is the default).
+const _token = String.fromEnvironment('TRACEWAY_TOKEN');
+const _url = String.fromEnvironment('TRACEWAY_URL');
 
 void main() {
+  if (_token.isEmpty) {
+    debugPrint('Set --dart-define=TRACEWAY_TOKEN=YOUR_TOKEN (the token on the '
+        "project's Connection page); the example runs without Traceway.");
+    runApp(const MyApp());
+    return;
+  }
   Traceway.run(
-    connectionString: _dsn.isNotEmpty ? _dsn : _fallbackDsn,
+    token: _token,
+    baseUrl: _url.isEmpty ? null : _url,
     options: const TracewayOptions(
       screenCapture: true,
       debug: true,
@@ -69,7 +74,7 @@ class _HomePageState extends State<HomePage> {
         padding: const EdgeInsets.all(16),
         child: ListView(
           children: [
-            TracewayPrivacyMask(
+            TracewayMask(
               child: Text(
                 'Counter: $_counter',
                 style: Theme.of(context).textTheme.headlineMedium,

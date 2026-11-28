@@ -209,7 +209,13 @@ List<TriggerStep>? _parseSteps(Object? value) {
     }
     steps.add(TriggerStep(
       match: match,
-      withinSeconds: within is num && within > 0 ? within.toDouble() : null,
+      // A day is longer than any session; more would overflow the
+      // engine's millisecond arithmetic (1e306 s is infinite ms).
+      withinSeconds: within is num && within > 0
+          ? (within > _maxBufferAgeSeconds
+              ? _maxBufferAgeSeconds
+              : within.toDouble())
+          : null,
       count: count,
       periodSeconds: period,
     ));
@@ -243,10 +249,15 @@ Trigger? _mergeTrigger(Trigger? base, Json raw) {
     name: raw['name'] is String ? raw['name'] as String : null,
     enabled: raw['enabled'] is bool ? raw['enabled'] as bool : null,
     sampleRate: _rate(raw['sampleRate']),
-    cooldownSeconds:
-        cooldown is num && cooldown >= 0 ? cooldown.toDouble() : null,
+    cooldownSeconds: cooldown is num && cooldown.isFinite && cooldown >= 0
+        ? cooldown.toDouble()
+        : null,
+    // `1e400` decodes as infinity, which has no int: skipped like any other
+    // value out of range, not the whole document.
     maxPerSession:
-        maxPerSession is num && maxPerSession >= 0 ? maxPerSession.toInt() : null,
+        maxPerSession is num && maxPerSession.isFinite && maxPerSession >= 0
+            ? maxPerSession.toInt()
+            : null,
   );
 }
 
@@ -309,6 +320,15 @@ Settings applyOverlay(Settings base, Json overlay) {
     if (mode != null) out.replayMode = mode;
     final sampleRate = _rate(replay['sessionSampleRate']);
     if (sampleRate != null) out.replaySessionSampleRate = sampleRate;
+    if (replay['maskAllInputs'] is bool) {
+      out.replayMaskAllInputs = replay['maskAllInputs'] as bool;
+    }
+    final images = TracewayImagePolicy.parse(replay['images']);
+    if (images != null) out.replayImages = images;
+    final captureMode = replay['captureMode'];
+    if (captureMode == 'video' || captureMode == 'wireframe') {
+      out.replayCaptureMode = captureMode as String;
+    }
   }
 
   final metrics = _object(overlay['metrics']);
@@ -380,6 +400,7 @@ Ceilings applyLimits(Ceilings ceilings, Json? overlay) {
     replay: replay == null ? ceilings.replay : lowerMode(ceilings.replay, replay),
     sessions: ceilings.sessions,
     metrics: ceilings.metrics && limits['metrics'] != 'off',
+    replayImages: ceilings.replayImages,
   );
 }
 
@@ -394,5 +415,6 @@ Settings clampToCeilings(Settings settings, Ceilings ceilings) {
   out.replayMode = lowerMode(out.replayMode, ceilings.replay);
   out.sessionsEnabled = out.sessionsEnabled && ceilings.sessions;
   out.metrics.enabled = out.metrics.enabled && ceilings.metrics;
+  out.replayImages = out.replayImages.lower(ceilings.replayImages);
   return out;
 }

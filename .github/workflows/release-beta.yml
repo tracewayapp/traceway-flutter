@@ -77,9 +77,13 @@ jobs:
         with:
           channel: stable
 
+      # Both packages: the analysis at the root covers packages/ too, and an
+      # add-on without its dependencies is full of unresolved imports.
       - name: Install dependencies
         if: steps.plan.outputs.release == 'true'
-        run: flutter pub get
+        run: |
+          flutter pub get
+          (cd packages/traceway_video && flutter pub get)
 
       # Infos (deprecations in a newer Flutter) are reported, not fatal.
       - name: Analyze
@@ -89,6 +93,13 @@ jobs:
       - name: Test
         if: steps.plan.outputs.release == 'true'
         run: flutter test
+
+      - name: Analyze and test the video add-on
+        if: steps.plan.outputs.release == 'true'
+        working-directory: packages/traceway_video
+        run: |
+          flutter analyze --no-fatal-infos
+          flutter test
 
       - name: Tag and push
         if: steps.plan.outputs.release == 'true'

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:args/args.dart';
 import 'package:http/http.dart' as http;
+import 'package:traceway/src/symbols_upload.dart';
 
 Future<void> main(List<String> argv) async {
   final parser = ArgParser()
@@ -9,8 +10,9 @@ Future<void> main(List<String> argv) async {
         help: 'Upload token. Defaults to \$TRACEWAY_UPLOAD_TOKEN, then the '
             'traceway.upload_token field in pubspec.yaml.')
     ..addOption('url',
-        help: 'Traceway base URL or report URL. Defaults to \$TRACEWAY_URL, '
-            'then traceway.url in pubspec.yaml, then Traceway Cloud.')
+        help: 'Traceway server URL, only for a self-hosted server. Defaults '
+            'to \$TRACEWAY_URL, then traceway.url in pubspec.yaml, then '
+            'Traceway Cloud ($symbolsUploadDefaultUrl).')
     ..addOption('symbols-dir',
         help: 'Directory passed to --split-debug-info. Defaults to '
             'traceway.symbols_dir in pubspec.yaml, then build/symbols.')
@@ -41,23 +43,22 @@ Future<void> main(List<String> argv) async {
   final cfg = _readPubspecConfig();
   final env = Platform.environment;
 
-  final token = _firstNonEmpty([
+  final token = firstNonEmpty([
     args['token'] as String?,
     env['TRACEWAY_UPLOAD_TOKEN'],
     cfg['upload_token'],
   ]);
-  final url = _firstNonEmpty([
-        args['url'] as String?,
-        env['TRACEWAY_URL'],
-        cfg['url'],
-      ]) ??
-      'https://cloud.tracewayapp.com';
-  final symbolsDir = _firstNonEmpty([
+  final url = resolveSymbolsUploadUrl(
+    flag: args['url'] as String?,
+    env: env,
+    pubspec: cfg,
+  );
+  final symbolsDir = firstNonEmpty([
         args['symbols-dir'] as String?,
         cfg['symbols_dir'],
       ]) ??
       'build/symbols';
-  final appPath = _firstNonEmpty([args['app'] as String?, cfg['app']]);
+  final appPath = firstNonEmpty([args['app'] as String?, cfg['app']]);
 
   if (token == null) {
     stderr.writeln(
@@ -83,7 +84,13 @@ Future<void> main(List<String> argv) async {
     exit(1);
   }
 
-  final uploadUrl = _deriveUploadUrl(url);
+  final String uploadUrl;
+  try {
+    uploadUrl = symbolsUploadEndpoint(url);
+  } on ArgumentError catch (error) {
+    stderr.writeln(error.message);
+    exit(2);
+  }
 
   if (args['dry-run'] == true) {
     stdout.writeln('dry run — would upload to $uploadUrl');
@@ -228,74 +235,12 @@ String? _resolveAppBinary(String p) {
   return null;
 }
 
-String? _firstNonEmpty(List<String?> values) {
-  for (final v in values) {
-    if (v != null && v.trim().isNotEmpty) {
-      return v.trim();
-    }
-  }
-  return null;
-}
-
 Map<String, String> _readPubspecConfig() {
   final file = File('pubspec.yaml');
   if (!file.existsSync()) {
     return {};
   }
-  final out = <String, String>{};
-  var inBlock = false;
-  for (final raw in file.readAsLinesSync()) {
-    final line = raw.replaceAll('\t', '  ');
-    if (!inBlock) {
-      if (RegExp(r'^traceway\s*:\s*(#.*)?$').hasMatch(line)) {
-        inBlock = true;
-      }
-      continue;
-    }
-    if (line.trim().isEmpty || line.trimLeft().startsWith('#')) {
-      continue;
-    }
-    if (line.length == line.trimLeft().length) {
-      break;
-    }
-    final m = RegExp(r'^\s+([A-Za-z0-9_]+)\s*:\s*(.*)$').firstMatch(line);
-    if (m != null) {
-      final value = _unquote(_stripInlineComment(m.group(2)!.trim()));
-      if (value.isNotEmpty) {
-        out[m.group(1)!] = value;
-      }
-    }
-  }
-  return out;
-}
-
-String _stripInlineComment(String v) {
-  if (v.startsWith('"') || v.startsWith("'")) {
-    return v;
-  }
-  final i = v.indexOf(' #');
-  return i == -1 ? v : v.substring(0, i).trimRight();
-}
-
-String _unquote(String v) {
-  if (v.length >= 2 &&
-      ((v.startsWith('"') && v.endsWith('"')) ||
-          (v.startsWith("'") && v.endsWith("'")))) {
-    return v.substring(1, v.length - 1);
-  }
-  return v;
-}
-
-String _deriveUploadUrl(String url) {
-  var u = url.trim();
-  if (u.contains('/api/report')) {
-    return u.replaceFirst('/api/report', '/api/symbols/upload');
-  }
-  if (u.endsWith('/api/symbols/upload')) {
-    return u;
-  }
-  u = u.replaceAll(RegExp(r'/+$'), '');
-  return '$u/api/symbols/upload';
+  return parsePubspecTracewayBlock(file.readAsLinesSync());
 }
 
 String _archFromFilename(String path) {

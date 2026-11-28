@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show FrameTiming, PlatformDispatcher;
 
+import 'package:flutter/foundation.dart' show kDebugMode, visibleForTesting;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
+import '../guarded.dart';
 import 'metrics_recorder.dart';
 
 /// A cold start this slow counts the user as affected (Android vitals'
@@ -18,12 +20,30 @@ const int frozenFrameUs = 700000;
 
 const int _maxStartMs = 120000;
 
+/// Screen changes kept for frames whose timings have not arrived yet. The
+/// engine reports them about once a second: this is many seconds of
+/// navigation, and timings that arrive prune it to one entry or two.
+const int _maxScreenChanges = 32;
+
 class _Visit {
   _Visit(this.screen, this.startUs);
-  final String screen;
+
+  /// Renamed when the app names the route by its template.
+  String screen;
   final int startUs;
   bool displayed = false;
   bool fullyDisplayed = false;
+}
+
+/// The screen in effect from frame [frameNumber] on.
+class _ScreenSince {
+  _ScreenSince(this.frameNumber, this.screen);
+  final int frameNumber;
+  String? screen;
+}
+
+class _FrameCounts {
+  int total = 0, slow = 0, frozen = 0;
 }
 
 /// Measures what the dashboard's Flutter Performance charts, from the
@@ -37,27 +57,53 @@ class _Visit {
 ///   calls `Traceway.reportFullyDisplayed()`;
 /// * slow and frozen frames from the engine's frame timings: slow when the
 ///   UI or raster thread took longer than the display's frame budget,
-///   frozen when the frame took 700 ms or more;
+///   frozen when the frame took 700 ms or more, each counted under the
+///   screen the frame was built on;
 /// * hangs: the UI isolate did not run a timer for 2 s or more while the
-///   app was in the foreground.
+///   app was in the foreground; not in debug builds, unless asked.
 class AppVitals {
   AppVitals(
     this._recorder, {
     required this.currentScreen,
     int Function()? nowUs,
+    int Function()? frameNumber,
     this.hangThresholdMs = 2000,
     this.watchdogIntervalMs = 500,
-  }) : _nowUs = nowUs ?? (() => DateTime.now().microsecondsSinceEpoch);
+    this.reportHangs = !kDebugMode,
+  })  : _nowUs = nowUs ?? (() => DateTime.now().microsecondsSinceEpoch),
+        _frameNumber = frameNumber ??
+            (() => PlatformDispatcher.instance.frameData.frameNumber);
 
   final MetricsRecorder _recorder;
 
   /// The screen being shown, normalized, for the frame and hang dimensions.
   final String? Function() currentScreen;
   final int Function() _nowUs;
+
+  /// The number of the frame being built, as [FrameTiming.frameNumber]
+  /// numbers it; -1 when the engine does not say.
+  final int Function() _frameNumber;
   final int hangThresholdMs;
   final int watchdogIntervalMs;
 
+  /// Whether the watchdog runs. A breakpoint, a hot reload or a slow JIT
+  /// compile stops the isolate just as a hang does, and nothing in the
+  /// isolate tells them apart: a debug build reports hangs only when asked.
+  final bool reportHangs;
+
   bool _started = false;
+
+  /// The instance the persistent frame callback samples for. A persistent
+  /// callback cannot be removed, so there is one per process, and it holds
+  /// no instance that has stopped (or the client behind it).
+  static AppVitals? _sampling;
+  static bool _frameCallbackAdded = false;
+
+  /// How many persistent frame callbacks were added in this process.
+  @visibleForTesting
+  static int frameCallbacksAdded = 0;
+
+
   AppLifecycleState? _state;
   bool _backgrounded = false;
   bool _backgroundedBeforeFirstFrame = false;
@@ -65,6 +111,7 @@ class AppVitals {
   _Visit? _visit;
   Timer? _watchdog;
   final Stopwatch _clock = Stopwatch();
+  final List<_ScreenSince> _screens = [];
 
   /// Call as early as possible, when the SDK is initialized: the first
   /// frame usually comes before the SDK has finished starting.
@@ -86,16 +133,26 @@ class AppVitals {
     }
     _started = true;
     _state = binding.lifecycleState;
-    binding.addTimingsCallback(onTimings);
+    binding.addTimingsCallback(_timings);
+    _sampling = this;
+    // A persistent callback cannot be removed: it is added once per
+    // process, and does nothing while no instance runs.
+    if (!_frameCallbackAdded) {
+      _frameCallbackAdded = true;
+      frameCallbacksAdded++;
+      binding.addPersistentFrameCallback(_sampleCurrent);
+    }
     if (_foreground) _startWatchdog();
   }
 
   void stop() {
     if (!_started) return;
     _started = false;
+    if (identical(_sampling, this)) _sampling = null;
     try {
-      WidgetsBinding.instance.removeTimingsCallback(onTimings);
+      WidgetsBinding.instance.removeTimingsCallback(_timings);
     } catch (_) {}
+    _screens.clear();
     _stopWatchdog();
   }
 
@@ -149,7 +206,8 @@ class AppVitals {
             sdkStartMs - processStartMs < 30000
         ? processStartMs
         : sdkStartMs;
-    unawaited(binding.waitUntilFirstFrameRasterized.then((_) {
+    unawaited(binding.waitUntilFirstFrameRasterized
+        .then((_) => guarded('cold start', () {
       _firstFrameDone = true;
       if (!coldStartCounts(
           _backgroundedBeforeFirstFrame, binding.lifecycleState)) {
@@ -158,19 +216,19 @@ class AppVitals {
       final ms = _nowUs() / 1000 - startMs;
       if (ms <= 0 || ms > _maxStartMs) return;
       _recorder.appStart(ms, 'cold', slow: ms >= slowColdStartMs);
-    }));
+    })));
   }
 
   void _measureHotStart() {
     final atUs = _nowUs();
     try {
       final scheduler = SchedulerBinding.instance;
-      scheduler.addPostFrameCallback((_) {
-        if (!_started) return;
-        final ms = (_nowUs() - atUs) / 1000;
-        if (ms < 0 || ms > _maxStartMs) return;
-        _recorder.appStart(ms, 'hot', slow: ms >= slowHotStartMs);
-      });
+      scheduler.addPostFrameCallback((_) => guarded('hot start', () {
+            if (!_started) return;
+            final ms = (_nowUs() - atUs) / 1000;
+            if (ms < 0 || ms > _maxStartMs) return;
+            _recorder.appStart(ms, 'hot', slow: ms >= slowHotStartMs);
+          }));
       scheduler.ensureVisualUpdate();
     } catch (_) {}
   }
@@ -200,7 +258,11 @@ class AppVitals {
 
   /// A navigation to [screen] (normalized) at [at]. Only a route that is
   /// new on the stack is built and displayed; returning to one is not.
-  void navigated(String? screen, String action, DateTime at) {
+  /// [displayed]: the route already drew its first frame (the navigator
+  /// observer waited for it to learn its name), so its time to initial
+  /// display ends now.
+  void navigated(String? screen, String action, DateTime at,
+      {bool displayed = false}) {
     if (screen == null || (action != 'push' && action != 'replace')) {
       if (action != 'remove') _visit = null;
       return;
@@ -211,26 +273,29 @@ class AppVitals {
     }
     final visit = _Visit(screen, at.microsecondsSinceEpoch);
     _visit = visit;
-    void displayed() {
+    void done() {
       if (visit.displayed) return;
       visit.displayed = true;
       final ms = (_nowUs() - visit.startUs) / 1000;
-      if (ms >= 0 && ms <= _maxStartMs) _recorder.screenDisplayed(screen, ms);
+      if (ms >= 0 && ms <= _maxStartMs) {
+        _recorder.screenDisplayed(visit.screen, ms);
+      }
     }
 
+    if (displayed) {
+      done();
+      return;
+    }
     try {
       final scheduler = SchedulerBinding.instance;
-      // The navigator observer reports a route it had to wait for once its
-      // first frame is done.
-      if (scheduler.schedulerPhase == SchedulerPhase.postFrameCallbacks) {
-        displayed();
-      } else {
-        scheduler.addPostFrameCallback((_) => displayed());
-        // A navigation always rebuilds; this only makes sure a router that
-        // reports before scheduling its frame is not measured against some
-        // later, unrelated one.
-        scheduler.ensureVisualUpdate();
-      }
+      // Reported during a frame's post-frame callbacks (a splash screen
+      // replacing itself once drawn), the route is built by the next frame:
+      // a callback added now runs after that one.
+      scheduler.addPostFrameCallback((_) => guarded('screen display', done));
+      // A navigation always rebuilds; this only makes sure a router that
+      // reports before scheduling its frame is not measured against some
+      // later, unrelated one.
+      scheduler.ensureVisualUpdate();
     } catch (_) {
       // No binding (a plain Dart test): there are no frames to wait for.
     }
@@ -247,6 +312,19 @@ class AppVitals {
     }
   }
 
+  /// The app named the current screen by its route template after
+  /// navigating (`/orders/:id`): a screen not yet fully displayed records
+  /// its times to initial (if still to come) and full display under it, and
+  /// the frames it drew so far count under it too.
+  void routeNamed(String screen) {
+    final visit = _visit;
+    if (visit == null || visit.fullyDisplayed) return;
+    if (_screens.isNotEmpty && _screens.last.screen == visit.screen) {
+      _screens.last.screen = screen;
+    }
+    visit.screen = screen;
+  }
+
   // --------------------------------------------------------------- frames
 
   int _frameBudgetUs() {
@@ -261,26 +339,79 @@ class AppVitals {
     return (1000000 / rate).round();
   }
 
+  /// Notes, during each frame, the screen it is built on when that changed:
+  /// the engine reports a frame's timings later, in release builds in
+  /// batches about once a second, by when the app may show another screen.
+  static void _sampleCurrent(Duration _) {
+    final sampling = _sampling;
+    if (sampling != null) guarded('frame screen', sampling._sampleScreen);
+  }
+
+  void _sampleScreen() {
+    if (!_started) return;
+    final frame = _frameNumber();
+    if (frame < 0) return;
+    final screen = currentScreen();
+    if (_screens.isNotEmpty) {
+      final last = _screens.last;
+      if (last.screen == screen) return;
+      // The same frame built again (a warm-up frame) under another screen.
+      if (last.frameNumber >= frame) _screens.removeLast();
+    }
+    _screens.add(_ScreenSince(frame, screen));
+    if (_screens.length > _maxScreenChanges) _screens.removeAt(0);
+  }
+
+  /// The screen [frame] was built on: the current one when the engine did
+  /// not number it, or it was built before the changes kept.
+  String? _screenOf(int frame, String? current) {
+    if (frame < 0) return current;
+    for (var i = _screens.length - 1; i >= 0; i--) {
+      if (_screens[i].frameNumber <= frame) return _screens[i].screen;
+    }
+    return current;
+  }
+
+  void _timings(List<FrameTiming> timings) =>
+      guarded('frame timings', () => onTimings(timings));
+
   @visibleForTesting
   void onTimings(List<FrameTiming> timings) {
     if (timings.isEmpty) return;
     final budget = _frameBudgetUs();
-    var slow = 0, frozen = 0;
+    final current = currentScreen();
+    final byScreen = <String?, _FrameCounts>{};
+    var latest = -1;
     for (final timing in timings) {
+      final frame = timing.frameNumber;
+      if (frame > latest) latest = frame;
+      final counts =
+          byScreen.putIfAbsent(_screenOf(frame, current), _FrameCounts.new);
+      counts.total++;
       if (timing.totalSpan.inMicroseconds >= frozenFrameUs) {
-        frozen++;
+        counts.frozen++;
       } else if (timing.buildDuration.inMicroseconds > budget ||
           timing.rasterDuration.inMicroseconds > budget) {
-        slow++;
+        counts.slow++;
       }
     }
-    _recorder.frames(currentScreen(), timings.length, slow, frozen);
+    byScreen.forEach((screen, counts) =>
+        _recorder.frames(screen, counts.total, counts.slow, counts.frozen));
+    // Timings come in frame order: no frame before [latest] is still to
+    // come, so only the screen in effect for it, and what changed since,
+    // is kept.
+    var superseded = 0;
+    while (superseded + 1 < _screens.length &&
+        _screens[superseded + 1].frameNumber <= latest) {
+      superseded++;
+    }
+    if (superseded > 0) _screens.removeRange(0, superseded);
   }
 
   // ---------------------------------------------------------------- hangs
 
   void _startWatchdog() {
-    if (!_started || _watchdog != null) return;
+    if (!_started || !reportHangs || _watchdog != null) return;
     _clock
       ..reset()
       ..start();
@@ -292,7 +423,8 @@ class AppVitals {
       final elapsed = _clock.elapsedMilliseconds;
       final blocked = elapsed - previousMs - watchdogIntervalMs;
       if (blocked >= hangThresholdMs && _foreground) {
-        _recorder.hang(blocked.toDouble(), currentScreen());
+        guarded('hang',
+            () => _recorder.hang(blocked.toDouble(), currentScreen()));
       }
       if (_watchdog != null) _tick(elapsed);
     });

@@ -1,0 +1,4 @@
+# Develop against the traceway package of this repository. Not published.
+dependency_overrides:
+  traceway:
+    path: ../..

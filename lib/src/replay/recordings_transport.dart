@@ -1,8 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show gzip;
+import 'dart:isolate';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
+
+import '../guarded.dart';
 
 class RecordingSegment {
   RecordingSegment({
@@ -12,6 +16,7 @@ class RecordingSegment {
     required this.events,
     this.startedAt,
     this.endedAt,
+    this.approxBytes,
   });
 
   /// The `traceway.exception.id` of the exception this segment is a clip of.
@@ -21,6 +26,21 @@ class RecordingSegment {
   final List<Map<String, dynamic>> events;
   final DateTime? startedAt;
   final DateTime? endedAt;
+
+  /// Size of the events as JSON when known; see [SessionRecordingPayload].
+  final int? approxBytes;
+
+  /// What the segment weighs in the upload queue.
+  int get bytes {
+    final known = approxBytes;
+    if (known != null) return known;
+    var total = 0;
+    for (final event in events) {
+      final data = event['data'];
+      if (data is String) total += data.length;
+    }
+    return total;
+  }
 
   Map<String, dynamic> toJson() => {
         if (exceptionId != null) 'exceptionId': exceptionId,
@@ -35,16 +55,24 @@ class RecordingSegment {
 class _Batch {
   _Batch(this.segments) {
     for (final segment in segments) {
-      for (final event in segment.events) {
-        final data = event['data'];
-        if (data is String) bytes += data.length;
-      }
+      bytes += segment.bytes;
     }
   }
   final List<RecordingSegment> segments;
   int bytes = 0;
   int attempts = 0;
+
+  /// The gzipped request body, made once for every attempt.
+  List<int>? body;
 }
+
+/// Batches up to this size are encoded where they are sent; larger ones
+/// (clips with pictures) in a background isolate, so the UI isolate never
+/// JSON-encodes and gzips them.
+const int inlineEncodeMaxBytes = 16 * 1024;
+
+List<int> _encodeBody(Map<String, Object?> body) =>
+    gzip.encode(JsonUtf8Encoder().convert(body));
 
 const List<int> _defaultRetryDelaysMs = [5000, 30000, 120000];
 const Set<int> _permanentFailures = {400, 401, 403, 404, 413, 422};
@@ -62,6 +90,7 @@ class RecordingsTransport {
     http.Client? httpClient,
     List<int>? retryDelaysMs,
     this.maxQueuedBytes = _defaultMaxQueuedBytes,
+    this.onFailed,
   })  : _http = httpClient ?? http.Client(),
         _retryDelaysMs = retryDelaysMs ?? _defaultRetryDelaysMs;
 
@@ -70,6 +99,10 @@ class RecordingsTransport {
   final http.Client _http;
   final List<int> _retryDelaysMs;
   final int maxQueuedBytes;
+
+  /// Called when segments were given up: dropped from a full queue,
+  /// rejected by the server, or out of retries.
+  final void Function()? onFailed;
   final List<_Batch> _queue = [];
   int _queuedBytes = 0;
   Timer? _timer;
@@ -78,6 +111,33 @@ class RecordingsTransport {
 
   int failedSegments = 0;
   int sentSegments = 0;
+
+  /// Upload bodies encoded in a background isolate so far.
+  @visibleForTesting
+  static int backgroundEncodes = 0;
+
+  Future<List<int>> _body(_Batch batch) async {
+    final ready = batch.body;
+    if (ready != null) return ready;
+    final body = <String, Object?>{
+      'segments': batch.segments.map((s) => s.toJson()).toList(),
+    };
+    final List<int> encoded;
+    if (batch.bytes <= inlineEncodeMaxBytes) {
+      encoded = _encodeBody(body);
+    } else {
+      backgroundEncodes++;
+      List<int>? background;
+      try {
+        background = await Isolate.run(() => _encodeBody(body),
+            debugName: 'traceway replay upload');
+      } catch (_) {
+        // No isolate to be had (a platform or a test without one): here.
+      }
+      encoded = background ?? _encodeBody(body);
+    }
+    return batch.body = encoded;
+  }
 
   int get pending => _queue.fold(0, (n, b) => n + b.segments.length);
 
@@ -89,11 +149,12 @@ class RecordingsTransport {
     while (_queuedBytes > maxQueuedBytes && _queue.length > 1) {
       final dropped = _queue.removeAt(0);
       _queuedBytes -= dropped.bytes;
-      failedSegments += dropped.segments.length;
+      _failed(dropped);
     }
     _schedule(0);
   }
 
+  /// Forgets what waits to be sent; a request already made is not retried.
   void discard() {
     _generation++;
     _queue.clear();
@@ -114,7 +175,7 @@ class RecordingsTransport {
     if (_timer != null) return;
     _timer = Timer(Duration(milliseconds: delayMs), () {
       _timer = null;
-      unawaited(_drain());
+      unawaited(guardedAsync('replay upload', _drain));
     });
   }
 
@@ -126,7 +187,7 @@ class RecordingsTransport {
         final batch = _queue.removeAt(0);
         _queuedBytes -= batch.bytes;
         final generation = _generation;
-        final retryAfterMs = await _post(batch);
+        final retryAfterMs = await _post(batch, generation);
         if (generation != _generation) continue;
         if (retryAfterMs != null) {
           _queue.insert(0, batch);
@@ -142,14 +203,14 @@ class RecordingsTransport {
   }
 
   /// Returns null when the batch is done (sent or given up), else how long to
-  /// wait before retrying.
-  Future<int?> _post(_Batch batch) async {
+  /// wait before retrying. A batch discarded while its body was made is not
+  /// posted.
+  Future<int?> _post(_Batch batch, int generation) async {
     batch.attempts++;
     http.Response response;
     try {
-      final body = gzip.encode(utf8.encode(jsonEncode({
-        'segments': batch.segments.map((s) => s.toJson()).toList(),
-      })));
+      final body = await _body(batch);
+      if (generation != _generation) return null;
       response = await _http
           .post(
             Uri.parse(url),
@@ -169,7 +230,7 @@ class RecordingsTransport {
       return null;
     }
     if (_permanentFailures.contains(response.statusCode)) {
-      failedSegments += batch.segments.length;
+      _failed(batch);
       return null;
     }
     final retryAfter = int.tryParse(response.headers['retry-after'] ?? '');
@@ -179,9 +240,14 @@ class RecordingsTransport {
 
   int? _retryDelay(_Batch batch, int? requested) {
     if (batch.attempts > _retryDelaysMs.length) {
-      failedSegments += batch.segments.length;
+      _failed(batch);
       return null;
     }
     return requested ?? _retryDelaysMs[batch.attempts - 1];
+  }
+
+  void _failed(_Batch batch) {
+    failedSegments += batch.segments.length;
+    onFailed?.call();
   }
 }

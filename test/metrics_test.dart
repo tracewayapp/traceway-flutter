@@ -1,13 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:ui' show FrameTiming;
 
 import 'package:dartastic_opentelemetry/dartastic_opentelemetry.dart'
     show ReadableLogRecord;
 
 import 'package:dartastic_opentelemetry/proto/opentelemetry_proto_dart.dart'
     as proto;
+import 'package:flutter/foundation.dart' show kDebugMode;
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:traceway/src/core/control_state.dart';
@@ -144,7 +145,12 @@ Recorded recorder({
   return Recorded(r, bodies, store);
 }
 
-FrameTiming frame({int buildUs = 1000, int rasterUs = 1000, int? totalUs}) {
+FrameTiming frame({
+  int buildUs = 1000,
+  int rasterUs = 1000,
+  int? totalUs,
+  int frameNumber = -1,
+}) {
   const start = 1000000;
   final total = totalUs ?? buildUs + rasterUs;
   return FrameTiming(
@@ -154,6 +160,7 @@ FrameTiming frame({int buildUs = 1000, int rasterUs = 1000, int? totalUs}) {
     rasterStart: start + total - rasterUs,
     rasterFinish: start + total,
     rasterFinishWallTime: start + total,
+    frameNumber: frameNumber,
   );
 }
 
@@ -615,7 +622,8 @@ void main() {
           currentScreen: () => screen,
           nowUs: () => nowUs,
           hangThresholdMs: 150,
-          watchdogIntervalMs: 20);
+          watchdogIntervalMs: 20,
+          reportHangs: true);
     });
 
     tearDown(() => vitals.stop());
@@ -642,6 +650,123 @@ void main() {
       });
       expect(h['app.screen.ttid|screen=/users/:id']!.sum, 250);
       expect(h['app.screen.ttfd|screen=/users/:id']!.sum, 1000);
+    });
+
+    testWidgets(
+        'a screen pushed from a post-frame callback is displayed by the next '
+        'frame, not at once', (tester) async {
+      await tester.pumpWidget(const SizedBox());
+      // A splash screen replacing itself once it is drawn.
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        vitals.navigated(
+            '/home', 'replace', DateTime.fromMicrosecondsSinceEpoch(nowUs));
+        nowUs += 120000;
+      });
+      SchedulerBinding.instance.scheduleFrame();
+      await tester.pump();
+      await tester.pump();
+      await r.recorder.flush();
+      expect(r.decoded.histograms['app.screen.ttid|screen=/home']!.sum, 120);
+    });
+
+    testWidgets('a route the observer waited for is displayed when reported',
+        (tester) async {
+      await tester.pumpWidget(const SizedBox());
+      vitals.navigated('/CheckoutPage', 'push',
+          DateTime.fromMicrosecondsSinceEpoch(nowUs - 40000),
+          displayed: true);
+      await r.recorder.flush();
+      expect(r.decoded.histograms['app.screen.ttid|screen=/CheckoutPage']!.sum,
+          40);
+    });
+
+    testWidgets('a route named by its template records under the template',
+        (tester) async {
+      var frameNumber = 1;
+      screen = '/home';
+      vitals = AppVitals(r.recorder,
+          currentScreen: () => screen,
+          nowUs: () => nowUs,
+          frameNumber: () => frameNumber);
+      vitals.start();
+      await tester.pumpWidget(const SizedBox());
+      // Named before its first frame: both of its times.
+      screen = '/orders/:id';
+      vitals.navigated(
+          screen, 'push', DateTime.fromMicrosecondsSinceEpoch(nowUs));
+      vitals.routeNamed('/orders/:orderId');
+      screen = '/orders/:orderId';
+      nowUs += 200000;
+      frameNumber = 2;
+      await tester.pump();
+      nowUs += 300000;
+      vitals.fullyDisplayed();
+      // Named once drawn: its time to full display, and the frames so far.
+      screen = '/products/blue-suede-shoes';
+      vitals.navigated(
+          screen, 'push', DateTime.fromMicrosecondsSinceEpoch(nowUs));
+      nowUs += 100000;
+      frameNumber = 3;
+      await tester.pump();
+      vitals.routeNamed('/products/:slug');
+      screen = '/products/:slug';
+      nowUs += 100000;
+      vitals.fullyDisplayed();
+      vitals.onTimings([frame(frameNumber: 1), frame(frameNumber: 3)]);
+      await r.recorder.flush();
+      final h = r.decoded.histograms;
+      expect(h.keys.toSet(), {
+        'app.screen.ttid|screen=/orders/:orderId',
+        'app.screen.ttfd|screen=/orders/:orderId',
+        'app.screen.ttid|screen=/products/blue-suede-shoes',
+        'app.screen.ttfd|screen=/products/:slug',
+      });
+      expect(h['app.screen.ttid|screen=/orders/:orderId']!.sum, 200);
+      expect(h['app.screen.ttfd|screen=/orders/:orderId']!.sum, 500);
+      expect(h['app.screen.ttfd|screen=/products/:slug']!.sum, 200);
+      expect(r.decoded.sums, {
+        'app.frames.slow.total|screen=/home': 1,
+        'app.frames.frozen.total|screen=/home': 1,
+        'app.frames.slow.total|screen=/products/:slug': 1,
+        'app.frames.frozen.total|screen=/products/:slug': 1,
+      });
+    });
+
+    testWidgets('frames count under the screen they were built on',
+        (tester) async {
+      var frameNumber = 10;
+      vitals = AppVitals(r.recorder,
+          currentScreen: () => screen, frameNumber: () => frameNumber);
+      vitals.start();
+      await tester.pumpWidget(const SizedBox());
+      frameNumber = 11;
+      SchedulerBinding.instance.scheduleFrame();
+      await tester.pump();
+      // The app moves on before the engine reports the frames drawn on /cart.
+      screen = '/checkout';
+      frameNumber = 12;
+      SchedulerBinding.instance.scheduleFrame();
+      await tester.pump();
+      vitals.onTimings([
+        frame(frameNumber: 10, totalUs: 800000, buildUs: 790000),
+        frame(frameNumber: 11, buildUs: 30000),
+        frame(frameNumber: 12),
+      ]);
+      // A frame the engine did not number is the screen on now.
+      screen = '/done';
+      vitals.onTimings([frame(buildUs: 30000)]);
+      await r.recorder.flush();
+      expect(r.decoded.sums, {
+        'app.frames.slow.total|screen=/cart': 2,
+        'app.frames.slow|screen=/cart': 1,
+        'app.frames.frozen.total|screen=/cart': 2,
+        'app.frames.frozen|screen=/cart': 1,
+        'app.frames.slow.total|screen=/checkout': 1,
+        'app.frames.frozen.total|screen=/checkout': 1,
+        'app.frames.slow.total|screen=/done': 1,
+        'app.frames.slow|screen=/done': 1,
+        'app.frames.frozen.total|screen=/done': 1,
+      });
     });
 
     testWidgets('slow and frozen frames by screen', (tester) async {
@@ -681,6 +806,24 @@ void main() {
       r.bodies.clear();
       final later = DateTime.now().add(const Duration(milliseconds: 300));
       while (DateTime.now().isBefore(later)) {}
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await r.recorder.flush();
+      expect(r.bodies, isEmpty);
+    });
+
+    test(
+        'a debug build reports no hang unless asked: a breakpoint looks the '
+        'same', () async {
+      expect(kDebugMode, isTrue);
+      vitals = AppVitals(r.recorder,
+          currentScreen: () => screen,
+          nowUs: () => nowUs,
+          hangThresholdMs: 150,
+          watchdogIntervalMs: 20);
+      vitals.start();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      final until = DateTime.now().add(const Duration(milliseconds: 300));
+      while (DateTime.now().isBefore(until)) {}
       await Future<void>.delayed(const Duration(milliseconds: 60));
       await r.recorder.flush();
       expect(r.bodies, isEmpty);

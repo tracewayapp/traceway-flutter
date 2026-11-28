@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show PlatformDispatcher;
 
@@ -132,6 +133,76 @@ void main() {
     expect(wire.logs('traceway.test').where((r) => r.eventName == 'exception'),
         hasLength(1));
     expect(saved.existsSync(), isFalse);
+  });
+
+  group('an issue goes to the exporter before the breadcrumbs it flushes', () {
+    const options =
+        TracewayOptions(remoteConfig: false, captureMetrics: false);
+
+    /// `issue` or `breadcrumb`, in the order the server received them.
+    List<String> received(Wire wire) => [
+          for (final r in wire.logs('traceway.test'))
+            if (r.eventName == 'exception' || r.eventName == 'message')
+              'issue'
+            else if (r.body.stringValue.startsWith('breadcrumb'))
+              'breadcrumb',
+        ];
+
+    test('from the durable queue: it is on disk before anything is sent',
+        () async {
+      final dir = Directory.systemTemp.createTempSync('traceway_order');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final wire = Wire()..delay = const Duration(milliseconds: 5);
+      final client = await start(wire, options, dir: dir);
+      await client.flush();
+      for (var i = 0; i < 3; i++) {
+        client.recordLog('breadcrumb $i');
+      }
+      final before = wire.requests.length;
+      client.captureException(StateError('boom'));
+      final saved = dir
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((f) => f.path.endsWith('.logs.pb'));
+      expect(saved, hasLength(1));
+      expect(wire.requests, hasLength(before));
+      await client.flush();
+      expect(received(wire),
+          ['issue', 'breadcrumb', 'breadcrumb', 'breadcrumb']);
+    });
+
+    test('without a disk: it leads the first flushed request', () async {
+      final wire = Wire();
+      final client = await start(wire, options);
+      await client.flush();
+      for (var i = 0; i < 3; i++) {
+        client.recordLog('breadcrumb $i');
+      }
+      client.captureException(StateError('boom'));
+      await client.flush();
+      expect(received(wire),
+          ['issue', 'breadcrumb', 'breadcrumb', 'breadcrumb']);
+    });
+
+    test('through an exporter: the issue is the first record handed over',
+        () async {
+      final h = await startHarness();
+      for (var i = 0; i < 3; i++) {
+        h.client.recordLog('breadcrumb $i');
+      }
+      h.client.captureException(StateError('boom'));
+      await h.client.flush();
+      final order = [
+        for (final r in h.logs.records)
+          if (r.eventName == 'exception')
+            'issue'
+          else if ('${r.body}'.startsWith('breadcrumb'))
+            'breadcrumb',
+      ];
+      expect(order, ['issue', 'breadcrumb', 'breadcrumb', 'breadcrumb']);
+      expect(attr(h.named('exception').single, 'traceway.context.lookback_seconds'),
+          isNotNull);
+    });
   });
 
   test('disabled errors are never written to the durable queue', () async {
@@ -796,16 +867,17 @@ void main() {
     expect(routes.logs.external, isFalse);
   });
 
-  test('errors in the app zone are still reported without the SDK', () {
-    final reported = <FlutterErrorDetails>[];
-    final previous = FlutterError.onError;
-    FlutterError.onError = reported.add;
-    try {
-      ErrorHandler().handleZoneError(StateError('lost?'), StackTrace.current);
-    } finally {
-      FlutterError.onError = previous;
-    }
-    expect(reported.single.exception, isStateError);
+  test('errors in the app zone still reach the zone around it without the SDK',
+      () async {
+    final host = <Object>[];
+    runZonedGuarded(
+      () => runZonedGuarded(
+          () => scheduleMicrotask(() => throw StateError('lost?')),
+          ErrorHandler().handleZoneError),
+      (error, stack) => host.add(error),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(host.single, isStateError);
   });
 
   test('the app\'s own platform error handler keeps running', () {

@@ -37,13 +37,6 @@ if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
   exit 0
 fi
 
-# --- 5. Bump version in pubspec.yaml ---
-echo ""
-echo "Bumping version to $NEW_VERSION..."
-sed -i.bak "s/^version: .*/version: $NEW_VERSION/" pubspec.yaml
-sed -i.bak "s/^const String tracewaySdkVersion = .*/const String tracewaySdkVersion = '$NEW_VERSION';/" lib/src/sdk_version.dart
-rm -f pubspec.yaml.bak lib/src/sdk_version.dart.bak
-
 # --- 6. Update CHANGELOG.md ---
 echo ""
 echo "What changed in this version? (one change per line, empty line to finish):"
@@ -61,33 +54,28 @@ if [[ -z "$CHANGES" ]]; then
   exit 1
 fi
 
-DATE=$(date +%Y-%m-%d)
-if grep -q '^## Unreleased' CHANGELOG.md; then
-  # Notes collected under "Unreleased" belong to this release.
-  HEADING="## $NEW_VERSION — $DATE" NOTES="$(echo -e "$CHANGES")" awk '
-    !done && /^## Unreleased/ {
-      print ENVIRON["HEADING"]; print ""; print ENVIRON["NOTES"]
-      done = 1; next
-    }
-    { print }
-  ' CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
-else
-  CHANGELOG_ENTRY="## $NEW_VERSION — $DATE\n\n$CHANGES"
-  # Prepend to CHANGELOG.md
-  echo -e "$CHANGELOG_ENTRY" | cat - CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
-fi
+NOTES_FILE=$(mktemp)
+echo -e "$CHANGES" > "$NOTES_FILE"
+# "## Unreleased" or "## $NEW_VERSION — unreleased" becomes this release's
+# heading; there is never a second one.
+bash tool/prepare_release.sh "$NEW_VERSION" "$NOTES_FILE"
+rm -f "$NOTES_FILE"
 echo ""
 echo "CHANGELOG.md updated."
 
 # --- 6b. Commit version bump before publish ---
+# Nothing to commit when an earlier run of this version already did.
 echo ""
 echo "Committing version bump and changelog..."
-git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart
-git commit -m "v$NEW_VERSION"
+git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart packages/traceway_video/{pubspec.yaml,CHANGELOG.md}
+git diff --cached --quiet || git commit -m "v$NEW_VERSION"
 
 # --- 7. Run analysis and tests ---
+# Both packages are resolved first: the analysis covers packages/ too.
 echo ""
 echo "Running analysis..."
+flutter pub get
+(cd packages/traceway_video && flutter pub get)
 flutter analyze --no-fatal-infos
 
 echo ""
@@ -102,7 +90,7 @@ dart pub publish --dry-run
 echo ""
 read -rp "Dry run passed. Publish for real? (y/N) " CONFIRM2
 if [[ "$CONFIRM2" != "y" && "$CONFIRM2" != "Y" ]]; then
-  echo "Aborted. Version bump is still in pubspec.yaml — revert if needed."
+  echo "Aborted. The version bump is committed as \"v$NEW_VERSION\" and not tagged: run this script again to continue, or reset the commit."
   exit 0
 fi
 
@@ -121,6 +109,11 @@ echo ""
 echo "========================================"
 echo "  Published traceway v$NEW_VERSION"
 echo "========================================"
+echo ""
+echo "Publish the video add-on with the same version once traceway is live,"
+echo "from a copy outside the repository (inside it pub hides the add-on's files):"
+echo "  bash tool/export_video_addon.sh /tmp/traceway_video v$NEW_VERSION"
+echo "  cd /tmp/traceway_video && flutter pub get && dart pub publish --dry-run && dart pub publish"
 echo ""
 echo "Don't forget to push commits and tags:"
 echo "  git push && git push --tags"

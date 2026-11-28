@@ -28,60 +28,33 @@ jobs:
         with:
           channel: stable
 
-      - name: Validate version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          if ! [[ "$INPUT_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$ ]]; then
-            echo "Invalid version: '$INPUT_VERSION' (must be semver, e.g. 1.0.5 or 1.0.0-beta.1)"
-            exit 1
-          fi
-          CURRENT=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
-          if [ "$CURRENT" = "$INPUT_VERSION" ]; then
-            echo "Version $INPUT_VERSION already in pubspec.yaml — already released?"
-            exit 1
-          fi
-          echo "Bumping $CURRENT → $INPUT_VERSION"
-
-      - name: Bump pubspec.yaml and the version the SDK reports
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          sed -i.bak "s/^version: .*/version: $INPUT_VERSION/" pubspec.yaml
-          sed -i.bak "s/^const String tracewaySdkVersion = .*/const String tracewaySdkVersion = '$INPUT_VERSION';/" lib/src/sdk_version.dart
-          rm -f pubspec.yaml.bak lib/src/sdk_version.dart.bak
-          grep '^version:' pubspec.yaml
-          grep "^const String tracewaySdkVersion = '$INPUT_VERSION';" lib/src/sdk_version.dart
-
-      - name: Add entry to CHANGELOG.md
+      - name: Prepare both packages and changelogs
         env:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_NOTES: ${{ inputs.release_notes }}
         run: |
-          export HEADING="## $INPUT_VERSION — $(date +%Y-%m-%d)"
-          if grep -q '^## Unreleased' CHANGELOG.md; then
-            # Notes collected under "Unreleased" belong to this release.
-            awk '
-              !done && /^## Unreleased/ {
-                print ENVIRON["HEADING"]; print ""; print ENVIRON["INPUT_NOTES"]
-                done = 1; next
-              }
-              { print }
-            ' CHANGELOG.md > CHANGELOG.md.new
-          else
-            {
-              echo "$HEADING"
-              echo ""
-              printf '%s\n' "$INPUT_NOTES"
-              echo ""
-              cat CHANGELOG.md
-            } > CHANGELOG.md.new
-          fi
-          mv CHANGELOG.md.new CHANGELOG.md
-          head -30 CHANGELOG.md
+          printf '%s\n' "$INPUT_NOTES" > "$RUNNER_TEMP/notes.md"
+          bash tool/prepare_release.sh "$INPUT_VERSION" "$RUNNER_TEMP/notes.md"
 
+      - name: Check that both package versions are available
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          for package in traceway traceway_video; do
+            code=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+              "https://pub.dev/api/packages/$package/versions/$VERSION")
+            if [ "$code" != 404 ]; then
+              echo "Expected an unpublished version of $package ($VERSION), registry returned HTTP $code" >&2
+              exit 1
+            fi
+          done
+
+      # Both packages: the analysis at the root covers packages/ too, and an
+      # add-on without its dependencies is full of unresolved imports.
       - name: Install dependencies
-        run: flutter pub get
+        run: |
+          flutter pub get
+          (cd packages/traceway_video && flutter pub get)
 
       # Infos (deprecations in a newer Flutter) are reported, not fatal.
       - name: Analyze
@@ -89,6 +62,12 @@ jobs:
 
       - name: Test
         run: flutter test
+
+      - name: Analyze and test the video add-on
+        working-directory: packages/traceway_video
+        run: |
+          flutter analyze --no-fatal-infos
+          flutter test
 
       - name: Commit, tag, and push
         env:
@@ -98,8 +77,10 @@ jobs:
           TAG="v$INPUT_VERSION"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
-          git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart
-          git commit -m "v$INPUT_VERSION"
+          git add pubspec.yaml CHANGELOG.md lib/src/sdk_version.dart packages/traceway_video/{pubspec.yaml,CHANGELOG.md}
+          # A checkout that was already prepared for this version has
+          # nothing to commit: it is tagged as it is.
+          git diff --cached --quiet || git commit -m "v$INPUT_VERSION"
           git tag "$TAG"
           git push origin "HEAD:$BRANCH" "$TAG"
 

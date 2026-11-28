@@ -104,7 +104,7 @@ class TapTarget {
   final String tag;
   final String? id;
 
-  /// Not set for a widget inside a `TracewayPrivacyMask`.
+  /// Not set for a widget inside a traceway mask.
   final String? text;
   final String? label;
 }
@@ -268,14 +268,15 @@ TapTarget? describeTap(ElementPath path, {bool includeText = true}) {
       includeText && !masked ? shownText(path[owner], includeMasked: false) : null;
 
   // An id on the target, on a wrapper right above it (the app's own widget
-  // with a key) or inside it.
+  // with a key) or inside it. Not one under a mask: a key is often
+  // made of what the widget shows (`ValueKey(contact.name)`).
   int? idIndex;
   for (final i in [
     owner,
     for (var j = owner + 1; j < limit && j <= owner + 6; j++) j,
     for (var j = owner - 1; j >= 0; j--) j,
   ]) {
-    if (path.info(path[i]).ids.isNotEmpty) {
+    if (!path.isMasked(i) && path.info(path[i]).ids.isNotEmpty) {
       idIndex = i;
       break;
     }
@@ -305,7 +306,7 @@ TapTarget? describeTap(ElementPath path, {bool includeText = true}) {
     }
   }
   final tag = tagOf(owner);
-  final key = info.key;
+  final key = masked ? null : info.key;
   if (key != null && key != id) {
     final quoted = _quoted(key);
     if (quoted != null) candidates.add(withTag(tag, '[key=$quoted]'));
@@ -329,7 +330,9 @@ TapTarget? describeTap(ElementPath path, {bool includeText = true}) {
   }
   for (var j = owner + 1; j < limit; j++) {
     final ancestor = path.info(path[j]);
-    if (ancestor.ids.isNotEmpty && _identPattern.hasMatch(ancestor.ids.first)) {
+    if (!path.isMasked(j) &&
+        ancestor.ids.isNotEmpty &&
+        _identPattern.hasMatch(ancestor.ids.first)) {
       candidates.add('#${ancestor.ids.first} $tag');
       break;
     }

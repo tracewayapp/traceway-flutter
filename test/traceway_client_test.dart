@@ -123,7 +123,8 @@ void main() {
           startsWith('FormatException: '));
       expect(attr(record, 'traceway.exception.id'), matches(_uuid));
       expect(attr(record, 'session.id'), matches(_uuid));
-      expect(attr(record, 'traceway.session.started_at'), isA<int>());
+      expect(attr(record, 'traceway.session.started_at'), isNull,
+          reason: 'only session events carry the start, as in the browser SDK');
       expect(attr(record, 'user.id'), 'u-42');
       expect(attr(record, 'k'), 'v');
       expect(attr(record, 'traceway.replay.status'), 'disabled');
@@ -372,6 +373,38 @@ void main() {
 
   group('session replay', () {
     const withReplay = TracewayOptions(remoteConfig: false, screenCapture: true);
+
+    test('session events say whether replay may show images', () async {
+      Future<Object?> imagesOn(TracewayOptions options) async {
+        final h = await startHarness(options: options);
+        await h.client.flush();
+        final value =
+            attr(h.named('session.start').single, 'traceway.replay.images');
+        await TracewayClient.resetForTest();
+        return value;
+      }
+
+      expect(await imagesOn(withReplay), 'wifi');
+      expect(
+          await imagesOn(const TracewayOptions(
+              remoteConfig: false,
+              screenCapture: true,
+              collection: {
+                'replay': {'images': 'always'}
+              })),
+          'always');
+      // The option is a ceiling the settings cannot raise.
+      expect(
+          await imagesOn(const TracewayOptions(
+              remoteConfig: false,
+              screenCapture: true,
+              replayImages: TracewayImagePolicy.off,
+              collection: {
+                'replay': {'images': 'always'}
+              })),
+          'off');
+      expect(await imagesOn(const TracewayOptions(remoteConfig: false)), 'off');
+    });
 
     test('a clip is uploaded only for an exception, linked by its id',
         () async {
@@ -672,7 +705,7 @@ void main() {
       var h = await startHarness(
           options: const TracewayOptions(), handler: handler, stateDirectory: dir);
       await Future<void>.delayed(const Duration(milliseconds: 100));
-      final instanceId = h.client.getInstanceId();
+      final instanceId = h.client.getInstanceId()!;
       expect(instanceId, matches(_uuid));
       expect(instanceId[14], '7');
       expect(h.client.settings.signals['custom']!.mode, Mode.stream);
@@ -789,7 +822,9 @@ void main() {
       await h.client.flush();
       expect(h.named(null).map((r) => r.body),
           ['before capture', 'during capture']);
-      expect(attr(h.named(null).last, 'traceway.capture.ids'), '["cap-1"]');
+      // The lookback is marked as the capture's when it goes up.
+      expect(h.named(null).map((r) => attr(r, 'traceway.capture.ids')),
+          ['["cap-1"]', '["cap-1"]']);
     });
   });
 
@@ -841,11 +876,85 @@ void main() {
     });
   });
 
+  group('collection health', () {
+    test('errors the flood guard holds back are reported, and again later',
+        () async {
+      final h = await startHarness(collectionHealthDelayMs: 50);
+      await h.client.flush();
+      for (var i = 0; i < 3; i++) {
+        h.client.captureException(StateError('same'));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await h.client.flush();
+      final health = h.named('traceway.collection.health').single;
+      expect(attr(health, 'traceway.error.suppressed_total'), 2);
+      expect(attr(health, 'traceway.collection.max_events'), 10000);
+      expect(attr(health, 'traceway.collection.dropped'), 0);
+      expect(attr(health, 'traceway.replay.failed_segments'), 0);
+      expect(attr(health, 'traceway.context.evicted'), 0);
+      // The session row learns once that data was dropped.
+      expect(h.named('traceway.session.update'), hasLength(1));
+
+      // The next report waits twice as long, and the row is not told again.
+      h.client.captureException(StateError('same'));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      await h.client.flush();
+      expect(
+          h.named('traceway.collection.health')
+              .map((r) => attr(r, 'traceway.error.suppressed_total')),
+          [2, 3]);
+      expect(h.named('traceway.session.update'), hasLength(1));
+    });
+
+    test('session events carry the errors held back so far', () async {
+      final h = await startHarness(collectionHealthDelayMs: 50);
+      await h.client.flush();
+      expect(
+          attr(h.named('session.start').single,
+              'traceway.error.suppressed_total'),
+          0);
+      for (var i = 0; i < 3; i++) {
+        h.client.captureException(StateError('same'));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      await h.client.flush();
+      expect(
+          attr(h.named('traceway.session.update').single,
+              'traceway.error.suppressed_total'),
+          2);
+      await h.client.shutdown();
+      expect(
+          attr(h.named('session.end').single,
+              'traceway.error.suppressed_total'),
+          2);
+    });
+
+    test('replay segments the server refuses are reported', () async {
+      final h = await startHarness(
+        options: const TracewayOptions(remoteConfig: false, screenCapture: true),
+        collectionHealthDelayMs: 20,
+        handler: (request) async => request.url.path.endsWith('/api/recordings')
+            ? http.Response('no', 400)
+            : null,
+      );
+      h.client.replaySource = FakeReplaySource();
+      h.client.captureException(StateError('boom'));
+      await h.client.flush();
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+      await h.client.flush();
+      final health = h.named('traceway.collection.health').single;
+      expect(attr(health, 'traceway.replay.failed_segments'), 1);
+      expect(attr(health, 'traceway.error.suppressed_total'), 0);
+    });
+  });
+
   group('lifecycle', () {
     test('initialize returns the running client', () async {
       final h = await startHarness();
       final again = TracewayClient.initialize(
-          connectionString, const TracewayOptions(remoteConfig: false));
+          token: 'test-token',
+          baseUrl: 'https://traceway.test',
+          options: const TracewayOptions(remoteConfig: false));
       expect(again, same(h.client));
     });
 

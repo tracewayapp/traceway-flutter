@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
+import '../connection_string.dart' show normalizeBaseUrl;
 import '../traceway_telemetry.dart';
 
 String destinationDigest(List<String> parts) =>
@@ -61,18 +62,17 @@ class TracewayEndpoints {
       (url.startsWith('$base/api/otel/') || url.startsWith(recordings));
 }
 
-/// Derives every endpoint the SDK talks to from the URL half of the
-/// connection string. Accepts the bare server URL as well as the 1.x form
-/// that ended in `/api/report`, so existing connection strings keep working.
-TracewayEndpoints resolveEndpoints(String apiUrl) {
-  final trimmed = apiUrl
-      .trim()
-      .replaceFirst(RegExp(r'/+$'), '')
-      .replaceFirst(RegExp(r'/api/report$'), '')
-      .replaceFirst(RegExp(r'/api$'), '');
-  // In the form request URLs take (lowercase host, no default port), so
-  // [TracewayEndpoints.isOwn] recognises the SDK's own requests.
-  final base = trimmed.isEmpty ? trimmed : Uri.parse(trimmed).toString();
+/// Derives every endpoint the SDK talks to from `baseUrl`, the Traceway
+/// server, normalized as [normalizeBaseUrl] does (an `/api` or `/api/report`
+/// suffix, which 1.x and 2.0 connection strings carried, is dropped, and a
+/// URL without a scheme gets one). Throws an [ArgumentError] for a URL that
+/// is not HTTP(S) or has no host; the start API checks it first.
+TracewayEndpoints resolveEndpoints(String baseUrl) {
+  final base = normalizeBaseUrl(baseUrl);
+  if (base == null) {
+    throw ArgumentError('baseUrl must be an HTTP(S) URL such as '
+        'https://cloud.tracewayapp.com, got $baseUrl');
+  }
   return TracewayEndpoints(
     base: base,
     logs: '$base/api/otel/v1/logs',

@@ -293,7 +293,7 @@ void main() {
     });
 
     testWidgets('masked text is not reported', (tester) async {
-      await tester.pumpWidget(app(TracewayPrivacyMask(
+      await tester.pumpWidget(app(TracewayMask(
         child: ElevatedButton(
           onPressed: () {},
           child: const Text('4242 4242 4242 4242'),
@@ -306,7 +306,7 @@ void main() {
     });
 
     testWidgets('a masked control keeps its label too', (tester) async {
-      await tester.pumpWidget(app(TracewayPrivacyMask(
+      await tester.pumpWidget(app(TracewayMask(
         child: IconButton(
           tooltip: 'Call Ann Smith',
           onPressed: () {},
@@ -318,19 +318,54 @@ void main() {
       expect(target.selector, 'IconButton');
     });
 
+    testWidgets('a key under a mask is not reported either', (tester) async {
+      await tester.pumpWidget(app(Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TracewayMask(
+            child: ListTile(
+              key: const ValueKey('Ann Smith'),
+              onTap: () {},
+              title: const Text('Ann Smith'),
+            ),
+          ),
+          Container(
+            key: const Key('contacts'),
+            child: TracewayMask(
+              child: KeyedSubtree(
+                key: const Key('AnnSmith'),
+                child: GestureDetector(
+                  onTap: () {},
+                  child: const SizedBox(
+                      width: 100, height: 40, child: Text('Mail')),
+                ),
+              ),
+            ),
+          ),
+        ],
+      )));
+      final tile = describeTap(pathAt(tester, find.text('Ann Smith')))!;
+      expect(tile.id, isNull);
+      expect(tile.selector, isNot(contains('Ann')));
+      final mail = describeTap(pathAt(tester, find.text('Mail')))!;
+      expect(mail.selector, isNot(contains('Ann')));
+      // An id above the mask is the app's own, not masked content.
+      expect(mail.id, 'contacts');
+    });
+
     testWidgets('a mask inside a control hides its label', (tester) async {
       await tester.pumpWidget(app(Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
             onPressed: () {},
-            icon: const TracewayPrivacyMask(
+            icon: const TracewayMask(
               child: Icon(Icons.call, semanticLabel: 'Call Ann Smith'),
             ),
           ),
           GestureDetector(
             onTap: () {},
-            child: const TracewayPrivacyMask(
+            child: const TracewayMask(
               child: Icon(Icons.mail, semanticLabel: 'Mail Ann Smith'),
             ),
           ),
@@ -341,6 +376,64 @@ void main() {
         expect(target.label, isNull, reason: '$icon');
         expect(target.selector, isNot(contains('Ann')), reason: '$icon');
       }
+    });
+
+    testWidgets('a marker key masks like TracewayMask and is not an id',
+        (tester) async {
+      await tester.pumpWidget(app(Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ElevatedButton(
+            key: const ValueKey('traceway-mask'),
+            onPressed: () {},
+            child: const Text('4242 4242'),
+          ),
+          IconButton(
+            key: const ValueKey('traceway-blank'),
+            tooltip: 'Call Ann Smith',
+            onPressed: () {},
+            icon: const Icon(Icons.call),
+          ),
+          Container(
+            key: const Key('contacts'),
+            child: GestureDetector(
+              onTap: () {},
+              child: const SizedBox(
+                width: 100,
+                height: 40,
+                child: Text('Ann Smith', key: ValueKey('traceway-mask')),
+              ),
+            ),
+          ),
+        ],
+      )));
+      final card = describeTap(pathAt(tester, find.text('4242 4242')))!;
+      expect(card.text, isNull);
+      expect(card.id, isNull);
+      expect(card.selector, 'ElevatedButton');
+      final call = describeTap(pathAt(tester, find.byIcon(Icons.call)))!;
+      expect(call.label, isNull);
+      expect(call.id, isNull);
+      expect(call.selector, 'IconButton');
+      final name = describeTap(pathAt(tester, find.text('Ann Smith')))!;
+      expect(name.text, isNull);
+      expect(name.id, 'contacts');
+      expect(name.selector, isNot(contains('Ann')));
+      expect(name.selector, isNot(contains('traceway')));
+    });
+
+    testWidgets('TracewayPrivacyMask still masks', (tester) async {
+      // ignore: deprecated_member_use_from_same_package
+      await tester.pumpWidget(app(TracewayPrivacyMask(
+        child: ElevatedButton(
+          onPressed: () {},
+          child: const Text('4242 4242 4242 4242'),
+        ),
+      )));
+      final target =
+          describeTap(pathAt(tester, find.text('4242 4242 4242 4242')))!;
+      expect(target.text, isNull);
+      expect(target.selector, 'ElevatedButton');
     });
 
     testWidgets('a tap on plain text names the text', (tester) async {

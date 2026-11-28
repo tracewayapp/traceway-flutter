@@ -7,6 +7,7 @@ import 'package:dartastic_opentelemetry/proto/opentelemetry_proto_dart.dart'
     as proto;
 
 import '../core/ring_buffer.dart';
+import '../guarded.dart';
 import '../otel/router.dart';
 
 /// A record of the ring buffer as it was saved: one OTLP `ResourceLogs` or
@@ -236,27 +237,36 @@ class BufferPersistence {
       }
       return true;
     });
-    return {
-      for (final kind in taken.keys)
-        kind: [
-          for (final chunk in taken[kind]!)
-            kind == 'logs' ? _logsRequest(chunk) : _tracesRequest(chunk),
-        ],
-    };
+    final bodies = <String, List<List<int>>>{};
+    for (final kind in taken.keys) {
+      for (final chunk in taken[kind]!) {
+        final body =
+            kind == 'logs' ? _logsRequest(chunk) : _tracesRequest(chunk);
+        if (body.isNotEmpty) bodies.putIfAbsent(kind, () => []).add(body);
+      }
+    }
+    return bodies;
   }
 
+  /// The bytes come from disk: a record that does not parse (a damaged
+  /// file) is left out, not the others.
   static List<int> _logsRequest(List<RestoredEntry> entries) {
     final request = proto.ExportLogsServiceRequest();
     for (final group in _byResource(entries).entries) {
       final merged = proto.ResourceLogs();
       if (group.key.isNotEmpty) {
-        merged.resource = proto.Resource.fromBuffer(base64Decode(group.key));
+        guarded('restored resource', () {
+          merged.resource =
+              proto.Resource.fromBuffer(base64Decode(group.key));
+        });
       }
       for (final entry in group.value) {
-        merged.scopeLogs
-            .addAll(proto.ResourceLogs.fromBuffer(entry.bytes).scopeLogs);
+        guarded('restored record', () {
+          merged.scopeLogs
+              .addAll(proto.ResourceLogs.fromBuffer(entry.bytes).scopeLogs);
+        });
       }
-      request.resourceLogs.add(merged);
+      if (merged.scopeLogs.isNotEmpty) request.resourceLogs.add(merged);
     }
     return request.writeToBuffer();
   }
@@ -266,13 +276,18 @@ class BufferPersistence {
     for (final group in _byResource(entries).entries) {
       final merged = proto.ResourceSpans();
       if (group.key.isNotEmpty) {
-        merged.resource = proto.Resource.fromBuffer(base64Decode(group.key));
+        guarded('restored resource', () {
+          merged.resource =
+              proto.Resource.fromBuffer(base64Decode(group.key));
+        });
       }
       for (final entry in group.value) {
-        merged.scopeSpans
-            .addAll(proto.ResourceSpans.fromBuffer(entry.bytes).scopeSpans);
+        guarded('restored record', () {
+          merged.scopeSpans
+              .addAll(proto.ResourceSpans.fromBuffer(entry.bytes).scopeSpans);
+        });
       }
-      request.resourceSpans.add(merged);
+      if (merged.scopeSpans.isNotEmpty) request.resourceSpans.add(merged);
     }
     return request.writeToBuffer();
   }

@@ -1,12 +1,21 @@
 name: traceway
 description: Traceway error tracking and screen recording SDK for Flutter.
-version: 2.0.0-beta.1
+version: 2.1.0
 homepage: https://tracewayapp.com
 repository: https://github.com/tracewayapp/traceway-flutter
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
-  flutter: '>=3.10.0'
+  # device_info_plus 13.1 needs Dart 3.10 / Flutter 3.38.1.
+  sdk: '>=3.10.0 <4.0.0'
+  flutter: '>=3.38.1'
+
+# No web: the SDK relies on dart:io (see the README, Platform support).
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  windows:
 
 executables:
   upload_symbols:
@@ -16,10 +25,10 @@ dependencies:
     sdk: flutter
   crypto: ^3.0.0
   http: ^1.5.0
+  logging: ^1.2.0
   dartastic_opentelemetry: ^0.12.0
   dartastic_opentelemetry_api: ^0.12.0
   path_provider: ^2.1.0
-  flutter_quick_video_encoder: ^1.7.2
   device_info_plus: ^13.1.0
   args: ^2.4.0
   fixnum: ^1.1.0

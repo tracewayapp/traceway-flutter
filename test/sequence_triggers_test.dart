@@ -70,6 +70,21 @@ List<int> run(List<Map<String, Object?>> steps, List<(int, String)> events) {
 }
 
 void main() {
+  test('a huge withinSeconds is capped instead of breaking every record', () {
+    final steps = [
+      {'match': named('a')},
+      {'match': named('b'), 'withinSeconds': 1e306},
+    ];
+    expect(parseTrigger({
+      'id': 't',
+      'steps': steps,
+      'actions': [
+        {'type': 'emit', 'eventName': 'x'}
+      ],
+    }).steps[1].withinSeconds, 24 * 60 * 60);
+    expect(run(steps, [(0, 'a'), (1000, 'c'), (2000, 'b')]), [0, 0, 1]);
+  });
+
   group('event sequences', () {
     test(
         'restores a click across an app restart, fires once, and ignores '

@@ -68,17 +68,24 @@ class PendingMetrics {
   }
 
   /// Hands over everything except [skip] and forgets it: a payload gets one
-  /// more attempt, never a third.
+  /// more attempt, never a third. One this run cannot read (a damaged
+  /// file) is forgotten too.
   List<PendingPayload> take(Set<String> skip) {
     final list = _read();
     final taken = list.where((e) => !skip.contains(e['id'])).toList();
     if (taken.isNotEmpty) {
       _write(list.where((e) => skip.contains(e['id'])).toList());
     }
-    return [
-      for (final e in taken)
-        PendingPayload(
-            e['id'] as String, e['t'] as int, base64Decode(e['p'] as String)),
-    ];
+    final payloads = <PendingPayload>[];
+    for (final e in taken) {
+      final List<int> body;
+      try {
+        body = base64Decode(e['p'] as String);
+      } on FormatException {
+        continue;
+      }
+      payloads.add(PendingPayload(e['id'] as String, e['t'] as int, body));
+    }
+    return payloads;
   }
 }

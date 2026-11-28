@@ -6,11 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:traceway/src/core/settings.dart';
-import 'package:traceway/src/models/session_recording_payload.dart';
 import 'package:traceway/src/persistence/state_store.dart';
 import 'package:traceway/src/replay/collection_budget.dart';
 import 'package:traceway/src/replay/recordings_transport.dart';
 import 'package:traceway/src/replay/replay_controller.dart';
+import 'package:traceway/src/replay/replay_source.dart';
 import 'package:traceway/src/session/session_manager.dart';
 
 import 'support.dart';
@@ -207,6 +207,25 @@ void main() {
       await rejected.flush();
       expect(calls, 1);
       expect(rejected.failedSegments, 1);
+    });
+
+    test('a batch discarded while its body is made is not posted', () async {
+      var calls = 0;
+      final transport = RecordingsTransport(
+        url: 'https://h/api/recordings',
+        token: 'tok',
+        httpClient: MockClient((_) async {
+          calls++;
+          return http.Response('{}', 200);
+        }),
+      );
+      transport.send([segment()]);
+      final flushing = transport.flush();
+      transport.discard();
+      await flushing;
+      expect(calls, 0);
+      expect(transport.sentSegments, 0);
+      expect(transport.pending, 0);
     });
   });
 
@@ -428,6 +447,214 @@ void main() {
       expect(c.budget.snapshot('s2')['traceway.collection.events'], 0);
     });
 
+    test('a session has replay while its first clip is still encoding',
+        () async {
+      final source = SlowReplaySource();
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.buffer, maxAgeMs: 600000);
+      expect(c.hasReplayFor('s1'), isFalse);
+      expect(c.flush(30000, null), isTrue);
+      expect(source.pending, 1);
+      expect(c.budget.hasUploaded('s1'), isFalse);
+      expect(c.hasReplayFor('s1'), isTrue);
+      expect(c.hasReplayFor('s2'), isFalse);
+      source.release();
+      await c.drain();
+      expect(c.hasReplayFor('s1'), isTrue);
+      expect(c.budget.hasUploaded('s1'), isTrue);
+    });
+
+    test('a clip still being made when the unsent ones are dropped is not '
+        'uploaded; the next one is', () async {
+      final source = SlowReplaySource();
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.buffer, maxAgeMs: 600000);
+      expect(c.flush(30000, 'e1'), isTrue);
+      c.dropUnsent();
+      source.release();
+      await c.drain();
+      expect(posts, isEmpty);
+
+      now = now.add(const Duration(seconds: 60));
+      expect(c.flush(30000, 'e2'), isTrue);
+      source.release();
+      await c.drain();
+      expect(segments().single['exceptionId'], 'e2');
+    });
+
+    test('a clip that encodes to nothing leaves the session without replay',
+        () async {
+      final source = SlowReplaySource()..empty = true;
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.buffer, maxAgeMs: 600000);
+      source.empty = false;
+      expect(c.flush(30000, null), isTrue);
+      source.empty = true;
+      expect(c.hasReplayFor('s1'), isTrue);
+      source.release();
+      await c.drain();
+      expect(c.hasReplayFor('s1'), isFalse);
+    });
+
+    test('inactive cuts the streamed segment while the app is in the '
+        'foreground', () async {
+      final source = FakeReplaySource();
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.stream, maxAgeMs: 600000);
+      addTearDown(c.stop);
+      final started = now;
+      now = now.add(const Duration(seconds: 3));
+      c.onInactive();
+      final cut = now;
+      expect(source.captures.single.since, started);
+      expect(source.captures.single.until, cut);
+      // Nothing was captured since: paused encodes nothing.
+      c.onPaused();
+      expect(source.captures, hasLength(1));
+      // An inactive that passes only made a shorter segment: the next one
+      // starts where it ended.
+      c.onResumed();
+      now = now.add(const Duration(seconds: 2));
+      c.onInactive();
+      await c.drain();
+      expect(source.captures.last.since, cut);
+      final uploaded = segments()
+        ..sort((a, b) =>
+            (a['segmentIndex'] as int).compareTo(b['segmentIndex'] as int));
+      expect(uploaded.map((s) => [s['sessionId'], s['segmentIndex']]), [
+        ['s1', 0],
+        ['s1', 1],
+      ]);
+    });
+
+    test('a segment that fails to encode while the app is away is made again '
+        'on resume, under its session and index', () async {
+      final source = FailingReplaySource()..failures = 1;
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.stream, maxAgeMs: 600000);
+      addTearDown(c.stop);
+      final started = now;
+      now = now.add(const Duration(seconds: 4));
+      c.onInactive();
+      final cut = now;
+      c.onPaused();
+      await c.drain();
+      expect(source.captures, hasLength(1));
+      expect(posts, isEmpty);
+      // The session ended in the background: the segment is still its own.
+      session = null;
+      c.onSessionEnd('s1');
+      session = 's2';
+      c.onSessionStart();
+      c.onResumed();
+      await c.drain();
+      expect(source.captures, hasLength(2));
+      expect(source.captures.last, (clipId: 's1_0', since: started, until: cut));
+      final segment = segments().single;
+      expect(segment['sessionId'], 's1');
+      expect(segment['segmentIndex'], 0);
+      expect(index, 1, reason: 'the retry takes no new index');
+      expect(c.budget.snapshot('s1')['traceway.collection.events'], 1);
+      expect(c.budget.snapshot('s2')['traceway.collection.events'], 0);
+    });
+
+    test('an exception clip that throws while the app is away is made again '
+        'on resume', () async {
+      final source = FailingReplaySource()
+        ..failures = 1
+        ..throws = true;
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.buffer, maxAgeMs: 600000);
+      c.onInactive();
+      expect(c.flush(30000, 'e1'), isTrue);
+      await c.drain();
+      expect(posts, isEmpty);
+      c.onResumed();
+      await c.drain();
+      expect(source.captures.map((c) => c.clipId), ['e1', 'e1']);
+      expect(source.captures[1].since, source.captures[0].since);
+      expect(source.captures[1].until, source.captures[0].until);
+      final clip = segments().single;
+      expect(clip['exceptionId'], 'e1');
+      expect(clip['segmentIndex'], 0);
+    });
+
+    test('only a clip that fails while the app is away is made again',
+        () async {
+      final source = FailingReplaySource()..failures = 1;
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.stream, maxAgeMs: 600000);
+      addTearDown(c.stop);
+      // Fails in the foreground: lost, as before.
+      now = now.add(const Duration(seconds: 2));
+      expect(c.flush(30000, null), isTrue);
+      await c.drain();
+      // Encodes while away: uploaded once.
+      now = now.add(const Duration(seconds: 2));
+      c.onInactive();
+      c.onPaused();
+      await c.drain();
+      c.onResumed();
+      await c.drain();
+      expect(source.captures.map((c) => c.clipId), ['s1_0', 's1_1']);
+      expect(segments().single['segmentIndex'], 1);
+    });
+
+    test('at most a few failed clips wait for the app, each made once more',
+        () async {
+      session = null;
+      final source = FailingReplaySource()
+        ..failures = 100
+        ..throws = true;
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.buffer, maxAgeMs: 600000);
+      c.onInactive();
+      for (var i = 0; i < 5; i++) {
+        now = now.add(const Duration(seconds: 1));
+        expect(c.flush(30000, 'e$i'), isTrue);
+      }
+      await c.drain();
+      expect(source.captures, hasLength(5));
+      // Back, and away again before the retries fail: they are not kept
+      // for another try.
+      c.onResumed();
+      c.onInactive();
+      await c.drain();
+      expect(source.captures.skip(5).map((c) => c.clipId), ['e2', 'e3', 'e4']);
+      c.onResumed();
+      await c.drain();
+      expect(source.captures, hasLength(8));
+      expect(posts, isEmpty);
+    });
+
+    test('a clip waiting for the app to come back is replay for its session',
+        () async {
+      final source = FailingReplaySource()..failures = 2;
+      final c = controller()
+        ..attach(source)
+        ..apply(Mode.buffer, maxAgeMs: 600000);
+      c.onInactive();
+      expect(c.flush(30000, null), isTrue);
+      await c.drain();
+      expect(c.budget.hasUploaded('s1'), isFalse);
+      expect(c.hasReplayFor('s1'), isTrue);
+      expect(c.hasReplayFor('s2'), isFalse);
+      // Its retry fails too: nothing is left for the session.
+      c.onResumed();
+      expect(c.hasReplayFor('s1'), isTrue, reason: 'encoding again');
+      await c.drain();
+      expect(source.captures, hasLength(2));
+      expect(c.hasReplayFor('s1'), isFalse);
+    });
+
     test('off stops the source, clears frames and refuses to flush', () async {
       final source = FakeReplaySource();
       final c = controller()
@@ -468,5 +695,27 @@ class SlowReplaySource extends FakeReplaySource {
     _waiting.add(waiting);
     await waiting.future;
     return super.captureRecording(clipId, since: since, until: until);
+  }
+}
+
+/// Fails the next [failures] encodes, by coming back empty or, with
+/// [throws], by throwing: like the platform encoder in the background on
+/// iOS.
+class FailingReplaySource extends FakeReplaySource {
+  int failures = 0;
+  bool throws = false;
+
+  @override
+  Future<SessionRecordingPayload?> captureRecording(
+    String clipId, {
+    DateTime? since,
+    DateTime? until,
+  }) async {
+    final clip =
+        await super.captureRecording(clipId, since: since, until: until);
+    if (failures <= 0) return clip;
+    failures--;
+    if (throws) throw StateError('encoder session invalidated');
+    return null;
   }
 }

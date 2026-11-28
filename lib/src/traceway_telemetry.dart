@@ -18,15 +18,15 @@ class TracewayTelemetryEndpoint {
 /// [url] is a base URL: `/v1/logs`, `/v1/traces` and `/v1/metrics` are
 /// appended. [logs], [traces] and [metrics] override it per signal with a
 /// complete URL. A signal neither names keeps going to Traceway (with a
-/// connection string). URLs must be HTTP(S), without credentials, a query
+/// token). URLs must be HTTP(S), without credentials, a query
 /// or a fragment. The Traceway token is never sent to these destinations.
 ///
-/// With a connection string, Traceway keeps the control plane: exceptions,
+/// With a token, Traceway keeps the control plane: exceptions,
 /// `captureMessage` issues and the SDK's session and control records go to
 /// Traceway, as do OpAMP and screen recordings. Ordinary logs (console,
 /// navigation, taps, custom events), network spans and metrics go to the
-/// receivers configured here. Without a connection string the SDK runs
-/// standalone and every record goes here.
+/// receivers configured here. Without a token the SDK runs standalone and
+/// every record goes here.
 class TracewayTelemetry {
   const TracewayTelemetry({
     this.url,

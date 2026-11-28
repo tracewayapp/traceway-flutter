@@ -6,12 +6,15 @@
 //
 //   flutter run -t lib/e2e_main.dart --dart-define=TRACEWAY_DSN=token@http://host:8082
 //
+// The screen is recorded as a wireframe (the core package's only mode;
+// video is the traceway_video add-on, which this example does not use).
+//
 // Progress is printed as `E2E_PHASE <name>` lines; tool/e2e/run.py follows
 // them and checks the server at each point.
 //
 // With E2E_COLLECTOR=<OTLP/HTTP base URL> in the environment, the scenarios
 // `external` (Traceway plus another OpenTelemetry backend) and `standalone`
-// (no connection string) send their telemetry to that collector.
+// (no token) send their telemetry to that collector.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -23,8 +26,6 @@ import 'package:flutter/gestures.dart';
 // ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-// ignore: implementation_imports
-import 'package:traceway/src/screen_recorder.dart';
 import 'package:traceway/traceway.dart';
 
 const _dsn = String.fromEnvironment('TRACEWAY_DSN');
@@ -33,49 +34,13 @@ const _quietSeconds = int.fromEnvironment('E2E_QUIET_SECONDS', defaultValue: 20)
 /// How long the recording trigger's capture streams.
 const _journeyCaptureSeconds = 30;
 
+/// The harness passes `token@http://host:port`; the app starts with the
+/// token and the server URL, as apps do.
+String get _token => _dsn.substring(0, _dsn.indexOf('@'));
+
 String get _base => _dsn
     .substring(_dsn.indexOf('@') + 1)
     .replaceFirst(RegExp(r'/api/report$'), '');
-
-/// The hardware encoder plugin has no desktop Linux build, so there the
-/// clip is encoded by the `ffmpeg` binary instead. Frames, masks, segments
-/// and upload are the SDK's own.
-class FfmpegVideoEncoder implements VideoEncoder {
-  Process? _process;
-
-  @override
-  Future<void> setup({
-    required int width,
-    required int height,
-    required int fps,
-    required String filepath,
-    required bool debug,
-  }) async {
-    final process = await Process.start('ffmpeg', [
-      '-y', '-loglevel', 'error',
-      '-f', 'rawvideo', '-pix_fmt', 'rgba',
-      '-s', '${width}x$height', '-r', '$fps', '-i', '-',
-      '-c:v', 'libx264', '-profile:v', 'baseline', '-pix_fmt', 'yuv420p',
-      '-movflags', '+faststart', filepath,
-    ]);
-    unawaited(process.stderr.drain<void>());
-    unawaited(process.stdout.drain<void>());
-    _process = process;
-  }
-
-  @override
-  Future<void> appendFrame(Uint8List rgba) async {
-    _process!.stdin.add(rgba);
-    await _process!.stdin.flush();
-  }
-
-  @override
-  Future<void> finish() async {
-    await _process!.stdin.close();
-    final code = await _process!.exitCode;
-    if (code != 0) throw StateError('ffmpeg exited with $code');
-  }
-}
 
 // Android activities cannot inherit the host harness's environment. Flutter's
 // system temp directory is inside the app's private data directory.
@@ -96,10 +61,6 @@ Future<void> main() async {
     stderr.writeln('Set --dart-define=TRACEWAY_DSN=token@http://host:port');
     exit(64);
   }
-  if (Platform.isLinux) {
-    // ignore: invalid_use_of_visible_for_testing_member
-    ScreenRecorder.encoderOverride = FfmpegVideoEncoder();
-  }
   final scenario = _launchSettings['E2E_SCENARIO'];
   final collector = _launchSettings['E2E_COLLECTOR'];
   final echo = _launchSettings['E2E_ECHO'];
@@ -115,7 +76,8 @@ Future<void> main() async {
     );
   }
   Traceway.run(
-    connectionString: scenario == 'standalone' ? null : _dsn,
+    token: scenario == 'standalone' ? null : _token,
+    baseUrl: scenario == 'standalone' ? null : _base,
     options: TracewayOptions(
       telemetry: otherBackend
           ? TracewayTelemetry(
@@ -127,6 +89,8 @@ Future<void> main() async {
       propagateTraceHeaderUrls: [if (echo != null) '$echo/checkout'],
       screenCapture: true,
       debug: true,
+      // A debug build: the harness checks that a blocked isolate is a hang.
+      reportHangsInDebug: true,
       version: 'e2e-1.0.0',
       serviceName: 'traceway-flutter-e2e',
       environment: 'e2e',
@@ -470,7 +434,7 @@ class _HomeState extends State<_Home> {
                 ),
               ),
               const SizedBox(height: 16),
-              const TracewayPrivacyMask(child: Text('secret 4242 4242')),
+              const TracewayMask(child: Text('secret 4242 4242')),
               const SizedBox(height: 16),
               SizedBox(
                 width: 200,

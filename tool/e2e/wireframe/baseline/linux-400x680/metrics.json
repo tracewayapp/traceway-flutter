@@ -1,0 +1,923 @@
+{
+ "checkpoints": {
+  "animations": {
+   "fidelity": {
+    "color": 0.9977,
+    "edges": 1,
+    "ssim": 0.9919
+   }
+  },
+  "animations-half": {
+   "fidelity": {
+    "color": 0.9972,
+    "edges": 1,
+    "ssim": 0.9923
+   }
+  },
+  "animations-hero": {
+   "fidelity": {
+    "color": 0.9985,
+    "edges": 1,
+    "ssim": 0.9945
+   }
+  },
+  "animations-list": {
+   "fidelity": {
+    "color": 0.9959,
+    "edges": 1,
+    "ssim": 0.9846
+   }
+  },
+  "animations-list-removed": {
+   "fidelity": {
+    "color": 0.9959,
+    "edges": 1,
+    "ssim": 0.9857
+   }
+  },
+  "animations-played": {
+   "fidelity": {
+    "color": 0.9978,
+    "edges": 1,
+    "ssim": 0.9928
+   }
+  },
+  "animations-switched": {
+   "fidelity": {
+    "color": 0.9947,
+    "edges": 0.9821,
+    "ssim": 0.9784
+   }
+  },
+  "animations-toggled": {
+   "fidelity": {
+    "color": 0.9983,
+    "edges": 1,
+    "ssim": 0.9939
+   }
+  },
+  "cupertino": {
+   "fidelity": {
+    "color": 0.9871,
+    "edges": 0.9282,
+    "ssim": 0.9445
+   }
+  },
+  "cupertino-action-sheet": {
+   "fidelity": {
+    "color": 0.9837,
+    "edges": 0.8946,
+    "ssim": 0.9484
+   }
+  },
+  "cupertino-alert": {
+   "fidelity": {
+    "color": 0.9774,
+    "edges": 0.9412,
+    "ssim": 0.9459
+   }
+  },
+  "cupertino-toggled": {
+   "fidelity": {
+    "color": 0.9875,
+    "edges": 0.9261,
+    "ssim": 0.9453
+   }
+  },
+  "drag-drop": {
+   "fidelity": {
+    "color": 0.9962,
+    "edges": 1,
+    "ssim": 0.9763
+   }
+  },
+  "drag-drop-dismissed": {
+   "fidelity": {
+    "color": 0.9966,
+    "edges": 1,
+    "ssim": 0.9786
+   }
+  },
+  "drag-drop-dragging": {
+   "fidelity": {
+    "color": 0.9872,
+    "edges": 1,
+    "ssim": 0.9625
+   }
+  },
+  "drag-drop-dropped": {
+   "fidelity": {
+    "color": 0.9963,
+    "edges": 1,
+    "ssim": 0.9764
+   }
+  },
+  "drag-drop-reordered": {
+   "fidelity": {
+    "color": 0.9963,
+    "edges": 1,
+    "ssim": 0.9764
+   }
+  },
+  "drag-drop-reordering": {
+   "fidelity": {
+    "color": 0.9946,
+    "edges": 1,
+    "ssim": 0.9689
+   }
+  },
+  "drag-drop-swiping": {
+   "fidelity": {
+    "color": 0.9965,
+    "edges": 1,
+    "ssim": 0.9785
+   }
+  },
+  "end": {
+   "fidelity": {
+    "color": 0.9903,
+    "edges": 0.9884,
+    "ssim": 0.9195
+   }
+  },
+  "flex": {
+   "fidelity": {
+    "color": 0.9931,
+    "edges": 0.9782,
+    "ssim": 0.961
+   }
+  },
+  "forms": {
+   "fidelity": {
+    "color": 0.9857,
+    "edges": 0.9951,
+    "ssim": 0.9545
+   }
+  },
+  "forms-filled": {
+   "fidelity": {
+    "color": 0.9847,
+    "edges": 0.9939,
+    "ssim": 0.9462
+   }
+  },
+  "forms-focused": {
+   "fidelity": {
+    "color": 0.9863,
+    "edges": 0.9939,
+    "ssim": 0.9545
+   }
+  },
+  "forms-more": {
+   "fidelity": {
+    "color": 0.9822,
+    "edges": 0.9903,
+    "ssim": 0.8991
+   }
+  },
+  "forms-slider": {
+   "fidelity": {
+    "color": 0.9836,
+    "edges": 0.994,
+    "ssim": 0.9449
+   }
+  },
+  "forms-toggled": {
+   "fidelity": {
+    "color": 0.9796,
+    "edges": 0.9817,
+    "ssim": 0.8934
+   }
+  },
+  "home": {
+   "fidelity": {
+    "color": 0.9913,
+    "edges": 1,
+    "ssim": 0.9272
+   }
+  },
+  "home-scrolled": {
+   "fidelity": {
+    "color": 0.9864,
+    "edges": 0.9892,
+    "ssim": 0.9026
+   }
+  },
+  "images": {
+   "fidelity": {
+    "color": 0.9662,
+    "edges": 0.9954,
+    "ssim": 0.9727
+   }
+  },
+  "images-bottom": {
+   "fidelity": {
+    "color": 0.8409,
+    "edges": 0.7431,
+    "ssim": 0.8643
+   }
+  },
+  "images-middle": {
+   "fidelity": {
+    "color": 0.8234,
+    "edges": 0.8787,
+    "ssim": 0.8646
+   }
+  },
+  "keyboard": {
+   "fidelity": {
+    "color": 0.9984,
+    "edges": 0.999,
+    "ssim": 0.9873
+   }
+  },
+  "keyboard-hidden": {
+   "fidelity": {
+    "color": 0.9966,
+    "edges": 0.9769,
+    "ssim": 0.9779
+   }
+  },
+  "keyboard-typed": {
+   "fidelity": {
+    "color": 0.9966,
+    "edges": 0.9789,
+    "ssim": 0.9779
+   }
+  },
+  "lists": {
+   "fidelity": {
+    "color": 0.997,
+    "edges": 0.9951,
+    "ssim": 0.9827
+   }
+  },
+  "lists-dragged": {
+   "fidelity": {
+    "color": 0.9955,
+    "edges": 0.9944,
+    "ssim": 0.9778
+   }
+  },
+  "lists-flung": {
+   "fidelity": {
+    "color": 0.9953,
+    "edges": 0.9942,
+    "ssim": 0.9827
+   }
+  },
+  "lists-horizontal": {
+   "fidelity": {
+    "color": 0.9953,
+    "edges": 0.995,
+    "ssim": 0.9768
+   }
+  },
+  "lists-jumped": {
+   "fidelity": {
+    "color": 0.9951,
+    "edges": 0.9945,
+    "ssim": 0.9759
+   }
+  },
+  "lists-top": {
+   "fidelity": {
+    "color": 0.997,
+    "edges": 0.9951,
+    "ssim": 0.9827
+   }
+  },
+  "lists-wheel": {
+   "fidelity": {
+    "color": 0.9957,
+    "edges": 0.9941,
+    "ssim": 0.9798
+   }
+  },
+  "native": {
+   "fidelity": {
+    "color": 0.9981,
+    "edges": 1,
+    "ssim": 0.9951
+   }
+  },
+  "native-scrolled": {
+   "fidelity": {
+    "color": 0.9975,
+    "edges": 0.9801,
+    "ssim": 0.9973
+   }
+  },
+  "navigation": {
+   "fidelity": {
+    "color": 0.9972,
+    "edges": 0.9814,
+    "ssim": 0.9878
+   }
+  },
+  "navigation-cupertino-route": {
+   "fidelity": {
+    "color": 0.9965,
+    "edges": 0.9885,
+    "ssim": 0.9753
+   }
+  },
+  "navigation-drawer": {
+   "fidelity": {
+    "color": 0.9881,
+    "edges": 0.8758,
+    "ssim": 0.979
+   }
+  },
+  "navigation-fullscreen-dialog": {
+   "fidelity": {
+    "color": 0.9974,
+    "edges": 1,
+    "ssim": 0.9876
+   }
+  },
+  "navigation-photos": {
+   "fidelity": {
+    "color": 0.997,
+    "edges": 0.9868,
+    "ssim": 0.9866
+   }
+  },
+  "navigation-rail-extended": {
+   "fidelity": {
+    "color": 0.997,
+    "edges": 0.9832,
+    "ssim": 0.9873
+   }
+  },
+  "nested": {
+   "fidelity": {
+    "color": 0.9941,
+    "edges": 0.9773,
+    "ssim": 0.9428
+   }
+  },
+  "nested-archive": {
+   "fidelity": {
+    "color": 0.9918,
+    "edges": 1,
+    "ssim": 0.9476
+   }
+  },
+  "nested-collapsed": {
+   "fidelity": {
+    "color": 0.994,
+    "edges": 0.987,
+    "ssim": 0.9481
+   }
+  },
+  "nested-snapped": {
+   "fidelity": {
+    "color": 0.9926,
+    "edges": 1,
+    "ssim": 0.9503
+   }
+  },
+  "overlays": {
+   "fidelity": {
+    "color": 0.9989,
+    "edges": 1,
+    "ssim": 0.9957
+   }
+  },
+  "overlays-banner": {
+   "fidelity": {
+    "color": 0.9981,
+    "edges": 0.9789,
+    "ssim": 0.9854
+   }
+  },
+  "overlays-blur": {
+   "fidelity": {
+    "color": 0.9972,
+    "edges": 0.9982,
+    "ssim": 0.9957
+   }
+  },
+  "overlays-dialog": {
+   "fidelity": {
+    "color": 0.9971,
+    "edges": 1,
+    "ssim": 0.9887
+   }
+  },
+  "overlays-drawer": {
+   "fidelity": {
+    "color": 0.999,
+    "edges": 1,
+    "ssim": 0.9958
+   }
+  },
+  "overlays-menu": {
+   "fidelity": {
+    "color": 0.9983,
+    "edges": 0.9991,
+    "ssim": 0.9952
+   }
+  },
+  "overlays-popup": {
+   "fidelity": {
+    "color": 0.9981,
+    "edges": 0.9944,
+    "ssim": 0.9931
+   }
+  },
+  "overlays-sheet": {
+   "fidelity": {
+    "color": 0.9978,
+    "edges": 1,
+    "ssim": 0.9925
+   }
+  },
+  "overlays-snackbar": {
+   "fidelity": {
+    "color": 0.9987,
+    "edges": 1,
+    "ssim": 0.9944
+   }
+  },
+  "overlays-toast": {
+   "fidelity": {
+    "color": 0.9982,
+    "edges": 1,
+    "ssim": 0.9947
+   }
+  },
+  "overlays-tooltip": {
+   "fidelity": {
+    "color": 0.9984,
+    "edges": 1,
+    "ssim": 0.9935
+   }
+  },
+  "painting": {
+   "fidelity": {
+    "color": 0.9749,
+    "edges": 0.8977,
+    "ssim": 0.9144
+   }
+  },
+  "painting-bottom": {
+   "fidelity": {
+    "color": 0.9942,
+    "edges": 0.9549,
+    "ssim": 0.9747
+   }
+  },
+  "painting-scrolled": {
+   "fidelity": {
+    "color": 0.9859,
+    "edges": 0.9693,
+    "ssim": 0.9667
+   }
+  },
+  "physics": {
+   "fidelity": {
+    "color": 0.9974,
+    "edges": 1,
+    "ssim": 0.9911
+   }
+  },
+  "physics-bounce-held": {
+   "fidelity": {
+    "color": 0.9968,
+    "edges": 0.9937,
+    "ssim": 0.9879
+   }
+  },
+  "physics-chat": {
+   "fidelity": {
+    "color": 0.9935,
+    "edges": 1,
+    "ssim": 0.9837
+   }
+  },
+  "physics-chat-sent": {
+   "fidelity": {
+    "color": 0.9936,
+    "edges": 1,
+    "ssim": 0.9839
+   }
+  },
+  "physics-refresh": {
+   "fidelity": {
+    "color": 0.9973,
+    "edges": 1,
+    "ssim": 0.9906
+   }
+  },
+  "physics-refreshed": {
+   "fidelity": {
+    "color": 0.9971,
+    "edges": 1,
+    "ssim": 0.9895
+   }
+  },
+  "physics-refreshing": {
+   "fidelity": {
+    "color": 0.9989,
+    "edges": 1,
+    "ssim": 0.9931
+   }
+  },
+  "physics-stretch": {
+   "fidelity": {
+    "color": 0.9973,
+    "edges": 1,
+    "ssim": 0.9886
+   }
+  },
+  "physics-stretch-held": {
+   "fidelity": {
+    "color": 0.9405,
+    "edges": 0.7969,
+    "ssim": 0.6846
+   }
+  },
+  "pickers": {
+   "fidelity": {
+    "color": 0.9938,
+    "edges": 0.9812,
+    "ssim": 0.9782
+   }
+  },
+  "pickers-autocomplete": {
+   "fidelity": {
+    "color": 0.9947,
+    "edges": 0.9957,
+    "ssim": 0.9873
+   }
+  },
+  "pickers-date": {
+   "fidelity": {
+    "color": 0.9903,
+    "edges": 0.9471,
+    "ssim": 0.9515
+   }
+  },
+  "pickers-dropdown-menu": {
+   "fidelity": {
+    "color": 0.993,
+    "edges": 0.9781,
+    "ssim": 0.9718
+   }
+  },
+  "pickers-picked": {
+   "fidelity": {
+    "color": 0.993,
+    "edges": 0.9781,
+    "ssim": 0.9718
+   }
+  },
+  "pickers-search": {
+   "fidelity": {
+    "color": 0.994,
+    "edges": 0.9813,
+    "ssim": 0.9736
+   }
+  },
+  "pickers-time": {
+   "fidelity": {
+    "color": 0.981,
+    "edges": 0.8508,
+    "ssim": 0.9279
+   }
+  },
+  "positioning": {
+   "fidelity": {
+    "color": 0.997,
+    "edges": 1,
+    "ssim": 0.9928
+   }
+  },
+  "positioning-bottom": {
+   "fidelity": {
+    "color": 0.9621,
+    "edges": 0.914,
+    "ssim": 0.9483
+   }
+  },
+  "positioning-scrolled": {
+   "fidelity": {
+    "color": 0.9614,
+    "edges": 0.9279,
+    "ssim": 0.947
+   }
+  },
+  "privacy": {
+   "fidelity": {
+    "color": 0.7129,
+    "edges": 0.7593,
+    "ssim": 0.6683
+   }
+  },
+  "privacy-scrolled": {
+   "fidelity": {
+    "color": 0.7062,
+    "edges": 0.755,
+    "ssim": 0.6551
+   }
+  },
+  "slivers": {
+   "fidelity": {
+    "color": 0.9915,
+    "edges": 1,
+    "ssim": 0.991
+   }
+  },
+  "slivers-carousel": {
+   "fidelity": {
+    "color": 0.9915,
+    "edges": 1,
+    "ssim": 0.991
+   }
+  },
+  "slivers-scrolled": {
+   "fidelity": {
+    "color": 0.9899,
+    "edges": 1,
+    "ssim": 0.9863
+   }
+  },
+  "spinners": {
+   "fidelity": {
+    "color": 0.9929,
+    "edges": 0.9957,
+    "ssim": 0.9691
+   }
+  },
+  "spinners-advanced": {
+   "fidelity": {
+    "color": 0.9933,
+    "edges": 0.9957,
+    "ssim": 0.9696
+   }
+  },
+  "spinners-stopped": {
+   "fidelity": {
+    "color": 0.9934,
+    "edges": 0.9944,
+    "ssim": 0.9703
+   }
+  },
+  "stack": {
+   "fidelity": {
+    "color": 0.9219,
+    "edges": 0.9852,
+    "ssim": 0.9711
+   }
+  },
+  "tables": {
+   "fidelity": {
+    "color": 0.995,
+    "edges": 1,
+    "ssim": 0.9691
+   }
+  },
+  "tables-expanded": {
+   "fidelity": {
+    "color": 0.9938,
+    "edges": 1,
+    "ssim": 0.9602
+   }
+  },
+  "tabs": {
+   "fidelity": {
+    "color": 0.9959,
+    "edges": 0.9544,
+    "ssim": 0.9718
+   }
+  },
+  "tabs-bottom-nav": {
+   "fidelity": {
+    "color": 0.9961,
+    "edges": 0.9333,
+    "ssim": 0.9725
+   }
+  },
+  "tabs-second": {
+   "fidelity": {
+    "color": 0.9961,
+    "edges": 0.9544,
+    "ssim": 0.9722
+   }
+  },
+  "tabs-swiped": {
+   "fidelity": {
+    "color": 0.9961,
+    "edges": 0.9544,
+    "ssim": 0.9722
+   }
+  },
+  "text": {
+   "fidelity": {
+    "color": 0.9774,
+    "edges": 0.9807,
+    "ssim": 0.8275
+   }
+  },
+  "text-scrolled": {
+   "fidelity": {
+    "color": 0.9865,
+    "edges": 0.967,
+    "ssim": 0.9072
+   }
+  },
+  "text-selected": {
+   "fidelity": {
+    "color": 0.9882,
+    "edges": 0.9969,
+    "ssim": 0.9251
+   }
+  },
+  "theming": {
+   "fidelity": {
+    "color": 0.9963,
+    "edges": 1,
+    "ssim": 0.9875
+   }
+  },
+  "theming-dark": {
+   "fidelity": {
+    "color": 0.9959,
+    "edges": 1,
+    "ssim": 0.988
+   }
+  },
+  "theming-large-text": {
+   "fidelity": {
+    "color": 0.9953,
+    "edges": 1,
+    "ssim": 0.9817
+   }
+  },
+  "theming-rtl": {
+   "fidelity": {
+    "color": 0.9929,
+    "edges": 1,
+    "ssim": 0.9827
+   }
+  },
+  "wheels": {
+   "fidelity": {
+    "color": 0.9962,
+    "edges": 0.9842,
+    "ssim": 0.9775
+   }
+  },
+  "wheels-picked": {
+   "fidelity": {
+    "color": 0.995,
+    "edges": 0.9884,
+    "ssim": 0.9772
+   }
+  },
+  "wheels-sheet-open": {
+   "fidelity": {
+    "color": 0.9952,
+    "edges": 0.9888,
+    "ssim": 0.9689
+   }
+  },
+  "wheels-turned": {
+   "fidelity": {
+    "color": 0.9952,
+    "edges": 0.9881,
+    "ssim": 0.9772
+   }
+  },
+  "zoom-pan": {
+   "fidelity": {
+    "color": 0.9972,
+    "edges": 1,
+    "ssim": 0.9896
+   }
+  },
+  "zoom-pan-box-moved": {
+   "fidelity": {
+    "color": 0.9937,
+    "edges": 1,
+    "ssim": 0.9807
+   }
+  },
+  "zoom-pan-double-tapped": {
+   "fidelity": {
+    "color": 0.9937,
+    "edges": 1,
+    "ssim": 0.9807
+   }
+  },
+  "zoom-pan-long-pressed": {
+   "fidelity": {
+    "color": 0.9937,
+    "edges": 1,
+    "ssim": 0.9807
+   }
+  },
+  "zoom-pan-panned": {
+   "fidelity": {
+    "color": 0.9937,
+    "edges": 1,
+    "ssim": 0.9807
+   }
+  },
+  "zoom-pan-zoomed": {
+   "fidelity": {
+    "color": 0.9952,
+    "edges": 1,
+    "ssim": 0.9822
+   }
+  }
+ },
+ "scenarios": {
+  "animations": {
+   "bytes": 136990
+  },
+  "cupertino": {
+   "bytes": 125934
+  },
+  "drag-drop": {
+   "bytes": 76632
+  },
+  "end": {
+   "bytes": 7595
+  },
+  "flex": {
+   "bytes": 34223
+  },
+  "forms": {
+   "bytes": 202016
+  },
+  "home": {
+   "bytes": 18882
+  },
+  "images": {
+   "bytes": 96202
+  },
+  "keyboard": {
+   "bytes": 40955
+  },
+  "lists": {
+   "bytes": 196132
+  },
+  "native": {
+   "bytes": 25115
+  },
+  "navigation": {
+   "bytes": 102059
+  },
+  "nested": {
+   "bytes": 103749
+  },
+  "overlays": {
+   "bytes": 114845
+  },
+  "painting": {
+   "bytes": 88079
+  },
+  "physics": {
+   "bytes": 96387
+  },
+  "pickers": {
+   "bytes": 110286
+  },
+  "positioning": {
+   "bytes": 80176
+  },
+  "privacy": {
+   "bytes": 28488
+  },
+  "slivers": {
+   "bytes": 66691
+  },
+  "spinners": {
+   "bytes": 102160
+  },
+  "stack": {
+   "bytes": 25957
+  },
+  "tables": {
+   "bytes": 36455
+  },
+  "tabs": {
+   "bytes": 67019
+  },
+  "text": {
+   "bytes": 83620
+  },
+  "theming": {
+   "bytes": 70475
+  },
+  "wheels": {
+   "bytes": 81656
+  },
+  "zoom-pan": {
+   "bytes": 73878
+  }
+ }
+}

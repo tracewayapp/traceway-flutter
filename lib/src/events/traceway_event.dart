@@ -40,10 +40,27 @@ class NavigationEvent extends TracewayEvent {
   final String? from;
   final String? to;
 
+  /// A dialog, bottom sheet, menu or other popup shown over the screen, or
+  /// one closing: the screen under it stays the current screen.
+  final bool overlay;
+
+  /// The route template of [to] (`/orders/:id`) when the router knows it,
+  /// e.g. go_router's `state.fullPath`: metrics group by it, and issues on
+  /// the screen carry it (`app.screen.route`).
+  final String? route;
+
+  /// The route [to] had already drawn its first frame when this was
+  /// reported, so its time to initial display ends now. Otherwise it ends
+  /// with the next frame.
+  final bool displayed;
+
   NavigationEvent({
     required this.action,
     this.from,
     this.to,
+    this.overlay = false,
+    this.displayed = false,
+    this.route,
     super.timestamp,
   });
 }
