@@ -451,11 +451,18 @@ class Run:
             self.flags.append('warmup')
         if worst > common.LATE_LIMIT_MS:
             self.flags.append('late')
+        problems = []
         if end is None:
-            self.flags.append('unfinished')
+            problems.append('the journey did not finish (no FM_DONE)')
         if failed:
-            self.flags.append('step-failed')
+            problems.append(f'{len(failed)} step(s) failed: ' + '; '.join(
+                f"{s.get('i')} {s.get('do')} {s.get('id') or s.get('name') or ''}: {s.get('error')}" for s in failed[:5]))
+        if 'timeout' in self.flags:
+            self.flags.remove('timeout')
+            problems.append('did not finish in time')
         valid = end is not None and worst <= common.LATE_LIMIT_MS and not failed
+        if not valid:
+            self.flags.append('invalid')
         metrics = {}
         if t0 and end and self.samples and self.done_cpu:
             first = self.samples[0]
@@ -486,6 +493,7 @@ class Run:
             'driver': {'worstLateMs': worst, 'failedSteps': len(failed), 'steps': len(m.steps),
                        'summary': m.summary, 'errors': m.errors},
             'ledger': {'lines': len(ledger), 'quiet': quiet},
+            'problems': problems,
         }
         write_json(os.path.join(self.dir, 'run.json'), run)
         self.log(f'done: valid={valid} flags={self.flags} worstLate={worst} ms session={m.session}')

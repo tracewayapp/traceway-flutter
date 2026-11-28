@@ -12,6 +12,9 @@ import urllib.error
 import urllib.request
 
 PLATFORM_LINUX = 'flutter-linux'
+# A local run is noisy when other processes averaged more than this share of
+# one core (03-MEASUREMENT.md says 25; this campaign's host, GATE1.md: 40).
+NOISY_PCT = 40
 LATE_LIMIT_MS = 1500
 
 

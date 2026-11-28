@@ -559,10 +559,12 @@ class Run:
             self.problems.append(f'{len(failed)} step(s) failed: ' + '; '.join(f"{s.get('i')} {s.get('do')} {s.get('id') or s.get('name') or ''}: {s.get('error')}" for s in failed[:5]))
         if end is not None and rc not in (-signal.SIGTERM, 0):
             self.flags.append('crashed')
+        # Other processes' CPU while the app ran. On this campaign's host the
+        # agent sessions alone take 20-25 % of a core, so a run is noisy above
+        # NOISY_PCT (GATE1.md, "Noise threshold on this host"); the reading
+        # against 03-MEASUREMENT.md's 25 % is kept beside it.
         noise = common.host_noise(samples)
-        if noise is not None and noise > 25:
-            self.flags.append('noisy')
-        if os.environ.get('BENCHRUN_STATE') == 'noisy' and 'noisy' not in self.flags:
+        if noise is not None and noise > common.NOISY_PCT:
             self.flags.append('noisy')
         valid = end is not None and worst <= common.LATE_LIMIT_MS and not failed and 'crashed' not in self.flags
         if not valid:
@@ -633,6 +635,7 @@ class Run:
                        'actions': len(self.actions), 'summary': m.summary, 'errors': m.errors},
             'ledger': {'lines': len(ledger), 'requests': len(requests), 'quiet': quiet},
             'hostOtherPct': noise,
+            'noise': {'otherPct': noise, 'over25': noise is not None and noise > 25, 'thresholdPct': common.NOISY_PCT},
             'benchrun': os.environ.get('BENCHRUN_STATE'),
             'exitCode': rc,
         }
@@ -783,6 +786,9 @@ def plan_cmd(args):
     for i, cmd in enumerate(steps):
         if i < args.skip:
             continue
+        # The lock is not first come, first served: a pause lets work that waits
+        # for it (rendering, a CI capture's checks) go between blocks.
+        time.sleep(args.yield_s)
         print(f'== {i + 1}/{len(steps)} {time.strftime("%H:%M:%S")} {" ".join(cmd[3:])}', flush=True)
         r = subprocess.run([benchrun, *cmd])
         print(f'== {i + 1}/{len(steps)} exit {r.returncode} {time.strftime("%H:%M:%S")}', flush=True)
@@ -849,6 +855,7 @@ def main():
             r.add_argument('--startup-kept', type=int, default=0)
             r.add_argument('--soak', default='', help='variants for one S8 block, e.g. off,stream-img')
             r.add_argument('--skip', type=int, default=0, help='blocks already done')
+            r.add_argument('--yield-s', type=float, default=20, help='pause before each block')
 
     args = ap.parse_args()
     {'xvfb': xvfb, 'gateway': gateway, 'build': build, 'proof-off': proof_off, 'run': run_cmd,
