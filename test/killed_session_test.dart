@@ -33,7 +33,7 @@ List<double> _memoryPeaks(Harness h) => [
           for (final sm in rm.scopeMetrics)
             for (final m in sm.metrics)
               if (m.name == 'app.memory.peak')
-                for (final p in m.histogram.dataPoints) p.sum,
+                for (final p in m.exponentialHistogram.dataPoints) p.sum,
     ];
 
 Map<String, dynamic> _read(File file) =>
