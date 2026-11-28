@@ -831,9 +831,13 @@ class TracewayClient with WidgetsBindingObserver implements RouterHooks {
     } else {
       try {
         if (_options.captureDeviceInfo) {
+          final device = DeviceInfoCollector.collectAsync()
+              .timeout(const Duration(seconds: 2), onTimeout: () => {});
+          // The resource is built once: the screen is read when the window
+          // has its size, which on Android comes after the start.
+          await DeviceInfoCollector.screenKnown();
           attrs.addAll(DeviceInfoCollector.collectSync());
-          attrs.addAll(await DeviceInfoCollector.collectAsync()
-              .timeout(const Duration(seconds: 2), onTimeout: () => {}));
+          attrs.addAll(await device);
         } else {
           // The operating system only: no model, name, address or locale.
           attrs.addAll(DeviceInfoCollector.collectOs());

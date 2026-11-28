@@ -4,6 +4,7 @@ import 'package:dartastic_opentelemetry/proto/opentelemetry_proto_dart.dart'
     as proto;
 import 'package:flutter/widgets.dart' show Size;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:traceway/src/device_info_collector.dart';
 import 'package:traceway/traceway.dart';
 
 class _LoopbackHttp extends HttpOverrides {}
@@ -78,5 +79,27 @@ void main() {
       expect(resource['screen.resolution'], '1080x2400');
       expect(resource['screen.density'], 2.625.toStringAsFixed(1));
     }
+  });
+
+  test('a window that never gets a size is left out, not reported as 0x0',
+      () async {
+    final binding = TestWidgetsFlutterBinding.ensureInitialized();
+    final view = binding.platformDispatcher.views.first;
+    view.physicalSize = Size.zero;
+    view.devicePixelRatio = 1.0;
+    addTearDown(view.reset);
+    final waited = Stopwatch()..start();
+    await DeviceInfoCollector.screenKnown(
+        timeout: const Duration(milliseconds: 100));
+    expect(waited.elapsedMilliseconds, greaterThanOrEqualTo(100));
+    final info = DeviceInfoCollector.collectSync();
+    expect(info.keys, isNot(contains('screen.resolution')));
+    expect(info.keys, isNot(contains('screen.density')));
+    expect(info['os.name'], Platform.operatingSystem);
+
+    view.physicalSize = const Size(1600, 2560);
+    view.devicePixelRatio = 2.0;
+    await DeviceInfoCollector.screenKnown();
+    expect(DeviceInfoCollector.collectSync()['screen.resolution'], '1600x2560');
   });
 }
