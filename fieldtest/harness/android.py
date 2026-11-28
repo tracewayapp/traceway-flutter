@@ -302,11 +302,25 @@ class Run:
             time.sleep(max(0.0, 1.0 - (self.adb.epoch_ms() - at) / 1000))
 
     def screencap(self, name, at):
+        """Raw screencap (RGBA, fast on the device; `-p` makes the device encode a PNG,
+        which takes seconds on an emulator), written as PNG here."""
+        import struct
+        import xgrab
         os.makedirs(os.path.join(self.dir, 'app'), exist_ok=True)
         before = now_ms()
-        png = subprocess.run(self.adb.cmd('exec-out', 'screencap', '-p'), capture_output=True).stdout
-        open(os.path.join(self.dir, 'app', f'{name}.png'), 'wb').write(png)
-        self.grabs[name] = {'checkpointEpochMs': at, 'hostRequestEpochMs': before, 'hostDoneEpochMs': now_ms()}
+        raw = subprocess.run(self.adb.cmd('exec-out', 'screencap'), capture_output=True).stdout
+        got = now_ms()
+        path = os.path.join(self.dir, 'app', f'{name}.png')
+        try:
+            w, h = struct.unpack_from('<II', raw, 0)
+            px = raw[len(raw) - w * h * 4:]
+            rgb = bytearray(w * h * 3)
+            rgb[0::3], rgb[1::3], rgb[2::3] = px[0::4], px[1::4], px[2::4]
+            xgrab.write_png(path, w, h, bytes(rgb))
+        except (struct.error, ValueError) as e:
+            self.log(f'screencap {name}: {e}')
+        self.grabs[name] = {'checkpointEpochMs': at, 'hostRequestEpochMs': before, 'hostReceivedEpochMs': got,
+                            'hostDoneEpochMs': now_ms()}
 
     def recorder(self):
         """`screenrecord` in chained 170 s pieces, each with the device time it started."""
