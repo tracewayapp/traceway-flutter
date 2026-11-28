@@ -37,7 +37,10 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _replace = false;
   String? _error;
 
-  // FM_FULLY: the first hero picture and the first eight grid pictures.
+  // FM_FULLY: the pictures of Home's first screen at the phone size: the
+  // first hero slide, the first two deal cards and the first grid row. (The
+  // spec's "first eight grid pictures" are not built at 412 x 892 until the
+  // grid is scrolled.)
   final Set<String> _decoded = {};
   bool _fully = false;
 
@@ -146,7 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _decodedOne(String key) {
     if (_fully || !_decoded.add(key)) return;
-    final need = {'hero-0', for (var i = 0; i < 8; i++) 'grid-$i'};
+    const need = {'hero-0', 'deal-0', 'deal-1', 'grid-0', 'grid-1'};
     if (_decoded.containsAll(need)) {
       _fully = true;
       Markers.mark('FM_FULLY');
@@ -192,7 +195,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 itemBuilder: (context, i) => _ProductCell(
                   product: _products[i],
                   width: (width - 24 - 10 * ((width >= 900 ? 4 : 2) - 1)) / (width >= 900 ? 4 : 2),
-                  onDecoded: i < 8 ? () => _decodedOne('grid-$i') : null,
+                  onDecoded: i < 2 ? () => _decodedOne('grid-$i') : null,
                 ),
               ),
             ),
@@ -313,6 +316,7 @@ class _HomeScreenState extends State<HomeScreen> {
               key: ValueKey('fm-home-deal-$i'),
               deal: _deals[i],
               product: _dealProducts[_deals[i].productId],
+              onDecoded: i < 2 ? () => _decodedOne('deal-$i') : null,
             ),
           ),
         ),
@@ -455,10 +459,11 @@ class _ProductCell extends StatelessWidget {
 }
 
 class _DealCard extends StatelessWidget {
-  const _DealCard({super.key, required this.deal, required this.product});
+  const _DealCard({super.key, required this.deal, required this.product, this.onDecoded});
 
   final Deal deal;
   final Product? product;
+  final VoidCallback? onDecoded;
 
   @override
   Widget build(BuildContext context) {
@@ -472,7 +477,7 @@ class _DealCard extends StatelessWidget {
         onTap: () => Navigator.of(context).pushNamed('/product/${deal.productId}'),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Stack(children: [
-            NetImage(api.productImage(deal.productId, 0, 320), width: width, height: width, radius: 8),
+            NetImage(api.productImage(deal.productId, 0, 320), width: width, height: width, radius: 8, onDecoded: onDecoded),
             Positioned(
               right: 4,
               top: 4,

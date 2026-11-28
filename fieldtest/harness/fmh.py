@@ -567,6 +567,10 @@ class Run:
         valid = end is not None and worst <= common.LATE_LIMIT_MS and not failed and 'crashed' not in self.flags
         if not valid:
             self.flags.append('invalid')
+        if getattr(self.args, 'warmup', False):
+            self.flags.append('warmup')
+        if getattr(self.args, 'retry', False):
+            self.flags.append('retry')
 
         metrics = {}
         if t0 and end and 't0' in self.cpu and 'done' in self.cpu:
@@ -662,8 +666,139 @@ def block_cmd(args):
     print(f'block {args.block} of {args.scenario}: {order}', flush=True)
     for i, v in enumerate(order):
         args.run_id = None
-        Run(args, v, args.block, i).execute()
+        args.retry = False
+        run = Run(args, v, args.block, i).execute()
         time.sleep(args.gap)
+        # A noisy or invalid run is kept, marked, and repeated once (03-MEASUREMENT.md §5).
+        if not args.warmup and ('noisy' in run['flags'] or not run['valid']):
+            args.run_id = None
+            args.retry = True
+            Run(args, v, args.block, i).execute()
+            args.retry = False
+            time.sleep(args.gap)
+
+
+# ---- startup (03-MEASUREMENT.md §4) ---------------------------------------------------
+
+def startup_cmd(args):
+    """One repetition of the startup procedure: every variant in a seeded order,
+    each from a cold process: 3 s, launch, FM_READY and FM_FULLY, 5 s, stop."""
+    variants = args.variants.split(',')
+    scenario = 'S0-startup-kept' if args.keep_state else 'S0-startup'
+    order = common.shuffled(variants, args.seed, args.block, scenario)
+    print(f'startup repetition {args.block} ({scenario}): {order}', flush=True)
+    gw = common.Gateway(args.gateway)
+    for i, v in enumerate(order):
+        app = app_for(v)
+        rid = common.run_id(common.PLATFORM_LINUX, scenario, v, args.block)
+        d = os.path.join(args.results, common.PLATFORM_LINUX, 'runs', rid)
+        os.makedirs(d)
+        gw.start_run(rid)
+        if not args.keep_state:
+            state = os.path.join(data_dir(app), 'traceway_v2')
+            if os.path.exists(state):
+                trash = os.path.join(CACHE, 'state-trash', rid)
+                os.makedirs(os.path.dirname(trash), exist_ok=True)
+                shutil.move(state, trash)
+        time.sleep(3)
+        env = {k: val for k, val in os.environ.items() if k not in ('WAYLAND_DISPLAY', 'WAYLAND_SOCKET')}
+        env.update({'GDK_BACKEND': 'x11', 'DISPLAY': args.display, 'FM_RUN': rid, 'FM_VARIANT': v, 'FM_SCENARIO': scenario,
+                    'FM_BASE_URL': args.gateway, 'FM_FIXTURES': args.gateway + '/fx', 'FM_TOKEN': 'flutter-dev-token',
+                    'FM_EVIDENCE': '0', 'FM_AUTOPILOT': '0', 'FM_TARGET': 'linux-xvfb',
+                    'FM_CAMPAIGN': os.path.basename(os.path.normpath(args.results))})
+        spawn = now_ms()
+        p = subprocess.Popen(['taskset', '-c', '0,1', bundle(app)], env=env, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        markers = common.Markers()
+        log = open(os.path.join(d, 'app.log'), 'w')
+        deadline = time.time() + 30
+
+        def read():
+            for raw in p.stdout:
+                line = raw.decode('utf-8', 'replace').rstrip('\n')
+                log.write(f'{now_ms()} {line}\n')
+                markers.feed(line)
+
+        t = threading.Thread(target=read, daemon=True)
+        t.start()
+        while time.time() < deadline and markers.fully is None and p.poll() is None:
+            time.sleep(0.05)
+        time.sleep(5)
+        p.send_signal(signal.SIGTERM)
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+        t.join(timeout=3)
+        log.close()
+        ok = markers.ready is not None and markers.fully is not None
+        metrics = {}
+        if markers.ready:
+            metrics['M-ST-1'] = markers.ready - spawn
+        if markers.fully:
+            metrics['M-ST-2'] = markers.fully - spawn
+        flags = [] if ok else ['invalid']
+        if os.environ.get('BENCHRUN_STATE') == 'noisy':
+            flags.append('noisy')
+        write_json(os.path.join(d, 'run.json'), {
+            'runId': rid, 'campaign': os.path.basename(os.path.normpath(args.results)), 'platform': common.PLATFORM_LINUX,
+            'target': f'linux-xvfb release build, {WIDTH}x{HEIGHT} @1x, software rendering (Mesa llvmpipe)',
+            'scenario': scenario, 'variant': v, 'block': args.block, 'orderInBlock': i, 'evidence': False,
+            't0EpochMs': markers.ready or 0, 'endEpochMs': markers.fully or 0, 'valid': ok, 'flags': flags,
+            'sessionId': markers.session, 'projectId': None, 'device': {'width': WIDTH, 'height': HEIGHT, 'scale': 1},
+            'metrics': metrics, 'units': 'see 03-MEASUREMENT.md §2', 'spawnEpochMs': spawn,
+            'build': {**common.git_state(REPO), 'appBuildId': app['exe'], 'binarySha256': common.sha256_file(bundle(app))},
+            'journeyHash': common.sha256_file(os.path.join(FIELDTEST, 'shared', 'journey.json')),
+            'fixturesHash': 'sha256:' + json.load(open(os.path.join(FIELDTEST, 'shared', 'fixtures.lock.json'))).get('hash', ''),
+            'procedure': '03-MEASUREMENT.md §4: cold process, 3 s, launch, FM_READY / FM_FULLY, 5 s, SIGTERM; '
+                         + ('SDK state kept from the previous launch' if args.keep_state else 'SDK state cleared'),
+            'benchrun': os.environ.get('BENCHRUN_STATE'),
+        })
+        print(f'[{rid}] M-ST-1 {metrics.get("M-ST-1")} ms, M-ST-2 {metrics.get("M-ST-2")} ms{"" if ok else " INVALID"}', flush=True)
+
+
+# ---- the whole tier -----------------------------------------------------------------------
+
+def plan_cmd(args):
+    """Every block of the tier, each under its own `benchrun` (quiet host, lock),
+    so other work can take the lock between blocks. Stops when most runs are noisy."""
+    me = os.path.abspath(__file__)
+    benchrun = os.path.join(os.path.abspath(args.tools), 'bin', 'benchrun')
+    base = [sys.executable, me, '--display', args.display]
+    common_args = ['--results', args.results, '--tools', args.tools, '--node', args.node, '--gateway', args.gateway,
+                   '--seed', str(args.seed)]
+    steps = []
+    for scenario in args.scenarios.split(','):
+        variants = args.variants + (',stream-noimg' if scenario in args.noimg.split(',') else '')
+        for block in range(0, args.repetitions + 1):
+            steps.append([*base, 'block', *common_args, '--scenario', scenario, '--variants', variants,
+                          '--block', str(block), *(['--warmup'] if block == 0 else [])])
+    for rep in range(1, args.startup + 1):
+        steps.append([*base, 'startup', *common_args, '--variants', args.variants, '--block', str(rep)])
+    for rep in range(1, args.startup_kept + 1):
+        steps.append([*base, 'startup', *common_args, '--variants', args.variants, '--block', str(rep), '--keep-state'])
+    if args.soak:
+        steps.append([*base, 'block', *common_args, '--scenario', 'S8', '--variants', args.soak, '--block', '1'])
+    print(f'plan: {len(steps)} blocks', flush=True)
+    for i, cmd in enumerate(steps):
+        if i < args.skip:
+            continue
+        print(f'== {i + 1}/{len(steps)} {time.strftime("%H:%M:%S")} {" ".join(cmd[3:])}', flush=True)
+        r = subprocess.run([benchrun, *cmd])
+        print(f'== {i + 1}/{len(steps)} exit {r.returncode} {time.strftime("%H:%M:%S")}', flush=True)
+        runs = []
+        root = os.path.join(args.results, common.PLATFORM_LINUX, 'runs')
+        for d in os.listdir(root):
+            f = os.path.join(root, d, 'run.json')
+            if os.path.exists(f):
+                runs.append(json.load(open(f)))
+        measured = [x for x in runs if 'warmup' not in x['flags']]
+        noisy = [x for x in measured if 'noisy' in x['flags']]
+        print(f'   runs so far {len(runs)}, measured {len(measured)}, noisy {len(noisy)}', flush=True)
+        if len(measured) >= 10 and len(noisy) > 0.5 * len(measured):
+            print('STOP: most runs are noisy', flush=True)
+            return
+    print('PLAN DONE', flush=True)
 
 
 def main():
@@ -686,14 +821,15 @@ def main():
     p = sub.add_parser('proof-off')
     p.add_argument('--results')
 
-    for name in ('run', 'block'):
+    for name in ('run', 'block', 'startup', 'plan'):
         r = sub.add_parser(name)
         r.add_argument('--results', required=True, help='results/<campaign> folder')
         r.add_argument('--tools', default=default_tools())
         r.add_argument('--node', default=default_node())
         r.add_argument('--gateway', default='http://127.0.0.1:18190')
-        r.add_argument('--scenario', required=True)
+        r.add_argument('--scenario', required=name in ('run', 'block'))
         r.add_argument('--evidence', action='store_true')
+        r.add_argument('--warmup', action='store_true', help='a warm-up block: its runs are flagged warmup')
         r.add_argument('--keep-state', action='store_true')
         r.add_argument('--fps', type=int)
         r.add_argument('--run-id')
@@ -705,10 +841,18 @@ def main():
             r.add_argument('--variants', required=True)
             r.add_argument('--seed', default='0')
             r.add_argument('--gap', type=float, default=3.0)
+        if name == 'plan':
+            r.add_argument('--scenarios', required=True)
+            r.add_argument('--repetitions', type=int, default=5)
+            r.add_argument('--noimg', default='S1,S2', help='scenarios that also run stream-noimg')
+            r.add_argument('--startup', type=int, default=10)
+            r.add_argument('--startup-kept', type=int, default=0)
+            r.add_argument('--soak', default='', help='variants for one S8 block, e.g. off,stream-img')
+            r.add_argument('--skip', type=int, default=0, help='blocks already done')
 
     args = ap.parse_args()
     {'xvfb': xvfb, 'gateway': gateway, 'build': build, 'proof-off': proof_off, 'run': run_cmd,
-     'block': block_cmd}[args.cmd](args)
+     'block': block_cmd, 'startup': startup_cmd, 'plan': plan_cmd}[args.cmd](args)
 
 
 if __name__ == '__main__':
