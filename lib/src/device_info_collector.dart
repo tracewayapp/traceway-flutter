@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 
 class DeviceInfoCollector {
   const DeviceInfoCollector._();
@@ -48,6 +49,16 @@ class DeviceInfoCollector {
     return {};
   }
 
+  /// Where the views are read: the binding's dispatcher (the engine's, or
+  /// the one a test drives), or the engine's when there is no binding.
+  static ui.PlatformDispatcher get _dispatcher {
+    try {
+      return WidgetsBinding.instance.platformDispatcher;
+    } catch (_) {
+      return ui.PlatformDispatcher.instance;
+    }
+  }
+
   static Map<String, String> collectSync() {
     final info = collectOs();
     info['device.locale'] = Platform.localeName;
@@ -57,7 +68,7 @@ class DeviceInfoCollector {
       info['device.form_factor'] = 'desktop';
     }
     try {
-      final view = ui.PlatformDispatcher.instance.views.first;
+      final view = _dispatcher.views.first;
       final size = view.physicalSize;
       info['screen.resolution'] =
           '${size.width.toInt()}x${size.height.toInt()}';
